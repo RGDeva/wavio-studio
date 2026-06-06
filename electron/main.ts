@@ -1,17 +1,33 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, logActivity, enqueueSyncItem } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath } from './db';
+import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
+import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
 import { analyzeAudio } from './audioAnalyzer';
 import { classifyFile } from './classifier';
 import crypto from 'crypto';
-import { WatcherManager } from './watcher';
+import { WatcherManager, fileChecksum } from './watcher';
 import { SyncAgent } from './syncAgent';
+import { initCopilot, unregisterCopilot, toggleOverlay } from './copilot';
+import { registerAbletonHandlers } from './ableton';
+import { startBridgeServer, stopBridgeServer } from './bridgeServer';
+import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
 import * as Sentry from '@sentry/electron/main';
 
 Sentry.init({ dsn: process.env.SENTRY_DSN });
+
+// Prevent any unhandled rejection or exception from crashing the main process
+process.on('uncaughtException', (err) => {
+  console.error('[main] uncaughtException:', err?.message ?? err);
+  Sentry.captureException(err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[main] unhandledRejection:', reason);
+  Sentry.captureException(reason);
+});
 
 // Register wavi:// deep-link protocol
 if (!app.isDefaultProtocolClient('wavi')) {
@@ -23,6 +39,7 @@ let mainWindow: BrowserWindow | null = null;
 let watcherManager: WatcherManager | null = null;
 let syncAgent: SyncAgent | null = null;
 let tray: Tray | null = null;
+let _trayRebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -50,6 +67,24 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
+  // Debug: write renderer logs to file for diagnostics
+  const logFile = path.join(app.getPath('userData'), 'renderer.log');
+  try { fs.writeFileSync(logFile, `--- Wavi Studio launched ${new Date().toISOString()} ---\n`); } catch {}
+  const appendLog = (msg: string) => { try { fs.appendFileSync(logFile, msg + '\n'); } catch {} };
+  mainWindow.webContents.on('console-message', (_e, level, message, line, sourceId) => {
+    const tag = ['LOG', 'WARN', 'ERR'][level] ?? 'LOG';
+    appendLog(`[renderer:${tag}] ${message} (${sourceId}:${line})`);
+  });
+  mainWindow.webContents.on('render-process-gone', (_e, details) => {
+    appendLog(`[renderer] CRASHED: ${details.reason} code=${details.exitCode}`);
+  });
+  mainWindow.webContents.on('unresponsive', () => {
+    appendLog('[renderer] UNRESPONSIVE');
+  });
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
+    appendLog(`[renderer] FAIL LOAD: ${code} ${desc}`);
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -67,84 +102,125 @@ app.whenReady().then(async () => {
   // Init sync agent
   syncAgent = new SyncAgent(db, (progress) => {
     mainWindow?.webContents.send('sync:progress', progress);
-    // Rebuild tray so status label stays current
-    rebuildTrayMenu();
+    // Throttle tray rebuilds — at most once per 3s to avoid SIGABRT from rapid native menu recreation
+    if (!_trayRebuildTimer) {
+      _trayRebuildTimer = setTimeout(() => {
+        _trayRebuildTimer = null;
+        rebuildTrayMenu();
+      }, 3000);
+    }
   });
 
-  // Restore watched folders from store
-  const folders = store.get('watchedFolders', []) as string[];
-  for (const folder of folders) {
-    watcherManager.addFolder(folder);
-  }
+  // Sync autoStart store value with actual macOS login item state
+  const loginSettings = app.getLoginItemSettings();
+  store.set('autoStart', loginSettings.openAtLogin);
 
-  // Auto-discover DAW + audio folders on very first launch
-  if (!store.get('didAutoDiscover', false)) {
-    store.set('didAutoDiscover', true);
-    const discovered = discoverDawFolders();
-    // Also add common audio locations so loose audio files auto-populate
-    const audioFolders = [
-      app.getPath('music'),
-      app.getPath('desktop'),
-      path.join(app.getPath('home'), 'Downloads'),
-    ].filter(p => { try { return require('fs').statSync(p).isDirectory(); } catch { return false; } });
-    const allFolders = [...new Set([...discovered, ...audioFolders])];
-    for (const folder of allFolders) {
-      const current = store.get('watchedFolders', []) as string[];
-      if (!current.includes(folder)) {
-        current.push(folder);
-        store.set('watchedFolders', current);
-        watcherManager.addFolder(folder);
-      }
-    }
-  }
-
-  // Ensure common audio folders are watched (for existing users who already auto-discovered DAW-only)
-  if (!store.get('didAudioFolderScan', false)) {
-    store.set('didAudioFolderScan', true);
-    const audioFolders = [
-      app.getPath('music'),
-      app.getPath('desktop'),
-      path.join(app.getPath('home'), 'Downloads'),
-    ].filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
-    for (const folder of audioFolders) {
-      const current = store.get('watchedFolders', []) as string[];
-      if (!current.includes(folder)) {
-        current.push(folder);
-        store.set('watchedFolders', current);
-        watcherManager.addFolder(folder);
-      }
-    }
-  }
-
-  // Start background sync agent
-  syncAgent.start();
-
-  // System tray
-  createTray();
-
-  createWindow();
-
-  // Auto-updater — checks GitHub Releases (RGDeva/wavio) for new versions
-  if (app.isPackaged) {
+  // Restore auth token from encrypted store so sync agent can operate immediately
+  const storedToken = store.get('authToken', null) as string | null;
+  if (storedToken) {
     try {
-      const { autoUpdater } = require('electron-updater');
-      autoUpdater.autoDownload = true;
-      autoUpdater.autoInstallOnAppQuit = true;
-      autoUpdater.on('error', () => {}); // non-fatal — no network / no new release
-      autoUpdater.on('update-downloaded', () => mainWindow?.webContents.send('update:ready'));
-      autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-    } catch { /* skip if module unavailable */ }
+      const token = safeStorage.isEncryptionAvailable()
+        ? safeStorage.decryptString(Buffer.from(storedToken, 'base64'))
+        : storedToken;
+      syncAgent.setAuthToken(token);
+    } catch { /* token corrupt — user will re-auth */ }
   }
+
+  // Show the window immediately — all folder scanning deferred below
+  syncAgent.start();
+  createTray();
+  createWindow();
+  initCopilot(store);
+  registerAbletonHandlers();
+  startBridgeServer();
+
+  // MuseHub SDK — initialize if launched from MuseHub
+  if (initMuseSdk()) {
+    startMuseHubSession(store).then((result) => {
+      if (result) {
+        mainWindow?.webContents.send('musehub:session', result);
+      } else {
+        mainWindow?.webContents.send('musehub:error', 'Failed to start MuseHub session. Please log in to MuseHub, then reopen Wavi.');
+      }
+    }).catch((err) => {
+      console.error('[main] MuseHub session error:', err);
+    });
+  }
+
+  // Defer folder watching + scanning so the window opens without blocking on APFS disk I/O
+  setTimeout(() => {
+    // Restore watched folders from store
+    const folders = store.get('watchedFolders', []) as string[];
+    for (const folder of folders) {
+      watcherManager!.addFolder(folder);
+    }
+
+    // Auto-discover DAW + audio folders on very first launch
+    if (!store.get('didAutoDiscover', false)) {
+      store.set('didAutoDiscover', true);
+      const discovered = discoverDawFolders();
+      const audioFolders = [
+        app.getPath('music'),
+        app.getPath('desktop'),
+        path.join(app.getPath('home'), 'Downloads'),
+      ].filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+      const allFolders = [...new Set([...discovered, ...audioFolders])];
+      for (const folder of allFolders) {
+        const current = store.get('watchedFolders', []) as string[];
+        if (!current.includes(folder)) {
+          current.push(folder);
+          store.set('watchedFolders', current);
+          watcherManager!.addFolder(folder);
+        }
+      }
+    }
+
+    // Ensure common audio folders are watched (for existing users)
+    if (!store.get('didAudioFolderScan', false)) {
+      store.set('didAudioFolderScan', true);
+      const audioFolders = [
+        app.getPath('music'),
+        app.getPath('desktop'),
+        path.join(app.getPath('home'), 'Downloads'),
+      ].filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+      for (const folder of audioFolders) {
+        const current = store.get('watchedFolders', []) as string[];
+        if (!current.includes(folder)) {
+          current.push(folder);
+          store.set('watchedFolders', current);
+          watcherManager!.addFolder(folder);
+        }
+      }
+    }
+  }, 3000); // 3 s delay — window is fully rendered before any disk scanning begins
+
+  // Auto-updater disabled until latest-mac.yml is published in GitHub Releases
+  // (enabling it without the yml causes an unhandled rejection that crashes the app)
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });
 });
 
-app.on('window-all-closed', () => {
+// Gracefully close watchers BEFORE Node/Electron tears down — prevents
+// fsevents native module SIGABRT on mutex cleanup race.
+app.on('before-quit', async (e) => {
+  if (watcherManager) {
+    e.preventDefault();
+    unregisterCopilot();
+    finalizeMuseSdk();
+    stopBridgeServer();
+    syncAgent?.stop();
+    await watcherManager.stopAll();
+    watcherManager = null as any;
+    app.quit();          // re-enter quit now that watchers are closed
+  }
+});
+
+app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
     syncAgent?.stop();
-    watcherManager?.stopAll();
+    await watcherManager?.stopAll();
     app.quit();
   }
 });
@@ -181,6 +257,11 @@ function rebuildTrayMenu() {
     },
     { type: 'separator' },
     {
+      label: 'Wavi Copilot  ⌘⇧W',
+      click: () => toggleOverlay(),
+    },
+    { type: 'separator' },
+    {
       label: 'Open Wavi Studio',
       click: () => {
         if (!mainWindow) createWindow();
@@ -198,9 +279,9 @@ function rebuildTrayMenu() {
     { type: 'separator' },
     {
       label: 'Quit',
-      click: () => {
+      click: async () => {
         syncAgent?.stop();
-        watcherManager?.stopAll();
+        await watcherManager?.stopAll();
         app.quit();
       },
     },
@@ -259,6 +340,9 @@ async function importAudioFile(filePath: string): Promise<string | null> {
   const fileId = crypto.randomUUID();
   const fileName = path.basename(filePath);
   const role = classifyFile(fileName);
+  
+  // Calculate SHA-256 checksum
+  const checksum = await fileChecksum(filePath);
 
   // Insert immediately so it shows in Library
   const id = upsertStandaloneFile({
@@ -267,6 +351,7 @@ async function importAudioFile(filePath: string): Promise<string | null> {
     file_name: fileName,
     file_type: ext.slice(1),
     file_size: stats.size,
+    checksum,
     role,
     created_at: now,
     modified_at: stats.mtime.toISOString(),
@@ -380,6 +465,12 @@ function discoverDawFolders(): string[] {
     path.join(docs, 'PreSonus', 'Studio One'),
     // Adobe Audition
     path.join(docs, 'Adobe', 'Audition'),
+    // Bitwig Studio
+    path.join(docs, 'Bitwig Studio'),
+    path.join(music, 'Bitwig Studio'),
+    // Reason
+    path.join(docs, 'Reason'),
+    path.join(music, 'Reason'),
     // General music folders
     music,
   ];
@@ -402,7 +493,7 @@ function discoverDawFolders(): string[] {
           const subEntries = require('fs').readdirSync(fullPath);
           const hasDawFile = subEntries.some((f: string) => {
             const ext = path.extname(f).toLowerCase();
-            return ['.ptx', '.ptf', '.flp', '.als', '.logicx', '.rpp', '.cpr', '.band'].includes(ext);
+            return ['.ptx', '.ptf', '.flp', '.als', '.logicx', '.rpp', '.cpr', '.band', '.sesx', '.song', '.reason', '.bwproject', '.npr'].includes(ext);
           });
           if (hasDawFile) found.push(fullPath);
         } catch { /* skip unreadable dirs */ }
@@ -443,7 +534,9 @@ ipcMain.handle('folders:getAll', () => {
 });
 
 ipcMain.handle('folders:discover', () => {
-  return discoverDawFolders();
+  return new Promise<string[]>((resolve) => {
+    setImmediate(() => resolve(discoverDawFolders()));
+  });
 });
 
 ipcMain.handle('folders:addPath', (_e, folderPath: string) => {
@@ -483,6 +576,78 @@ ipcMain.handle('folders:remove', (_e, folderPath: string) => {
 // Projects
 ipcMain.handle('projects:getAll', () => getProjects());
 ipcMain.handle('projects:getById', (_e, id: string) => getProjectById(id));
+ipcMain.handle('projects:getDemoStatus', (_e, projectId: string) => {
+  const db = require('./db').getDb() as import('better-sqlite3').Database;
+  const project = getProjectById(projectId) as any;
+  if (!project) return null;
+
+  const flpDetected = !!(project.file_path && project.file_path.endsWith('.flp'));
+
+  // Has at least one export-folder audio file associated
+  const bounceRow = db.prepare(
+    "SELECT * FROM bounce_candidates WHERE project_id = ? ORDER BY detected_at DESC LIMIT 1"
+  ).get(projectId) as any;
+
+  // Latest confirmed version
+  const latestVersion = db.prepare(
+    "SELECT * FROM versions WHERE project_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(projectId) as any;
+
+  // Latest sync queue item for this project
+  const latestSync = db.prepare(
+    "SELECT * FROM sync_queue WHERE project_id = ? ORDER BY created_at DESC LIMIT 1"
+  ).get(projectId) as any;
+
+  // Export folder path (derive from bounce candidate or scan directory)
+  const exportFolderDetected = !!bounceRow;
+  const exportFolderPath = bounceRow ? require('path').dirname(bounceRow.file_path) : null;
+
+  // Files in project with their sync status
+  const syncedFiles = db.prepare(
+    "SELECT COUNT(*) as count FROM files WHERE project_id = ? AND sync_status = 'synced'"
+  ).get(projectId) as any;
+  const totalFiles = db.prepare(
+    "SELECT COUNT(*) as count FROM files WHERE project_id = ?"
+  ).get(projectId) as any;
+
+  return {
+    project: {
+      id: project.id,
+      name: project.project_name,
+      file_path: project.file_path,
+      daw_type: project.daw_type,
+      sync_status: project.sync_status,
+      cloud_id: project.cloud_id,
+      version_count: project.version_count,
+    },
+    checks: {
+      folderLinked: true,
+      flpDetected,
+      exportFolderDetected,
+      exportFolderPath,
+      latestBounce: bounceRow ? {
+        file_name: bounceRow.file_name,
+        role: bounceRow.role,
+        status: bounceRow.status,
+        detected_at: bounceRow.detected_at,
+        file_size: bounceRow.file_size,
+      } : null,
+      latestVersion: latestVersion ? {
+        label: latestVersion.label ?? 'version',
+        version_type: latestVersion.version_type,
+        created_at: latestVersion.created_at,
+        file_path: latestVersion.file_path,
+        checksum: latestVersion.checksum,
+      } : null,
+      uploadStatus: latestSync
+        ? latestSync.status
+        : (totalFiles?.count > 0 ? 'pending' : 'none'),
+      webSynced: project.sync_status === 'synced' && !!project.cloud_id,
+      syncedFiles: syncedFiles?.count ?? 0,
+      totalFiles: totalFiles?.count ?? 0,
+    },
+  };
+});
 
 // Files
 ipcMain.handle('files:getByProject', (_e, projectId: string) => getFilesByProject(projectId));
@@ -530,7 +695,8 @@ ipcMain.handle('activity:getAll', () => getActivityLog(100));
 ipcMain.handle('shell:openExternal', (_e, url: string) => {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('wavi.stream')) return;
+    const allowed = ['wavi.stream', 'github.com', 'privy.io'];
+    if (parsed.protocol !== 'https:' || !allowed.some(h => parsed.hostname.endsWith(h))) return;
     shell.openExternal(url);
   } catch { /* invalid URL */ }
 });
@@ -545,7 +711,211 @@ ipcMain.handle('shell:openPath', (_e, p: string) => {
 
 // Settings
 ipcMain.handle('settings:get', (_e, key: string) => store.get(key));
-ipcMain.handle('settings:set', (_e, key: string, value: unknown) => store.set(key, value));
+ipcMain.handle('settings:set', (_e, key: string, value: unknown) => {
+  store.set(key, value);
+  // Wire autoStart to macOS login item
+  if (key === 'autoStart') {
+    app.setLoginItemSettings({ openAtLogin: !!value, openAsHidden: true });
+  }
+});
+
+// Bounce candidates — version confirmation flow
+ipcMain.handle('bounces:getPending', () => getPendingBounceCandidates());
+ipcMain.handle('bounces:resolve', async (_e, id: string, action: string) => {
+  // Resolve the candidate status first
+  resolveBounceCandidate(id, action as any);
+
+  if (action !== 'confirmed' && action !== 'master' && action !== 'stem') return;
+
+  // Fetch candidate from DB (already resolved above)
+  const c = getBounceCandidateById(id);
+  if (!c) return;
+
+  const label = action === 'master' ? 'master' : action === 'stem' ? 'stem' : 'bounce';
+  const now = new Date().toISOString();
+
+  // Ensure the file exists on disk
+  if (!fs.existsSync(c.file_path)) {
+    logActivity({ id: crypto.randomUUID(), type: 'sync_error',
+      message: `Cannot create version: file not found: ${c.file_name}`,
+      project_id: c.project_id ?? undefined });
+    return;
+  }
+
+  // Ensure we have a files row for this bounce (needed for syncAgent.syncFile)
+  const existingFiles = c.project_id ? (getFilesByProject(c.project_id) as any[]) : [];
+  let fileRow = existingFiles.find((f: any) => f.file_path === c.file_path);
+  if (!fileRow) {
+    const fid = crypto.randomUUID();
+    const ext = c.file_path.split('.').pop() ?? 'wav';
+    upsertFile({
+      id: fid,
+      project_id: c.project_id ?? '__standalone__',
+      file_path: c.file_path,
+      file_name: c.file_name,
+      file_type: ext,
+      file_size: c.file_size ?? 0,
+      checksum: c.checksum ?? undefined,
+      role: c.role ?? label,
+      created_at: now,
+      modified_at: now,
+    });
+    fileRow = { id: fid };
+  }
+
+  // Version dedup: skip if same checksum or path already recorded
+  const projectId = c.project_id as string | null;
+  if (projectId) {
+    if (c.checksum && versionExistsByChecksum(projectId, c.checksum)) {
+      mainWindow?.webContents.send('watcher:event', { type: 'version_created', projectId });
+      return;
+    }
+    if (versionExistsByPath(projectId, c.file_path)) {
+      mainWindow?.webContents.send('watcher:event', { type: 'version_created', projectId });
+      return;
+    }
+  }
+
+  const versionId = crypto.randomUUID();
+  if (projectId) {
+    createVersion({
+      id: versionId,
+      project_id: projectId,
+      file_path: c.file_path,
+      file_size: c.file_size ?? 0,
+      checksum: c.checksum ?? undefined,
+      label,
+      version_type: label,
+      confirmed: 1,
+      created_at: now,
+    });
+  }
+
+  enqueueSyncItem({
+    id: crypto.randomUUID(),
+    project_id: projectId ?? '__standalone__',
+    file_id: fileRow.id,
+    file_name: c.file_name,
+    type: 'dependency_upload',
+    priority: 9,
+    created_at: now,
+  });
+
+  logActivity({
+    id: crypto.randomUUID(),
+    type: 'version_created',
+    message: `New ${label} version: ${c.file_name}`,
+    project_id: projectId ?? undefined,
+    metadata: { filePath: c.file_path, label, versionId },
+  });
+
+  // Kick the sync agent immediately
+  syncAgent?.tick();
+
+  mainWindow?.webContents.send('watcher:event', { type: 'version_created', projectId });
+});
+ipcMain.handle('versions:getByProject', (_e, projectId: string) => getVersionsByProject(projectId));
+
+// Association Engine IPC
+ipcMain.handle('association:getPending', () => {
+  return getPendingAssociations(50);
+});
+
+ipcMain.handle('association:confirm', (_e, queueId: string, projectName?: string) => {
+  // Fetch the queue item so we can write asset_associations for every file pair
+  const db = require('./db').getDb() as import('better-sqlite3').Database;
+  const row = db.prepare('SELECT file_ids, relationship, confidence FROM association_queue WHERE id = ?').get(queueId) as
+    { file_ids: string; relationship: string; confidence: number } | undefined;
+
+  resolveAssociationQueue(queueId, 'confirmed');
+
+  if (row) {
+    try {
+      const fileIds = JSON.parse(row.file_ids) as string[];
+      confirmQueueItem(db, queueId, fileIds, row.relationship as any, row.confidence);
+    } catch { /* non-fatal — association rows are best-effort */ }
+  }
+
+  logActivity({
+    id: crypto.randomUUID(),
+    type: 'association_confirmed',
+    message: `Confirmed association${projectName ? `: ${projectName}` : ''}`,
+    metadata: { queueId, projectName },
+  });
+  return { ok: true };
+});
+
+ipcMain.handle('association:reject', (_e, queueId: string) => {
+  resolveAssociationQueue(queueId, 'rejected');
+  logActivity({
+    id: crypto.randomUUID(),
+    type: 'association_rejected',
+    message: `Rejected association: ${queueId}`,
+    metadata: { queueId },
+  });
+  return { ok: true };
+});
+
+ipcMain.handle('association:undo', (_e, associationId: string) => {
+  undoAssociation(associationId);
+  logActivity({
+    id: crypto.randomUUID(),
+    type: 'association_undone',
+    message: `Undid association: ${associationId}`,
+    metadata: { associationId },
+  });
+  return { ok: true };
+});
+
+ipcMain.handle('association:classifyFile', (_e, filePath: string) => {
+  try {
+    const stat = fs.statSync(filePath);
+    const result = classifyFileV1(filePath, stat);
+    updateFileClassificationByPath(filePath, {
+      classifier_role:       result.role,
+      classifier_confidence: result.confidence,
+      name_tokens:           JSON.stringify(result.tokens),
+    });
+    return result;
+  } catch (err) {
+    return { error: String(err) };
+  }
+});
+
+// Bridge status
+ipcMain.handle('bridge:getStatus', () => {
+  const fs = require('fs') as typeof import('fs');
+  const os = require('os') as typeof import('os');
+  const path = require('path') as typeof import('path');
+  const tokenPath = path.join(os.homedir(), '.wavi', 'bridge-token');
+  const tokenExists = fs.existsSync(tokenPath);
+  let tokenPerm = '';
+  try {
+    tokenPerm = (fs.statSync(tokenPath).mode & 0o777).toString(8);
+  } catch { /* ignore */ }
+  const { BRIDGE_PORT, BRIDGE_HOST, getBridgeToken } = require('./bridgeServer') as typeof import('./bridgeServer');
+  const token = getBridgeToken();
+  return {
+    port: BRIDGE_PORT,
+    host: BRIDGE_HOST,
+    tokenExists,
+    tokenPerm,
+    tokenHint: token.length > 8 ? token.slice(0, 8) + '…' : '',
+    online: token.length > 0,
+  };
+});
+
+// MuseHub
+ipcMain.handle('musehub:isSession', () => isMuseHubSession());
+ipcMain.handle('musehub:getUserInfo', () => getMuseHubUserInfo());
+ipcMain.handle('musehub:getEntitlement', () => getCachedEntitlement(store));
+ipcMain.handle('musehub:checkUsage', async () => {
+  return checkAndIncrementUsage(store);
+});
+ipcMain.handle('musehub:refreshSession', async () => {
+  const result = await startMuseHubSession(store);
+  return result;
+});
 
 // App
 ipcMain.handle('app:relaunch', () => {

@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Activity, RefreshCw, FolderOpen, UploadCloud, CheckCircle2, AlertCircle, Info, Music2 } from 'lucide-react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { Activity, RefreshCw, FolderOpen, UploadCloud, CheckCircle2, AlertCircle, Info, Music2, Sparkles, Tag } from 'lucide-react';
 import { api } from '../lib/api';
 import { formatRelativeTime } from '../lib/utils';
 import type { ActivityEntry } from '../types';
@@ -15,6 +15,11 @@ const TYPE_CONFIG: Record<string, { icon: typeof Activity; color: string; bg: st
   dependency_found: { icon: UploadCloud,   color: 'text-blue-400',    bg: 'bg-blue-400/10' },
   file_analyzed:    { icon: Music2,        color: 'text-fuchsia-400', bg: 'bg-fuchsia-400/10' },
   bpm_detected:     { icon: Music2,        color: 'text-fuchsia-400', bg: 'bg-fuchsia-400/10' },
+  file_imported:    { icon: UploadCloud,   color: 'text-blue-400',    bg: 'bg-blue-400/10' },
+  bounce_detected:  { icon: Sparkles,      color: 'text-cyan-400',    bg: 'bg-cyan-400/10' },
+  version_created:  { icon: Tag,           color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
+  upload_started:   { icon: UploadCloud,   color: 'text-blue-400',    bg: 'bg-blue-400/10' },
+  upload_complete:  { icon: CheckCircle2,  color: 'text-emerald-400', bg: 'bg-emerald-400/10' },
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -25,20 +30,32 @@ const ROLE_COLORS: Record<string, string> = {
   sample:    'bg-blue-500/20 text-blue-300',
 };
 
-export function ActivityPage() {
+export function ActivityPage({ visible }: { visible?: boolean }) {
   const [entries, setEntries] = useState<ActivityEntry[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const refresh = useCallback(async () => {
-    const data = await api.activity.getAll();
-    setEntries(data);
-    setLoading(false);
+    try {
+      const data = await api.activity.getAll();
+      if (!mountedRef.current) return;
+      setEntries(data ?? []);
+      setLoading(false);
+    } catch { /* unmounted or IPC error */ }
   }, []);
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
+    const interval = setInterval(refresh, 10000);
+    const handler = () => setTimeout(refresh, 600); // slight delay for DB write
+    api.on('watcher:event', handler);
+    api.on('sync:progress', handler);
+    return () => {
+      clearInterval(interval);
+      api.off('watcher:event', handler);
+      api.off('sync:progress', handler);
+    };
   }, [refresh]);
 
   return (

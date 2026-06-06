@@ -69,16 +69,33 @@ function ensureToken(): string {
 
 // ── Request helpers ───────────────────────────────────────────────────────────
 
+class JSONParseError extends Error {
+  constructor(message: string = 'Invalid JSON') {
+    super(message);
+    this.name = 'JSONParseError';
+  }
+}
+
 function parseBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     let raw = '';
     req.on('data', chunk => { raw += chunk; });
     req.on('end', () => {
       try { resolve(raw ? JSON.parse(raw) : {}); }
-      catch { reject(new Error('Invalid JSON')); }
+      catch { reject(new JSONParseError()); }
     });
     req.on('error', reject);
   });
+}
+
+// Helper to parse body with proper error handling for API endpoints
+async function parseBodySafe(req: http.IncomingMessage): Promise<{ data: Record<string, unknown>; error?: string }> {
+  try {
+    const data = await parseBody(req);
+    return { data };
+  } catch (err) {
+    return { data: {}, error: err instanceof Error ? err.message : 'Invalid JSON' };
+  }
 }
 
 function send(res: http.ServerResponse, status: number, body: unknown) {
@@ -188,6 +205,7 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   // All other routes require auth
   if (!auth(req, res)) return;
 
+  
   // ── GET /active-project ───────────────────────────────────────────────────
   if (req.method === 'GET' && route === '/active-project') {
     const p = getActiveProject();
@@ -387,7 +405,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
       send(res, result.status === 'done' ? 200 : 500, result);
     } catch (err) {
-      send(res, 500, { error: String(err) });
+      if (err instanceof JSONParseError) {
+        send(res, 400, { error: 'Invalid JSON' });
+      } else {
+        send(res, 500, { error: String(err) });
+      }
     }
     return;
   }
@@ -427,22 +449,21 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   // ── POST /log-action ──────────────────────────────────────────────────────
   if (req.method === 'POST' && route === '/log-action') {
-    try {
-      const body = await parseBody(req);
-      const action = body.action as string | undefined;
-      if (!action) { send(res, 400, { error: 'action required' }); return; }
-      const p = getActiveProject();
-      logActivity({
-        id: crypto.randomUUID(),
-        type: `bridge_${action}`,
-        message: String(body.message ?? action),
-        project_id: (body.projectId as string | undefined) ?? p?.id,
-        metadata: (body.metadata ?? {}) as Record<string, unknown>,
-      });
-      send(res, 200, { status: 'ok' });
-    } catch (err) {
-      send(res, 500, { error: String(err) });
-    }
+    const { data: body, error: parseError } = await parseBodySafe(req);
+    if (parseError) { send(res, 400, { error: 'Invalid JSON' }); return; }
+    
+    const action = body.action as string | undefined;
+    if (!action) { send(res, 400, { error: 'action required' }); return; }
+    
+    const p = getActiveProject();
+    logActivity({
+      id: crypto.randomUUID(),
+      type: `bridge_${action}`,
+      message: String(body.message ?? action),
+      project_id: (body.projectId as string | undefined) ?? p?.id,
+      metadata: (body.metadata ?? {}) as Record<string, unknown>,
+    });
+    send(res, 200, { status: 'ok' });
     return;
   }
 
@@ -567,6 +588,140 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // ── POST /run-command ─────────────────────────────────────────────────────
+  // Executes a shell command scoped to the active project folder.
+  // Only commands in the COMMAND_ALLOWLIST are permitted.
+  if (req.method === 'POST' && route === '/run-command') {
+    try {
+      const body = await parseBody(req);
+      const command = body.command as string | undefined;
+      const cwd = body.cwd as string | undefined;
+
+      if (!command || typeof command !== 'string' || !command.trim()) {
+        send(res, 400, { error: 'command required' });
+        return;
+      }
+
+      // Security: only allow safe read/info commands — no rm, curl, eval, etc.
+      const COMMAND_ALLOWLIST = [
+        /^ls(\s|$)/,
+        /^cat\s/,
+        /^echo(\s|$)/,
+        /^pwd$/,
+        /^find\s/,
+        /^grep\s/,
+        /^wc\s/,
+        /^file\s/,
+        /^open\s/,
+        /^ffprobe\s/,
+        /^ffmpeg\s/,
+        /^python3?\s/,
+        /^node\s/,
+        /^npm\s(run|list|info)/,
+        /^git\s(status|log|diff|show|branch)/,
+      ];
+
+      const trimmedCommand = command.trim();
+      const isAllowed = COMMAND_ALLOWLIST.some(re => re.test(trimmedCommand));
+      if (!isAllowed) {
+        send(res, 403, { error: `Command not in allowlist: "${trimmedCommand.split(' ')[0]}"` });
+        return;
+      }
+
+      // Resolve working directory: use provided cwd, or active project folder, or home
+      const p = getActiveProject();
+      const projectFolder = p?.file_path ? path.dirname(p.file_path) : null;
+      const resolvedCwd = cwd ?? projectFolder ?? os.homedir();
+
+      // Validate cwd exists
+      if (!fs.existsSync(resolvedCwd)) {
+        send(res, 400, { error: `cwd does not exist: ${resolvedCwd}` });
+        return;
+      }
+
+      const { execFile } = await import('child_process');
+      const { promisify } = await import('util');
+      const execFileAsync = promisify(execFile);
+
+      const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', trimmedCommand], {
+        cwd: resolvedCwd,
+        timeout: 10000,
+        maxBuffer: 256 * 1024,
+      });
+
+      logActivity({
+        id: crypto.randomUUID(),
+        type: 'bridge_run_command',
+        message: `Ran: ${trimmedCommand.slice(0, 80)}`,
+        project_id: p?.id,
+        metadata: { command: trimmedCommand, cwd: resolvedCwd },
+      });
+
+      send(res, 200, {
+        status: 'ok',
+        stdout: stdout ?? '',
+        stderr: stderr ?? '',
+        cwd: resolvedCwd,
+        command: trimmedCommand,
+      });
+    } catch (err: any) {
+      // execFile throws on non-zero exit — return stdout/stderr anyway
+      send(res, 200, {
+        status: 'error',
+        stdout: err.stdout ?? '',
+        stderr: err.stderr ?? String(err),
+        exitCode: err.code ?? 1,
+        command: (err as any).cmd ?? '',
+      });
+    }
+    return;
+  }
+
+  // ── POST /chat ────────────────────────────────────────────────────────────
+  if (req.method === 'POST' && route === '/chat') {
+    try {
+      const body = await parseBody(req);
+      const messages = body.messages as Array<{ role: string; content: string }> | undefined;
+      if (!messages || !Array.isArray(messages) || messages.length === 0) {
+        send(res, 400, { error: 'messages array required' });
+        return;
+      }
+
+      const p = getActiveProject();
+      const ctx = buildProjectContext(p);
+
+      // Resolve auth token for cloud LLM
+      let authToken: string | null = null;
+      try {
+        const Store = (await import('electron-store')).default;
+        const store = new Store();
+        const raw = store.get('authToken', null) as string | null;
+        if (raw) {
+          const { safeStorage } = require('electron');
+          authToken = safeStorage.isEncryptionAvailable()
+            ? safeStorage.decryptString(Buffer.from(raw, 'base64'))
+            : raw;
+        }
+      } catch { /* no auth — will use fallback */ }
+
+      const { runAgentChat } = await import('./agentLoop');
+      const reply = await runAgentChat(messages, ctx, authToken);
+
+      logActivity({
+        id: crypto.randomUUID(),
+        type: 'bridge_chat',
+        message: `Chat: "${messages[messages.length - 1]?.content?.slice(0, 80)}"`,
+        project_id: p?.id,
+        metadata: { messageCount: messages.length },
+      });
+
+      send(res, 200, { reply, context: { projectName: ctx.projectName, dawType: ctx.dawType } });
+    } catch (err) {
+      send(res, 500, { error: String(err) });
+    }
+    return;
+  }
+
   // ── 404 ───────────────────────────────────────────────────────────────────
   send(res, 404, { error: `Unknown route: ${req.method} ${route}` });
 }
@@ -577,13 +732,13 @@ export function startBridgeServer(): void {
   _bridgeToken = ensureToken();
 
   _server = http.createServer(async (req, res) => {
-    // Hard 8-second timeout per request — prevents DB hangs from leaving connections open
+    // Hard 20-second timeout per request (LLM chat may take a while)
     const timeout = setTimeout(() => {
       if (!res.headersSent) {
         console.error('[bridge] Request timeout:', req.method, req.url);
         try { send(res, 504, { error: 'Bridge handler timed out' }); } catch {}
       }
-    }, 8000);
+    }, 20000);
 
     try {
       await handleRequest(req, res);
@@ -600,7 +755,13 @@ export function startBridgeServer(): void {
     console.log(`[bridge] Token written to ${TOKEN_PATH}`);
   });
 
-  _server.on('error', (err: NodeJS.ErrnoException) => {
+  _server.on('clientError', (err) => {
+  // Handle malformed JSON and other client errors
+  console.error('[bridge] Client error:', err.message);
+  // We can't send a response here as the connection is already broken
+});
+
+_server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[bridge] Port ${BRIDGE_PORT} in use — bridge server not started`);
     } else {

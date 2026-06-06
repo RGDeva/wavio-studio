@@ -3,8 +3,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.initDatabase = initDatabase;
 exports.getDb = getDb;
+exports.initDatabase = initDatabase;
 exports.upsertProject = upsertProject;
 exports.getProjects = getProjects;
 exports.getProjectById = getProjectById;
@@ -24,10 +24,31 @@ exports.getSyncQueue = getSyncQueue;
 exports.logActivity = logActivity;
 exports.getActivityLog = getActivityLog;
 exports.createVersion = createVersion;
+exports.getVersionsByProject = getVersionsByProject;
+exports.addBounceCandidate = addBounceCandidate;
+exports.getBounceCandidateById = getBounceCandidateById;
+exports.getBounceCandidateByPath = getBounceCandidateByPath;
+exports.getPendingBounceCandidates = getPendingBounceCandidates;
+exports.resolveBounceCandidate = resolveBounceCandidate;
+exports.versionExistsByChecksum = versionExistsByChecksum;
+exports.versionExistsByPath = versionExistsByPath;
+exports.updateFileClassification = updateFileClassification;
+exports.updateFileClassificationByPath = updateFileClassificationByPath;
+exports.getFileIdByPath = getFileIdByPath;
+exports.upsertAssetAssociation = upsertAssetAssociation;
+exports.getAssociationsForFile = getAssociationsForFile;
+exports.confirmAssociation = confirmAssociation;
+exports.undoAssociation = undoAssociation;
+exports.enqueueAssociation = enqueueAssociation;
+exports.getPendingAssociations = getPendingAssociations;
+exports.resolveAssociationQueue = resolveAssociationQueue;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const path_1 = __importDefault(require("path"));
 const electron_1 = require("electron");
 let db;
+function getDb() {
+    return db;
+}
 function initDatabase() {
     const userDataPath = electron_1.app.getPath('userData');
     const dbPath = path_1.default.join(userDataPath, 'wavio-studio.db');
@@ -52,15 +73,176 @@ function initDatabase() {
     }
     catch { /* column already exists */ }
     try {
-        db.exec('ALTER TABLE files ADD COLUMN role TEXT DEFAULT \'unknown\'');
+        db.exec("ALTER TABLE files ADD COLUMN role TEXT DEFAULT 'unknown'");
     }
     catch { /* column already exists */ }
-    // Allow standalone files (no project) — SQLite doesn't support ALTER COLUMN,
-    // so we recreate the constraint-free index instead
+    // Version enhancements
+    try {
+        db.exec("ALTER TABLE versions ADD COLUMN label TEXT DEFAULT 'version'");
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec("ALTER TABLE versions ADD COLUMN version_type TEXT DEFAULT 'project'");
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec("ALTER TABLE versions ADD COLUMN confirmed INTEGER DEFAULT 1");
+    }
+    catch { /* already exists */ }
+    // Bounce candidates — files awaiting user confirmation
+    try {
+        db.exec(`CREATE TABLE IF NOT EXISTS bounce_candidates (
+    id TEXT PRIMARY KEY,
+    project_id TEXT,
+    file_path TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    file_size INTEGER DEFAULT 0,
+    checksum TEXT,
+    role TEXT DEFAULT 'unknown',
+    detected_at TEXT NOT NULL,
+    status TEXT DEFAULT 'pending'
+  )`);
+    }
+    catch { /* already exists */ }
+    // Migrations for bounce_candidates
+    try {
+        db.exec('ALTER TABLE bounce_candidates ADD COLUMN checksum TEXT');
+    }
+    catch { /* already exists */ }
+    // Unique constraint on file_path so the same file can't produce duplicate candidates
+    try {
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bounce_candidates_path ON bounce_candidates(file_path)');
+    }
+    catch { /* already exists */ }
+    // Unique constraint on versions to prevent same checksum being stored twice per project
+    try {
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_versions_project_checksum ON versions(project_id, checksum) WHERE checksum IS NOT NULL');
+    }
+    catch { /* already exists */ }
+    // Allow standalone files (no project) — SQLite doesn't support ALTER COLUMN so we
+    // must recreate the table to drop the NOT NULL on project_id.
+    // Check if project_id still has a NOT NULL constraint by inspecting table_info.
+    const filesCols = db.prepare("PRAGMA table_info(files)").all();
+    const projectIdCol = filesCols.find(c => c.name === 'project_id');
+    if (projectIdCol && projectIdCol.notnull === 1) {
+        // Rebuild files table without NOT NULL on project_id
+        db.pragma('foreign_keys = OFF');
+        db.exec(`
+      BEGIN;
+      CREATE TABLE IF NOT EXISTS files_new (
+        id TEXT PRIMARY KEY,
+        project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        file_path TEXT NOT NULL,
+        file_name TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        file_size INTEGER DEFAULT 0,
+        sync_status TEXT DEFAULT 'pending',
+        cloud_url TEXT,
+        checksum TEXT,
+        bpm INTEGER,
+        key_note TEXT,
+        duration REAL,
+        role TEXT DEFAULT 'unknown',
+        created_at TEXT NOT NULL,
+        modified_at TEXT NOT NULL
+      );
+      INSERT INTO files_new SELECT id, project_id, file_path, file_name, file_type, file_size,
+        sync_status, cloud_url, checksum, bpm, key_note, duration, role, created_at, modified_at
+        FROM files;
+      DROP TABLE files;
+      ALTER TABLE files_new RENAME TO files;
+      COMMIT;
+    `);
+        db.pragma('foreign_keys = ON');
+    }
     try {
         db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(file_path)');
     }
     catch { /* already exists */ }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_at DESC)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_files_sync ON files(sync_status)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)');
+    }
+    catch { }
+    // ── Phase 1: Project Association Engine columns ──────────────────────────
+    try {
+        db.exec("ALTER TABLE files ADD COLUMN classifier_role TEXT DEFAULT 'misc'");
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('ALTER TABLE files ADD COLUMN classifier_confidence REAL DEFAULT 0.0');
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('ALTER TABLE files ADD COLUMN name_tokens TEXT');
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('ALTER TABLE files ADD COLUMN audio_fingerprint TEXT');
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('ALTER TABLE files ADD COLUMN classification_version INTEGER DEFAULT 0');
+    }
+    catch { /* already exists */ }
+    // ── Phase 1: Association tables ─────────────────────────────────────────
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS asset_associations (
+      id              TEXT PRIMARY KEY,
+      source_file_id  TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      target_file_id  TEXT NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+      relationship    TEXT NOT NULL
+                        CHECK(relationship IN (
+                          'same_project','stem_of','version_of',
+                          'exported_from','duplicate_of','reference_for'
+                        )),
+      confidence      REAL NOT NULL DEFAULT 0.0,
+      confirmed_by    TEXT CHECK(confirmed_by IN ('auto','user','undo')),
+      confirmed_at    INTEGER,
+      created_at      INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+
+    CREATE TABLE IF NOT EXISTS association_queue (
+      id                    TEXT PRIMARY KEY,
+      file_ids              TEXT NOT NULL,
+      suggested_project_id  TEXT,
+      relationship          TEXT NOT NULL,
+      confidence            REAL NOT NULL DEFAULT 0.0,
+      signals               TEXT NOT NULL DEFAULT '{}',
+      status                TEXT NOT NULL DEFAULT 'pending'
+                              CHECK(status IN ('pending','confirmed','rejected','deferred')),
+      shown_at              INTEGER,
+      resolved_at           INTEGER,
+      created_at            INTEGER NOT NULL DEFAULT (unixepoch())
+    );
+  `);
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_asset_assoc_source ON asset_associations(source_file_id)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_asset_assoc_target ON asset_associations(target_file_id)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_assoc_queue_status ON association_queue(status)');
+    }
+    catch { }
     db.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       id TEXT PRIMARY KEY,
@@ -91,8 +273,7 @@ function initDatabase() {
       duration REAL,
       role TEXT DEFAULT 'unknown',
       created_at TEXT NOT NULL,
-      modified_at TEXT NOT NULL,
-      UNIQUE(project_id, file_path)
+      modified_at TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS sync_queue (
@@ -132,9 +313,6 @@ function initDatabase() {
       created_at TEXT NOT NULL
     );
   `);
-    return db;
-}
-function getDb() {
     return db;
 }
 // ── Projects ──────────────────────────────────────────────────────────────────
@@ -186,7 +364,7 @@ function upsertFile(file) {
     db.prepare(`
     INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at)
     VALUES (@id, @project_id, @file_path, @file_name, @file_type, @file_size, @checksum, @bpm, @key_note, @duration, @role, @created_at, @modified_at)
-    ON CONFLICT(project_id, file_path) DO UPDATE SET
+    ON CONFLICT(file_path) DO UPDATE SET
       file_size = excluded.file_size,
       checksum = excluded.checksum,
       bpm = COALESCE(excluded.bpm, files.bpm),
@@ -284,9 +462,147 @@ function getActivityLog(limit = 100) {
 // ── Versions ──────────────────────────────────────────────────────────────────
 function createVersion(version) {
     db.prepare(`
-    INSERT INTO versions (id, project_id, file_path, file_size, checksum, created_at)
-    VALUES (@id, @project_id, @file_path, @file_size, @checksum, @created_at)
-  `).run(version);
+    INSERT INTO versions (id, project_id, file_path, file_size, checksum, label, version_type, confirmed, created_at)
+    VALUES (@id, @project_id, @file_path, @file_size, @checksum, @label, @version_type, @confirmed, @created_at)
+  `).run({
+        label: 'version',
+        version_type: 'project',
+        confirmed: 1,
+        ...version,
+    });
     db.prepare('UPDATE projects SET version_count = version_count + 1 WHERE id = ?')
         .run(version.project_id);
+}
+function getVersionsByProject(projectId) {
+    return db.prepare('SELECT * FROM versions WHERE project_id = ? ORDER BY created_at DESC LIMIT 50').all(projectId);
+}
+function addBounceCandidate(candidate) {
+    // INSERT OR IGNORE prevents duplicates via unique index on file_path.
+    // If the file was previously ignored but has a new checksum, update it back to pending.
+    const existing = db.prepare('SELECT id, status, checksum FROM bounce_candidates WHERE file_path = ?').get(candidate.file_path);
+    if (existing) {
+        // Re-open ignored candidates only if the file has changed (different checksum)
+        if (existing.status === 'ignored' && candidate.checksum && existing.checksum !== candidate.checksum) {
+            db.prepare(`UPDATE bounce_candidates SET status = 'pending', file_size = ?, checksum = ?, detected_at = ? WHERE file_path = ?`)
+                .run(candidate.file_size, candidate.checksum, candidate.detected_at, candidate.file_path);
+        }
+        // Otherwise do nothing — candidate already exists (pending or resolved)
+        return existing.id;
+    }
+    db.prepare(`
+    INSERT INTO bounce_candidates (id, project_id, file_path, file_name, file_size, checksum, role, detected_at, status)
+    VALUES (@id, @project_id, @file_path, @file_name, @file_size, @checksum, @role, @detected_at, 'pending')
+  `).run({ checksum: null, ...candidate });
+    return candidate.id;
+}
+function getBounceCandidateById(id) {
+    return db.prepare('SELECT * FROM bounce_candidates WHERE id = ?').get(id);
+}
+function getBounceCandidateByPath(filePath) {
+    return db.prepare('SELECT * FROM bounce_candidates WHERE file_path = ?').get(filePath);
+}
+function getPendingBounceCandidates() {
+    return db.prepare("SELECT * FROM bounce_candidates WHERE status = 'pending' ORDER BY detected_at DESC LIMIT 20").all();
+}
+function resolveBounceCandidate(id, status) {
+    db.prepare("UPDATE bounce_candidates SET status = ? WHERE id = ?").run(status, id);
+}
+/** Returns true if a version with this checksum already exists for the project. */
+function versionExistsByChecksum(projectId, checksum) {
+    const row = db.prepare('SELECT id FROM versions WHERE project_id = ? AND checksum = ?').get(projectId, checksum);
+    return !!row;
+}
+/** Returns true if a version pointing at this exact file_path already exists for the project. */
+function versionExistsByPath(projectId, filePath) {
+    const row = db.prepare('SELECT id FROM versions WHERE project_id = ? AND file_path = ?').get(projectId, filePath);
+    return !!row;
+}
+// ── Phase 1: File classifier columns ─────────────────────────────────────────
+const CLASSIFICATION_VERSION = 1;
+function updateFileClassification(fileId, opts) {
+    db.prepare(`
+    UPDATE files
+    SET classifier_role = ?,
+        classifier_confidence = ?,
+        name_tokens = ?,
+        classification_version = ?
+    WHERE id = ?
+  `).run(opts.classifier_role, opts.classifier_confidence, opts.name_tokens, CLASSIFICATION_VERSION, fileId);
+}
+function updateFileClassificationByPath(filePath, opts) {
+    const row = db.prepare('SELECT id FROM files WHERE file_path = ?').get(filePath);
+    if (!row)
+        return null;
+    updateFileClassification(row.id, opts);
+    return row.id;
+}
+function getFileIdByPath(filePath) {
+    const row = db.prepare('SELECT id FROM files WHERE file_path = ?').get(filePath);
+    return row?.id ?? null;
+}
+function upsertAssetAssociation(assoc) {
+    db.prepare(`
+    INSERT INTO asset_associations (id, source_file_id, target_file_id, relationship, confidence, confirmed_by, confirmed_at)
+    VALUES (@id, @source_file_id, @target_file_id, @relationship, @confidence, @confirmed_by, @confirmed_at)
+    ON CONFLICT(id) DO UPDATE SET
+      confidence    = excluded.confidence,
+      confirmed_by  = excluded.confirmed_by,
+      confirmed_at  = excluded.confirmed_at
+  `).run({
+        confirmed_by: assoc.confirmed_by ?? null,
+        confirmed_at: assoc.confirmed_by ? Math.floor(Date.now() / 1000) : null,
+        id: assoc.id,
+        source_file_id: assoc.source_file_id,
+        target_file_id: assoc.target_file_id,
+        relationship: assoc.relationship,
+        confidence: assoc.confidence,
+    });
+}
+function getAssociationsForFile(fileId) {
+    return db.prepare(`
+    SELECT * FROM asset_associations
+    WHERE source_file_id = ? OR target_file_id = ?
+    ORDER BY confidence DESC
+  `).all(fileId, fileId);
+}
+function confirmAssociation(id, confirmedBy) {
+    db.prepare(`
+    UPDATE asset_associations
+    SET confirmed_by = ?, confirmed_at = ?
+    WHERE id = ?
+  `).run(confirmedBy, Math.floor(Date.now() / 1000), id);
+}
+function undoAssociation(id) {
+    db.prepare(`
+    UPDATE asset_associations
+    SET confirmed_by = 'undo', confirmed_at = ?
+    WHERE id = ?
+  `).run(Math.floor(Date.now() / 1000), id);
+}
+function enqueueAssociation(item) {
+    db.prepare(`
+    INSERT OR IGNORE INTO association_queue
+      (id, file_ids, suggested_project_id, relationship, confidence, signals, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, 'pending', unixepoch())
+  `).run(item.id, JSON.stringify(item.file_ids), item.suggested_project_id ?? null, item.relationship, item.confidence, JSON.stringify(item.signals));
+}
+function getPendingAssociations(limit = 20) {
+    const rows = db.prepare(`
+    SELECT * FROM association_queue
+    WHERE status = 'pending'
+    ORDER BY confidence DESC, created_at ASC
+    LIMIT ?
+  `).all(limit);
+    return rows.map(r => ({
+        ...r,
+        file_ids: JSON.parse(r.file_ids),
+        signals: JSON.parse(r.signals),
+    }));
+}
+function resolveAssociationQueue(id, status) {
+    db.prepare(`
+    UPDATE association_queue
+    SET status = ?, resolved_at = unixepoch()
+    WHERE id = ?
+  `).run(status, id);
 }

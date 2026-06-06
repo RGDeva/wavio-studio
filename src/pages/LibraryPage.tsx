@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Search, Music, FileAudio, ArrowUpDown, Cloud,
   FolderOpen, ChevronDown, RefreshCw, X,
@@ -34,10 +34,10 @@ function getRoleColor(role: string): string {
   return map[role] ?? map.unknown;
 }
 
-export function LibraryPage() {
+export function LibraryPage({ visible }: { visible?: boolean }) {
   const [allFiles, setAllFiles] = useState<LibraryFile[]>([]);
   const [stats, setStats] = useState<FileStats | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortField, setSortField] = useState<SortField>('modified_at');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
@@ -51,19 +51,46 @@ export function LibraryPage() {
   const [syncProgresses, setSyncProgresses] = useState<Record<string, SyncProgress>>({});
   const [syncStatus, setSyncStatus] = useState('idle');
 
-  const refresh = useCallback(async () => {
-    const [fetchedFiles, fileStats, queue, status] = await Promise.all([
-      api.files.getAll(500),
-      api.files.stats(),
-      api.sync.getQueue(),
-      api.sync.getStatus(),
-    ]);
-    setAllFiles(fetchedFiles as LibraryFile[]);
-    setStats(fileStats);
-    setSyncQueue(queue as SyncQueueItem[]);
-    setSyncStatus(status);
-    setLoading(false);
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  // Expensive: load files + stats — only on mount or real file changes
+  const refreshFiles = useCallback(async () => {
+    try {
+      const [fetchedFiles, fileStats] = await Promise.all([
+        api.files.getAll(500),
+        api.files.stats(),
+      ]);
+      if (!mountedRef.current) return;
+      setAllFiles((fetchedFiles ?? []) as LibraryFile[]);
+      setStats(fileStats);
+      setLoading(false);
+    } catch { /* unmounted or IPC error */ }
   }, []);
+
+  // Cheap: only sync queue + status — safe to poll every few seconds
+  const refreshSync = useCallback(async () => {
+    try {
+      const [queue, status] = await Promise.all([
+        api.sync.getQueue(),
+        api.sync.getStatus(),
+      ]);
+      if (!mountedRef.current) return;
+      setSyncQueue((queue ?? []) as SyncQueueItem[]);
+      setSyncStatus(status ?? 'idle');
+    } catch { /* unmounted or IPC error */ }
+  }, []);
+
+  const refresh = useCallback(async () => {
+    await Promise.all([refreshFiles(), refreshSync()]);
+  }, [refreshFiles, refreshSync]);
+
+  // Debounce watcher events — rapid file changes won't flood IPC
+  const watcherTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const debouncedFileRefresh = useCallback(() => {
+    if (watcherTimerRef.current) clearTimeout(watcherTimerRef.current);
+    watcherTimerRef.current = setTimeout(() => refreshFiles(), 1500);
+  }, [refreshFiles]);
 
   const handleDrop = useCallback(async (e: React.DragEvent) => {
     e.preventDefault();
@@ -100,25 +127,28 @@ export function LibraryPage() {
     setTimeout(() => { refresh(); setIsSyncing(false); }, 1500);
   }, [refresh]);
 
+  const didLoadRef = useRef(false);
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 5000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+    if (!didLoadRef.current) {
+      didLoadRef.current = true;
+      refresh();
+    }
+    const syncInterval = setInterval(refreshSync, 8000);
+    return () => clearInterval(syncInterval);
+  }, [refresh, refreshSync]);
 
   useEffect(() => {
-    const onWatcher = () => refresh();
     const onProgress = (progress: unknown) => {
       const p = progress as SyncProgress;
       setSyncProgresses(prev => ({ ...prev, [p.itemId]: p }));
     };
-    api.on('watcher:event', onWatcher);
+    api.on('watcher:event', debouncedFileRefresh);
     api.on('sync:progress', onProgress);
     return () => {
-      api.off('watcher:event', onWatcher);
+      api.off('watcher:event', debouncedFileRefresh);
       api.off('sync:progress', onProgress);
     };
-  }, [refresh]);
+  }, [debouncedFileRefresh]);
 
   // ── AI-powered search: parse natural language then filter locally ──
   const parsedQuery = useMemo(() => {

@@ -1,37 +1,4 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -39,7 +6,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SyncAgent = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
-const tus = __importStar(require("tus-js-client"));
 const db_1 = require("./db");
 const crypto_1 = __importDefault(require("crypto"));
 const API_BASE = 'https://wavi.stream/api';
@@ -123,6 +89,17 @@ class SyncAgent {
             status: 'uploading',
             started_at: new Date().toISOString(),
         });
+        (0, db_1.logActivity)({
+            id: generateId(),
+            type: 'upload_started',
+            message: `Upload started: ${item.file_name ?? item.type}`,
+            project_id: item.project_id !== '__standalone__' ? item.project_id : undefined,
+            metadata: { itemId: item.id, type: item.type },
+        });
+        this.onProgress({
+            itemId: item.id, projectId: item.project_id, type: item.type,
+            status: 'uploading', percentage: 0,
+        });
         try {
             if (item.type === 'project_upload' || item.type === 'project_update') {
                 await this.syncProject(item);
@@ -133,6 +110,13 @@ class SyncAgent {
             (0, db_1.updateSyncItem)(item.id, {
                 status: 'completed',
                 completed_at: new Date().toISOString(),
+            });
+            (0, db_1.logActivity)({
+                id: generateId(),
+                type: 'upload_complete',
+                message: `Upload complete: ${item.file_name ?? item.type}`,
+                project_id: item.project_id !== '__standalone__' ? item.project_id : undefined,
+                metadata: { itemId: item.id },
             });
         }
         catch (err) {
@@ -182,7 +166,7 @@ class SyncAgent {
         const project = (0, db_1.getProjectById)(item.project_id);
         if (!project)
             throw new Error('Project not found');
-        // POST project metadata to API
+        // Step 1: POST project metadata to API (daw-sync)
         const res = await fetch(`${API_BASE}/desktop/index`, {
             method: 'POST',
             headers: {
@@ -204,11 +188,58 @@ class SyncAgent {
             throw new Error(err.error ?? `HTTP ${res.status}`);
         }
         const data = await res.json();
-        (0, db_1.updateProjectSyncStatus)(project.id, 'synced', data.projectId ?? data.id);
-        // Upload the actual file via tus resumable upload
+        const cloudProjectId = data.projectId ?? data.id;
+        (0, db_1.updateProjectSyncStatus)(project.id, 'synced', cloudProjectId);
+        // Step 2: Upload the actual project file via presign → PUT → register-asset
         if (fs_1.default.existsSync(project.file_path)) {
-            await this.tusUpload(project.file_path, item.id, item.project_id, 'project', data.uploadToken);
+            const stats = fs_1.default.statSync(project.file_path);
+            const fileName = path_1.default.basename(project.file_path);
+            // Get pre-signed upload URL
+            const presignRes = await fetch(`${API_BASE}/storage/presign`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${this.authToken}`,
+                },
+                body: JSON.stringify({
+                    fileName,
+                    fileSize: stats.size,
+                    sha256: project.sha256 ?? null,
+                    projectId: cloudProjectId,
+                }),
+            });
+            if (presignRes.ok) {
+                const presignData = await presignRes.json();
+                if (!presignData.deduplicated) {
+                    // PUT file directly to signed URL
+                    this.onProgress({
+                        itemId: item.id, projectId: item.project_id, type: 'project',
+                        status: 'uploading', bytesUploaded: 0, bytesTotal: stats.size, percentage: 0,
+                    });
+                    const fileStream = fs_1.default.createReadStream(project.file_path);
+                    const uploadRes = await fetch(presignData.uploadUrl, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(stats.size) },
+                        body: fileStream,
+                        // @ts-ignore — duplex required in Node 18+
+                        duplex: 'half',
+                    });
+                    if (!uploadRes.ok) {
+                        console.error(`[syncAgent] Project file upload failed: HTTP ${uploadRes.status}`);
+                    }
+                    else {
+                        this.onProgress({
+                            itemId: item.id, projectId: item.project_id, type: 'project',
+                            status: 'uploading', bytesUploaded: stats.size, bytesTotal: stats.size, percentage: 100,
+                        });
+                    }
+                }
+            }
         }
+        this.onProgress({
+            itemId: item.id, projectId: item.project_id, type: 'project',
+            status: 'completed', percentage: 100,
+        });
         (0, db_1.logActivity)({
             id: generateId(),
             type: 'project_synced',
@@ -218,15 +249,30 @@ class SyncAgent {
     }
     async syncFile(item) {
         let file;
-        if (item.project_id === '__standalone__' && item.file_id) {
+        // Try by file_id first (fastest, most reliable)
+        if (item.file_id) {
             file = (0, db_1.getFileById)(item.file_id);
         }
-        else {
+        // Fall back: find by file_name within the project's files
+        if (!file && item.project_id && item.project_id !== '__standalone__' && item.file_name) {
             const files = (0, db_1.getFilesByProject)(item.project_id);
-            file = files.find((f) => f.id === item.file_id);
+            file = files.find((f) => f.file_name === item.file_name);
         }
-        if (!file)
+        // Last resort: search the DB by file_name alone
+        if (!file && item.file_name) {
+            file = (0, db_1.getDb)()
+                .prepare('SELECT * FROM files WHERE file_name = ? ORDER BY modified_at DESC LIMIT 1')
+                .get(item.file_name);
+        }
+        if (!file) {
+            (0, db_1.logActivity)({
+                id: generateId(),
+                type: 'sync_error',
+                message: `Skipping sync: file row not found for ${item.file_name ?? item.file_id}`,
+                project_id: item.project_id !== '__standalone__' ? item.project_id : undefined,
+            });
             return;
+        }
         if (!fs_1.default.existsSync(file.file_path)) {
             (0, db_1.updateFileSyncStatus)(file.id, 'missing');
             return;
@@ -251,29 +297,43 @@ class SyncAgent {
             throw new Error(err.error ?? `HTTP ${presignRes.status}`);
         }
         const presignData = await presignRes.json();
-        // If already deduplicated, just update local status
-        if (presignData.deduplicated) {
-            (0, db_1.updateFileSyncStatus)(file.id, 'synced', presignData.fileUrl);
-            (0, db_1.logActivity)({
-                id: generateId(),
-                type: 'file_synced',
-                message: `Dedup hit: ${file.file_name}`,
-                project_id: item.project_id,
-                metadata: { fileId: file.id },
+        // Step 2: Upload file if not deduplicated
+        if (!presignData.deduplicated) {
+            const fileSize2 = stats.size;
+            this.onProgress({
+                itemId: item.id, projectId: item.project_id, type: 'file',
+                status: 'uploading', bytesUploaded: 0, bytesTotal: fileSize2, percentage: 0,
             });
-            return;
+            const fileStream = fs_1.default.createReadStream(file.file_path);
+            const uploadRes = await fetch(presignData.uploadUrl, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(fileSize2) },
+                body: fileStream,
+                // @ts-ignore — duplex required in Node 18+
+                duplex: 'half',
+            });
+            if (!uploadRes.ok) {
+                throw new Error(`Storage upload failed: HTTP ${uploadRes.status}`);
+            }
+            this.onProgress({
+                itemId: item.id, projectId: item.project_id, type: 'file',
+                status: 'uploading', bytesUploaded: fileSize2, bytesTotal: fileSize2, percentage: 99,
+            });
         }
-        // Step 2: PUT file directly to signed URL (bypasses Vercel 4.5MB limit)
-        const fileBuffer = fs_1.default.readFileSync(file.file_path);
-        const uploadRes = await fetch(presignData.uploadUrl, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/octet-stream' },
-            body: fileBuffer,
-        });
-        if (!uploadRes.ok) {
-            throw new Error(`Storage upload failed: HTTP ${uploadRes.status}`);
+        // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase
+        // Resolve project info for daw + projectName
+        let daw = null;
+        let projectName = null;
+        if (item.project_id && item.project_id !== '__standalone__') {
+            try {
+                const project = (0, db_1.getProjectById)(item.project_id);
+                if (project) {
+                    daw = project.daw_type ?? null;
+                    projectName = project.project_name ?? null;
+                }
+            }
+            catch { }
         }
-        // Step 3: Register asset with API using storageKey
         const registerRes = await fetch(`${API_BASE}/desktop/index`, {
             method: 'POST',
             headers: {
@@ -283,14 +343,16 @@ class SyncAgent {
             },
             body: JSON.stringify({
                 fileName: file.file_name,
-                storageKey: presignData.storageKey,
+                storageKey: presignData.storageKey ?? presignData.fileUrl,
                 fileSize: stats.size,
                 sha256: file.checksum ?? null,
-                projectId: item.project_id,
+                projectId: item.project_id !== '__standalone__' ? item.project_id : null,
                 bpm: file.bpm ?? null,
                 keyNote: file.key_note ?? null,
                 duration: file.duration ?? null,
                 role: file.role ?? null,
+                daw,
+                projectName,
             }),
         });
         const regData = await registerRes.json().catch(() => ({}));
@@ -310,62 +372,6 @@ class SyncAgent {
             message: `Synced file: ${file.file_name}`,
             project_id: item.project_id,
             metadata: { fileId: file.id },
-        });
-    }
-    tusUpload(filePath, itemId, projectId, uploadType, uploadToken, fileId) {
-        return new Promise((resolve, reject) => {
-            let fileStream;
-            let fileSize;
-            try {
-                fileSize = fs_1.default.statSync(filePath).size;
-                fileStream = fs_1.default.createReadStream(filePath);
-            }
-            catch (err) {
-                return reject(err);
-            }
-            const upload = new tus.Upload(fileStream, {
-                endpoint: `${API_BASE}/files/upload`,
-                retryDelays: [0, 3000, 5000, 10000, 20000],
-                chunkSize: 5 * 1024 * 1024, // 5MB chunks
-                metadata: {
-                    filename: path_1.default.basename(filePath),
-                    filetype: `application/octet-stream`,
-                    projectId,
-                    uploadType,
-                    ...(fileId ? { fileId } : {}),
-                },
-                headers: {
-                    Authorization: `Bearer ${this.authToken ?? ''}`,
-                    ...(uploadToken ? { 'X-Upload-Token': uploadToken } : {}),
-                },
-                uploadSize: fileSize,
-                onProgress: (bytesUploaded, bytesTotal) => {
-                    const percentage = Math.round((bytesUploaded / bytesTotal) * 100);
-                    (0, db_1.updateSyncItem)(itemId, { upload_offset: bytesUploaded });
-                    this.onProgress({
-                        itemId,
-                        projectId,
-                        type: uploadType,
-                        status: 'uploading',
-                        bytesUploaded,
-                        bytesTotal,
-                        percentage,
-                    });
-                },
-                onSuccess: () => resolve(),
-                onError: (err) => reject(err),
-            });
-            upload.findPreviousUploads().then((prev) => {
-                if (prev.length)
-                    upload.resumeFromPreviousUpload(prev[0]);
-                upload.start();
-                // Save upload URL for resume
-                setTimeout(() => {
-                    if (upload.url) {
-                        (0, db_1.updateSyncItem)(itemId, { upload_url: upload.url });
-                    }
-                }, 1000);
-            });
         });
     }
 }

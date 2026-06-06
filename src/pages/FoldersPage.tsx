@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { FolderPlus, Trash2, FolderOpen, ExternalLink, Sparkles, Plus, Check } from 'lucide-react';
 import { api } from '../lib/api';
 import { DawLogo } from '../components/DawLogo';
@@ -27,19 +27,24 @@ function guessDaw(folderPath: string): string {
   return 'Unknown';
 }
 
-export function FoldersPage() {
+export function FoldersPage({ visible }: { visible?: boolean }) {
   const [folders, setFolders] = useState<string[]>([]);
   const [discovered, setDiscovered] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
   const [addingPath, setAddingPath] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
 
   const refresh = useCallback(async () => {
-    const [f, d] = await Promise.all([
-      api.folders.getAll(),
-      api.folders.discover(),
-    ]);
-    setFolders(f);
-    setDiscovered(d);
+    try {
+      const [f, d] = await Promise.all([
+        api.folders.getAll(),
+        api.folders.discover(),
+      ]);
+      if (!mountedRef.current) return;
+      setFolders(f ?? []);
+      setDiscovered(d ?? []);
+    } catch { /* unmounted or IPC error */ }
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);

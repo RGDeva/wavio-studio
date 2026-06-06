@@ -3,28 +3,39 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
-import { upsertProject, upsertFile, upsertStandaloneFile, enqueueSyncItem, logActivity, createVersion } from './db';
+import { upsertProject, upsertFile, upsertStandaloneFile, enqueueSyncItem, logActivity, createVersion, addBounceCandidate, getBounceCandidateByPath, versionExistsByChecksum, versionExistsByPath, updateFileClassificationByPath } from './db';
 import { detectBpm } from './bpmDetector';
 import { analyzeAudio } from './audioAnalyzer';
-import { classifyFile } from './classifier';
+import { classifyFile as classifyFileLegacy } from './classifier';
+import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
+import { runAssociationEngine } from './projectAssociation/projectAssociationEngine';
 
 const BPM_EXTENSIONS = new Set(['.wav', '.aif', '.aiff', '.flac', '.mp3', '.m4a']);
 
-const DAW_EXTENSIONS = new Set(['.flp', '.ptx', '.ptf', '.als', '.logic', '.logicx', '.rpp', '.cpr', '.band', '.sesx']);
-const DEPENDENCY_EXTENSIONS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.mid', '.midi', '.stems', '.flac', '.ogg', '.m4a', '.aac']);
+const DAW_EXTENSIONS = new Set(['.flp', '.ptx', '.ptf', '.als', '.logic', '.logicx', '.rpp', '.cpr', '.band', '.sesx', '.song', '.reason', '.bwproject', '.npr']);
+const DEPENDENCY_EXTENSIONS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.mid', '.midi', '.stems', '.flac', '.ogg', '.m4a', '.aac', '.opus']);
 
 export interface WatcherEvent {
-  type: 'project_added' | 'project_changed' | 'project_deleted' | 'dependency_found';
+  type: 'project_added' | 'project_changed' | 'project_deleted' | 'dependency_found' | 'bounce_detected';
   filePath: string;
   projectId?: string;
+  role?: string;
+  candidateId?: string;
   timestamp: string;
+}
+
+const EXPORT_FOLDER_NAMES = new Set(['exports', 'export', 'bounces', 'bounce', 'stems', 'stem', 'masters', 'master', 'mixes', 'mix', 'renders', 'render']);
+
+function isInExportFolder(filePath: string): boolean {
+  const parts = filePath.split(path.sep);
+  return parts.some(p => EXPORT_FOLDER_NAMES.has(p.toLowerCase()));
 }
 
 function generateId(): string {
   return crypto.randomUUID();
 }
 
-async function fileChecksum(filePath: string): Promise<string> {
+export async function fileChecksum(filePath: string): Promise<string> {
   return new Promise((resolve) => {
     try {
       const hash = crypto.createHash('sha256');
@@ -50,6 +61,10 @@ function getDawType(ext: string): string {
     '.cpr': 'Cubase',
     '.band': 'GarageBand',
     '.sesx': 'Adobe Audition',
+    '.song': 'Studio One',
+    '.reason': 'Reason',
+    '.bwproject': 'Bitwig Studio',
+    '.npr': 'Nuendo',
   };
   return map[ext] ?? 'Unknown';
 }
@@ -58,26 +73,83 @@ function getProjectName(filePath: string): string {
   return path.basename(filePath, path.extname(filePath));
 }
 
+// Per-file stabilization: detect → wait STABILIZE_MS → re-check size → process if unchanged.
+const STABILIZE_MS = 1500;    // wait after first detection
+const STABILIZE_RECHECK_MS = 1000; // re-check interval
+const STABILIZE_MAX_RECHECKS = 8;  // give up after ~8s total
+
 export class WatcherManager {
   private watchers = new Map<string, FSWatcher>();
   private db: Database.Database;
-  private onEvent: (event: WatcherEvent) => void;
+  private _rawOnEvent: (event: WatcherEvent) => void;
   private projectMap = new Map<string, string>();
   private pendingVersions = new Map<string, ReturnType<typeof setTimeout>>();
+  // Per-file stabilization: filePath → { timer, size, recheckCount }
+  private stabilizationMap = new Map<string, { timer: ReturnType<typeof setTimeout>; size: number; recheckCount: number }>(); 
+  // Debounced association engine: run at most once per 30 s after new files arrive
+  private _assocEngineTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(db: Database.Database, onEvent: (event: WatcherEvent) => void) {
     this.db = db;
-    this.onEvent = onEvent;
+    this._rawOnEvent = onEvent;
+  }
+
+  private onEvent(event: WatcherEvent) {
+    this._rawOnEvent(event);
+  }
+
+  /**
+   * Per-file stabilization gate.
+   * When a file is first seen (or changes), we record its size, wait STABILIZE_MS,
+   * then re-check. If the size is still the same we call onReady; otherwise we
+   * reschedule for another STABILIZE_RECHECK_MS. Gives up after STABILIZE_MAX_RECHECKS.
+   */
+  private stableFile(filePath: string, onReady: () => void) {
+    // Cancel any pending stabilization for this path
+    const existing = this.stabilizationMap.get(filePath);
+    if (existing) clearTimeout(existing.timer);
+
+    let currentSize = 0;
+    try { currentSize = fs.statSync(filePath).size; } catch { return; }
+
+    const check = (prevSize: number, recheckCount: number) => {
+      if (this._stopped) return;
+      let nowSize = 0;
+      try { nowSize = fs.statSync(filePath).size; } catch {
+        this.stabilizationMap.delete(filePath);
+        return;
+      }
+      if (nowSize === prevSize && nowSize > 0) {
+        // File is stable
+        this.stabilizationMap.delete(filePath);
+        onReady();
+        return;
+      }
+      if (recheckCount >= STABILIZE_MAX_RECHECKS) {
+        // Timed out — process anyway (file may be legitimately large)
+        this.stabilizationMap.delete(filePath);
+        onReady();
+        return;
+      }
+      const timer = setTimeout(() => check(nowSize, recheckCount + 1), STABILIZE_RECHECK_MS);
+      this.stabilizationMap.set(filePath, { timer, size: nowSize, recheckCount: recheckCount + 1 });
+    };
+
+    const timer = setTimeout(() => check(currentSize, 0), STABILIZE_MS);
+    this.stabilizationMap.set(filePath, { timer, size: currentSize, recheckCount: 0 });
   }
 
   addFolder(folderPath: string) {
     if (this.watchers.has(folderPath)) return;
 
-    const watcher = chokidar.watch(folderPath, {
+    // Only watch audio & DAW files — avoids scanning tens of thousands of irrelevant files
+    const audioGlob = '**/*.{flp,ptx,ptf,als,logic,logicx,rpp,cpr,band,sesx,song,reason,bwproject,npr,wav,mp3,aiff,aif,mid,midi,flac,ogg,m4a,aac,opus}';
+    const watcher = chokidar.watch(audioGlob, {
+      cwd: folderPath,
       persistent: true,
-      ignoreInitial: false,
+      ignoreInitial: true,
       followSymlinks: false,
-      depth: 4,
+      depth: 3,
       awaitWriteFinish: {
         stabilityThreshold: 3000,
         pollInterval: 500,
@@ -86,10 +158,34 @@ export class WatcherManager {
     });
 
     watcher
-      .on('add', (filePath) => this.handleFileEvent('add', filePath))
-      .on('change', (filePath) => this.handleFileEvent('change', filePath))
-      .on('unlink', (filePath) => this.handleFileEvent('unlink', filePath))
-      .on('error', (err) => console.error('[watcher] error:', err));
+      .on('add', (rel) => {
+        const abs = path.join(folderPath, rel);
+        const ext = path.extname(rel).toLowerCase();
+        // DAW files and non-audio deps: process immediately (chokidar's awaitWriteFinish handles them)
+        if (DAW_EXTENSIONS.has(ext)) {
+          this.handleFileEvent('add', abs);
+        } else if (DEPENDENCY_EXTENSIONS.has(ext)) {
+          // Audio files: use our own stabilization on top of awaitWriteFinish
+          this.stableFile(abs, () => this.handleFileEvent('add', abs));
+        }
+      })
+      .on('change', (rel) => {
+        const abs = path.join(folderPath, rel);
+        const ext = path.extname(rel).toLowerCase();
+        if (DAW_EXTENSIONS.has(ext)) {
+          this.handleFileEvent('change', abs);
+        } else if (DEPENDENCY_EXTENSIONS.has(ext)) {
+          this.stableFile(abs, () => this.handleFileEvent('change', abs));
+        }
+      })
+      .on('unlink', (rel) => this.handleFileEvent('unlink', path.join(folderPath, rel)))
+      .on('error', (err) => console.error('[watcher] error:', err))
+      .on('ready', () => {
+        // Walk existing files after watcher is fully initialized
+        // (ignoreInitial=true means chokidar won't fire 'add' for them,
+        //  so we do a one-time manual scan to pick up files already on disk)
+        this.scanExisting(folderPath);
+      });
 
     this.watchers.set(folderPath, watcher);
 
@@ -101,10 +197,10 @@ export class WatcherManager {
     });
   }
 
-  removeFolder(folderPath: string) {
+  async removeFolder(folderPath: string) {
     const watcher = this.watchers.get(folderPath);
     if (watcher) {
-      watcher.close();
+      await watcher.close().catch(() => {});
       this.watchers.delete(folderPath);
       logActivity({
         id: generateId(),
@@ -115,11 +211,66 @@ export class WatcherManager {
     }
   }
 
-  stopAll() {
-    for (const watcher of this.watchers.values()) {
-      watcher.close();
-    }
+  async stopAll() {
+    this._stopped = true;
+    // Cancel all pending stabilization timers
+    for (const { timer } of this.stabilizationMap.values()) clearTimeout(timer);
+    this.stabilizationMap.clear();
+    const closers = Array.from(this.watchers.values()).map(w => w.close().catch(() => {}));
+    await Promise.all(closers);
     this.watchers.clear();
+  }
+
+  private _stopped = false;
+
+  /**
+   * One-time walk of existing files in a watched folder.
+   * Runs after chokidar 'ready' so the native fsevents watcher is fully initialised
+   * and won't race with cleanup.  Files are fed through handleFileEvent('add', …)
+   * in small batches with yielding so the main thread stays responsive.
+   */
+  private async scanExisting(folderPath: string) {
+    const SCAN_EXTENSIONS = new Set([...DAW_EXTENSIONS, ...DEPENDENCY_EXTENSIONS]);
+    const MAX_DEPTH = 3;
+    const BATCH_SIZE = 50;
+    const ignoreRe = /(^|[/\\])(\.|(node_modules|__MACOSX|Backup|Autosave|\.trash))/;
+
+    const queue: { dir: string; depth: number }[] = [{ dir: folderPath, depth: 0 }];
+    let batch = 0;
+
+    while (queue.length > 0 && !this._stopped) {
+      const { dir, depth } = queue.shift()!;
+      let entries: fs.Dirent[];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      catch { continue; }
+
+      for (const entry of entries) {
+        if (this._stopped) return;
+        const rel = path.relative(folderPath, path.join(dir, entry.name));
+        if (ignoreRe.test(rel)) continue;
+
+        if (entry.isDirectory() && depth < MAX_DEPTH) {
+          queue.push({ dir: path.join(dir, entry.name), depth: depth + 1 });
+        } else if (entry.isFile()) {
+          const ext = path.extname(entry.name).toLowerCase();
+          if (SCAN_EXTENSIONS.has(ext)) {
+            const abs = path.join(dir, entry.name);
+            // Existing files: run through stabilization before processing
+            // (avoids acting on partially-written files from a previous session)
+            if (DEPENDENCY_EXTENSIONS.has(ext)) {
+              this.stableFile(abs, () => this.handleFileEvent('add', abs));
+            } else {
+              this.handleFileEvent('add', abs);
+            }
+            batch++;
+            if (batch >= BATCH_SIZE) {
+              batch = 0;
+              await new Promise(r => setTimeout(r, 50));
+            }
+          }
+        }
+      }
+    }
   }
 
   private handleFileEvent(event: 'add' | 'change' | 'unlink', filePath: string) {
@@ -245,7 +396,7 @@ export class WatcherManager {
 
     const fileName = path.basename(filePath);
     const ext = path.extname(filePath).toLowerCase();
-    const role = classifyFile(fileName);
+    const role = classifyFileLegacy(fileName);
 
     // Async analysis pipeline — does not block watcher or upload queue
     fileChecksum(filePath).then(async (checksum) => {
@@ -298,6 +449,32 @@ export class WatcherManager {
         });
       }
 
+      // Phase 1 classification — runs synchronously (pure string ops, no I/O)
+      try {
+        const v1 = classifyFileV1(filePath, stats);
+        updateFileClassificationByPath(filePath, {
+          classifier_role:       v1.role,
+          classifier_confidence: v1.confidence,
+          name_tokens:           JSON.stringify(v1.tokens),
+        });
+      } catch {
+        // Non-fatal — classification failure must never block ingestion
+      }
+
+      // Phase 2: debounce association engine — runs at most once per 30s
+      if (this._assocEngineTimer) clearTimeout(this._assocEngineTimer);
+      this._assocEngineTimer = setTimeout(() => {
+        this._assocEngineTimer = null;
+        try {
+          const r = runAssociationEngine(this.db);
+          if (r.groupsQueued > 0) {
+            console.log(`[assoc] Engine run: found=${r.groupsFound} queued=${r.groupsQueued} skipped=${r.groupsSkipped} autoConfirmed=${r.autoConfirmed}`);
+          }
+        } catch (err) {
+          console.error('[assoc] Engine error:', err);
+        }
+      }, 30_000);
+
       const parts: string[] = [];
       if (bpm) parts.push(`${bpm} BPM`);
       if (key_note) parts.push(key_note);
@@ -311,20 +488,89 @@ export class WatcherManager {
           metadata: { filePath, bpm, key_note, duration, role },
         });
       }
+
+      // Enqueue for sync AFTER DB row exists (avoids race condition)
+      enqueueSyncItem({
+        id: generateId(),
+        project_id: projectId ?? '__standalone__',
+        file_id: fileId,
+        file_name: path.basename(filePath),
+        type: 'dependency_upload',
+        priority: 3,
+        created_at: now,
+      });
     });
 
-    // Enqueue for sync (project_id can be null for standalone files)
-    enqueueSyncItem({
-      id: generateId(),
-      project_id: projectId ?? '__standalone__',
-      file_id: fileId,
-      file_name: path.basename(filePath),
-      type: 'dependency_upload',
-      priority: 3,
-      created_at: now,
-    });
+    // Detect bounce/export files — audio files inside known export subdirs
+    const inExportFolder = isInExportFolder(filePath);
+    if (inExportFolder && (event === 'add' || event === 'change') && BPM_EXTENSIONS.has(ext)) {
+      const candidateRole = classifyFileLegacy(fileName);
+      const folderLabel = filePath.split(path.sep).reverse()
+        .find(p => EXPORT_FOLDER_NAMES.has(p.toLowerCase())) ?? 'export';
+      const effectiveRole = candidateRole !== 'unknown' ? candidateRole
+        : folderLabel === 'masters' || folderLabel === 'master' ? 'master'
+        : folderLabel === 'stems' || folderLabel === 'stem' ? 'stem'
+        : folderLabel === 'mixes' || folderLabel === 'mix' ? 'mix'
+        : 'mix';
 
-    this.onEvent({ type: 'dependency_found', filePath, projectId, timestamp: now });
+      // Checksum-based dedup: if we already have a resolved (non-ignored) candidate for this
+      // checksum+project, don't create a new one.
+      fileChecksum(filePath).then((checksum) => {
+        // Check if already tracked
+        const existing = getBounceCandidateByPath(filePath);
+        if (existing && existing.status !== 'ignored') {
+          // Already pending or resolved — do nothing
+          return;
+        }
+        // If ignored but same checksum — stay ignored
+        if (existing && existing.status === 'ignored' && existing.checksum === checksum) {
+          return;
+        }
+
+        const candidateId = generateId();
+        const returnedId = addBounceCandidate({
+          id: candidateId,
+          project_id: projectId ?? null,
+          file_path: filePath,
+          file_name: fileName,
+          file_size: stats.size,
+          checksum,
+          role: effectiveRole,
+          detected_at: now,
+        });
+
+        // If addBounceCandidate returned an existing id, it was already tracked — still notify renderer
+        const effectiveCandidateId = returnedId ?? candidateId;
+
+        logActivity({
+          id: generateId(),
+          type: 'bounce_detected',
+          message: `New ${effectiveRole} detected: ${fileName}`,
+          project_id: projectId,
+          metadata: { filePath, role: effectiveRole, candidateId: effectiveCandidateId, folderLabel },
+        });
+
+        this.onEvent({ type: 'bounce_detected', filePath, projectId, role: effectiveRole, candidateId: effectiveCandidateId, timestamp: now });
+      }).catch(() => {
+        // Checksum failed — still surface the detection
+        const existing = getBounceCandidateByPath(filePath);
+        if (!existing || existing.status === 'ignored') {
+          const candidateId = generateId();
+          addBounceCandidate({
+            id: candidateId,
+            project_id: projectId ?? null,
+            file_path: filePath,
+            file_name: fileName,
+            file_size: stats.size,
+            role: effectiveRole,
+            detected_at: now,
+          });
+          this.onEvent({ type: 'bounce_detected', filePath, projectId, role: effectiveRole, candidateId, timestamp: now });
+        }
+      });
+    } else {
+      this.onEvent({ type: 'dependency_found', filePath, projectId, timestamp: now });
+    }
   }
 
   private scanDependencies(projectFilePath: string, projectId: string) {

@@ -10,6 +10,9 @@ export interface WaviAPI {
     setToken: (token: string) => Promise<void>;
     clearToken: () => Promise<void>;
   };
+  copilot: {
+    toggle: () => Promise<void>;
+  };
   folders: {
     getAll: () => Promise<string[]>;
     add: () => Promise<string | null>;
@@ -20,6 +23,7 @@ export interface WaviAPI {
   projects: {
     getAll: () => Promise<any[]>;
     getById: (id: string) => Promise<any>;
+    getDemoStatus: (projectId: string) => Promise<any>;
   };
   files: {
     getByProject: (projectId: string) => Promise<any[]>;
@@ -45,12 +49,61 @@ export interface WaviAPI {
   app: {
     relaunch: () => Promise<void>;
   };
+  bounces: {
+    getPending: () => Promise<any[]>;
+    resolve: (id: string, action: string) => Promise<void>;
+  };
+  versions: {
+    getByProject: (projectId: string) => Promise<any[]>;
+  };
   settings: {
     get: (key: string) => Promise<any>;
     set: (key: string, value: unknown) => Promise<void>;
+  };
+  bridge: {
+    getStatus: () => Promise<{
+      port: number;
+      host: string;
+      tokenExists: boolean;
+      tokenPerm: string;
+      tokenHint: string;
+      online: boolean;
+    } | null>;
+  };
+  association: {
+    getPending:   ()                                          => Promise<any[]>;
+    confirm:      (queueId: string, name?: string)           => Promise<{ ok: boolean }>;
+    reject:       (queueId: string)                          => Promise<{ ok: boolean }>;
+    undo:         (associationId: string)                    => Promise<{ ok: boolean }>;
+    classifyFile: (filePath: string)                         => Promise<any>;
   };
   on: (channel: string, listener: (...args: unknown[]) => void) => void;
   off: (channel: string, listener: (...args: unknown[]) => void) => void;
 }
 
-export const api: WaviAPI = (window as any).waviAPI;
+const _noop = () => Promise.resolve(null as any);
+const _stub: WaviAPI = {
+  auth: { getToken: _noop, setToken: _noop, clearToken: _noop },
+  copilot: { toggle: _noop },
+  folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop },
+  projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
+  files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]) },
+  sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },
+  activity: { getAll: () => Promise.resolve([]) },
+  shell: { openPath: _noop, openExternal: _noop },
+  app: { relaunch: _noop },
+  bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
+  versions: { getByProject: () => Promise.resolve([]) },
+  settings: { get: _noop, set: _noop },
+  bridge: { getStatus: () => Promise.resolve(null) },
+  association: {
+    getPending:   () => Promise.resolve([]),
+    confirm:      _noop,
+    reject:       _noop,
+    undo:         _noop,
+    classifyFile: _noop,
+  },
+  on: () => {},
+  off: () => {},
+};
+export const api: WaviAPI = (window as any).waviAPI ?? _stub;

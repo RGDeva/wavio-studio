@@ -94,4 +94,30 @@ export interface FileStats {
   byRole: { role: string; count: number }[];
 }
 
-export type Page = 'dashboard' | 'library' | 'folders' | 'activity' | 'settings';
+export type Page = 'dashboard' | 'library' | 'folders' | 'activity' | 'studio' | 'settings' | 'review';
+
+export interface AssociationQueueItem {
+  id: string;
+  file_ids: string[];
+  suggested_project_id: string | null;
+  relationship: 'same_project' | 'stem_of' | 'version_of' | 'exported_from' | 'duplicate_of' | 'reference_for';
+  confidence: number;
+  signals: {
+    sameFolder?: boolean;
+    parentChildFolder?: boolean;
+    sharedHint?: string | null;
+    tokenOverlap?: number;
+    timestampProximity?: boolean;
+    hasDawProject?: boolean;
+    hasExportFile?: boolean;
+    exportUnderProject?: boolean;
+    suggestedProjectName?: string;
+    fileCount?: number;
+    roles?: string[];
+    [key: string]: unknown;
+  };
+  status: 'pending' | 'confirmed' | 'rejected' | 'deferred';
+  shown_at: number | null;
+  resolved_at: number | null;
+  created_at: number;
+}

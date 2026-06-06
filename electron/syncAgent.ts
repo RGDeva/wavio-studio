@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import * as tus from 'tus-js-client';
 import Database from 'better-sqlite3';
 import {
   getPendingSyncItems,
@@ -12,6 +11,7 @@ import {
   getProjectById,
   getFilesByProject,
   getFileById,
+  getDb,
 } from './db';
 import crypto from 'crypto';
 
@@ -116,6 +116,19 @@ export class SyncAgent {
       started_at: new Date().toISOString(),
     });
 
+    logActivity({
+      id: generateId(),
+      type: 'upload_started',
+      message: `Upload started: ${item.file_name ?? item.type}`,
+      project_id: item.project_id !== '__standalone__' ? item.project_id : undefined,
+      metadata: { itemId: item.id, type: item.type },
+    });
+
+    this.onProgress({
+      itemId: item.id, projectId: item.project_id, type: item.type,
+      status: 'uploading', percentage: 0,
+    });
+
     try {
       if (item.type === 'project_upload' || item.type === 'project_update') {
         await this.syncProject(item);
@@ -126,6 +139,14 @@ export class SyncAgent {
       updateSyncItem(item.id, {
         status: 'completed',
         completed_at: new Date().toISOString(),
+      });
+
+      logActivity({
+        id: generateId(),
+        type: 'upload_complete',
+        message: `Upload complete: ${item.file_name ?? item.type}`,
+        project_id: item.project_id !== '__standalone__' ? item.project_id : undefined,
+        metadata: { itemId: item.id },
       });
     } catch (err: any) {
       const retries = (item.retries ?? 0) + 1;
@@ -181,7 +202,7 @@ export class SyncAgent {
     const project = getProjectById(item.project_id) as any;
     if (!project) throw new Error('Project not found');
 
-    // POST project metadata to API
+    // Step 1: POST project metadata to API (daw-sync)
     const res = await fetch(`${API_BASE}/desktop/index`, {
       method: 'POST',
       headers: {
@@ -205,18 +226,64 @@ export class SyncAgent {
     }
 
     const data = await res.json();
-    updateProjectSyncStatus(project.id, 'synced', data.projectId ?? data.id);
+    const cloudProjectId = data.projectId ?? data.id;
+    updateProjectSyncStatus(project.id, 'synced', cloudProjectId);
 
-    // Upload the actual file via tus resumable upload
+    // Step 2: Upload the actual project file via presign → PUT → register-asset
     if (fs.existsSync(project.file_path)) {
-      await this.tusUpload(
-        project.file_path,
-        item.id,
-        item.project_id,
-        'project',
-        data.uploadToken
-      );
+      const stats = fs.statSync(project.file_path);
+      const fileName = path.basename(project.file_path);
+
+      // Get pre-signed upload URL
+      const presignRes = await fetch(`${API_BASE}/storage/presign`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.authToken}`,
+        },
+        body: JSON.stringify({
+          fileName,
+          fileSize: stats.size,
+          sha256: project.sha256 ?? null,
+          projectId: cloudProjectId,
+        }),
+      });
+
+      if (presignRes.ok) {
+        const presignData = await presignRes.json();
+
+        if (!presignData.deduplicated) {
+          // PUT file directly to signed URL
+          this.onProgress({
+            itemId: item.id, projectId: item.project_id, type: 'project',
+            status: 'uploading', bytesUploaded: 0, bytesTotal: stats.size, percentage: 0,
+          });
+
+          const fileStream = fs.createReadStream(project.file_path);
+          const uploadRes = await fetch(presignData.uploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(stats.size) },
+            body: fileStream as any,
+            // @ts-ignore — duplex required in Node 18+
+            duplex: 'half',
+          });
+
+          if (!uploadRes.ok) {
+            console.error(`[syncAgent] Project file upload failed: HTTP ${uploadRes.status}`);
+          } else {
+            this.onProgress({
+              itemId: item.id, projectId: item.project_id, type: 'project',
+              status: 'uploading', bytesUploaded: stats.size, bytesTotal: stats.size, percentage: 100,
+            });
+          }
+        }
+      }
     }
+
+    this.onProgress({
+      itemId: item.id, projectId: item.project_id, type: 'project',
+      status: 'completed', percentage: 100,
+    });
 
     logActivity({
       id: generateId(),
@@ -228,13 +295,31 @@ export class SyncAgent {
 
   private async syncFile(item: any) {
     let file: any;
-    if (item.project_id === '__standalone__' && item.file_id) {
+
+    // Try by file_id first (fastest, most reliable)
+    if (item.file_id) {
       file = getFileById(item.file_id);
-    } else {
-      const files = getFilesByProject(item.project_id) as any[];
-      file = files.find((f) => f.id === item.file_id);
     }
-    if (!file) return;
+    // Fall back: find by file_name within the project's files
+    if (!file && item.project_id && item.project_id !== '__standalone__' && item.file_name) {
+      const files = getFilesByProject(item.project_id) as any[];
+      file = files.find((f: any) => f.file_name === item.file_name);
+    }
+    // Last resort: search the DB by file_name alone
+    if (!file && item.file_name) {
+      file = getDb()
+        .prepare('SELECT * FROM files WHERE file_name = ? ORDER BY modified_at DESC LIMIT 1')
+        .get(item.file_name);
+    }
+    if (!file) {
+      logActivity({
+        id: generateId(),
+        type: 'sync_error',
+        message: `Skipping sync: file row not found for ${item.file_name ?? item.file_id}`,
+        project_id: item.project_id !== '__standalone__' ? item.project_id : undefined,
+      });
+      return;
+    }
 
     if (!fs.existsSync(file.file_path)) {
       updateFileSyncStatus(file.id, 'missing');
@@ -265,32 +350,45 @@ export class SyncAgent {
 
     const presignData = await presignRes.json();
 
-    // If already deduplicated, just update local status
-    if (presignData.deduplicated) {
-      updateFileSyncStatus(file.id, 'synced', presignData.fileUrl);
-      logActivity({
-        id: generateId(),
-        type: 'file_synced',
-        message: `Dedup hit: ${file.file_name}`,
-        project_id: item.project_id,
-        metadata: { fileId: file.id },
+    // Step 2: Upload file if not deduplicated
+    if (!presignData.deduplicated) {
+      const fileSize2 = stats.size;
+      this.onProgress({
+        itemId: item.id, projectId: item.project_id, type: 'file',
+        status: 'uploading', bytesUploaded: 0, bytesTotal: fileSize2, percentage: 0,
       });
-      return;
+      const fileStream = fs.createReadStream(file.file_path);
+      const uploadRes = await fetch(presignData.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(fileSize2) },
+        body: fileStream as any,
+        // @ts-ignore — duplex required in Node 18+
+        duplex: 'half',
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error(`Storage upload failed: HTTP ${uploadRes.status}`);
+      }
+      this.onProgress({
+        itemId: item.id, projectId: item.project_id, type: 'file',
+        status: 'uploading', bytesUploaded: fileSize2, bytesTotal: fileSize2, percentage: 99,
+      });
     }
 
-    // Step 2: PUT file directly to signed URL (bypasses Vercel 4.5MB limit)
-    const fileBuffer = fs.readFileSync(file.file_path);
-    const uploadRes = await fetch(presignData.uploadUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/octet-stream' },
-      body: fileBuffer,
-    });
-
-    if (!uploadRes.ok) {
-      throw new Error(`Storage upload failed: HTTP ${uploadRes.status}`);
+    // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase
+    // Resolve project info for daw + projectName
+    let daw: string | null = null;
+    let projectName: string | null = null;
+    if (item.project_id && item.project_id !== '__standalone__') {
+      try {
+        const project = getProjectById(item.project_id) as any;
+        if (project) {
+          daw = project.daw_type ?? null;
+          projectName = project.project_name ?? null;
+        }
+      } catch {}
     }
 
-    // Step 3: Register asset with API using storageKey
     const registerRes = await fetch(`${API_BASE}/desktop/index`, {
       method: 'POST',
       headers: {
@@ -300,14 +398,16 @@ export class SyncAgent {
       },
       body: JSON.stringify({
         fileName: file.file_name,
-        storageKey: presignData.storageKey,
+        storageKey: presignData.storageKey ?? presignData.fileUrl,
         fileSize: stats.size,
         sha256: file.checksum ?? null,
-        projectId: item.project_id,
+        projectId: item.project_id !== '__standalone__' ? item.project_id : null,
         bpm: file.bpm ?? null,
         keyNote: file.key_note ?? null,
         duration: file.duration ?? null,
         role: file.role ?? null,
+        daw,
+        projectName,
       }),
     });
 
@@ -333,69 +433,4 @@ export class SyncAgent {
     });
   }
 
-  private tusUpload(
-    filePath: string,
-    itemId: string,
-    projectId: string,
-    uploadType: string,
-    uploadToken?: string,
-    fileId?: string
-  ): Promise<void> {
-    return new Promise((resolve, reject) => {
-      let fileStream: fs.ReadStream;
-      let fileSize: number;
-
-      try {
-        fileSize = fs.statSync(filePath).size;
-        fileStream = fs.createReadStream(filePath);
-      } catch (err) {
-        return reject(err);
-      }
-
-      const upload = new tus.Upload(fileStream as any, {
-        endpoint: `${API_BASE}/files/upload`,
-        retryDelays: [0, 3000, 5000, 10000, 20000],
-        chunkSize: 5 * 1024 * 1024, // 5MB chunks
-        metadata: {
-          filename: path.basename(filePath),
-          filetype: `application/octet-stream`,
-          projectId,
-          uploadType,
-          ...(fileId ? { fileId } : {}),
-        },
-        headers: {
-          Authorization: `Bearer ${this.authToken ?? ''}`,
-          ...(uploadToken ? { 'X-Upload-Token': uploadToken } : {}),
-        },
-        uploadSize: fileSize,
-        onProgress: (bytesUploaded, bytesTotal) => {
-          const percentage = Math.round((bytesUploaded / bytesTotal) * 100);
-          updateSyncItem(itemId, { upload_offset: bytesUploaded });
-          this.onProgress({
-            itemId,
-            projectId,
-            type: uploadType,
-            status: 'uploading',
-            bytesUploaded,
-            bytesTotal,
-            percentage,
-          });
-        },
-        onSuccess: () => resolve(),
-        onError: (err) => reject(err),
-      });
-
-      upload.findPreviousUploads().then((prev) => {
-        if (prev.length) upload.resumeFromPreviousUpload(prev[0]);
-        upload.start();
-
-        // Save upload URL for resume
-        setTimeout(() => {
-          if (upload.url) {
-            updateSyncItem(itemId, { upload_url: upload.url });
-          }
-        }, 1000);
-      });
-    });
-  }
 }

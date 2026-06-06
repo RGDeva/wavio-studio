@@ -1,24 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { TitleBar } from './components/TitleBar';
 import { Dashboard } from './pages/Dashboard';
 import { LibraryPage } from './pages/LibraryPage';
 import { FoldersPage } from './pages/FoldersPage';
 import { ActivityPage } from './pages/ActivityPage';
+import { StudioSyncPage } from './pages/StudioSyncPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LoginPage } from './pages/LoginPage';
+import { FileReviewPage } from './pages/FileReviewPage';
 import { api } from './lib/api';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { BounceConfirmModal } from './components/BounceConfirmModal';
 import type { Page, SyncProgress } from './types';
 
 export default function App() {
   const [page, setPage] = useState<Page>('dashboard');
+  // tri-state: null = loading, false = logged out, true = authed
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [syncProgresses, setSyncProgresses] = useState<Record<string, SyncProgress>>({});
+  const [pendingAssociations, setPendingAssociations] = useState(0);
+  const authChecked = useRef(false);
 
   useEffect(() => {
-    api.auth.getToken().then((token) => {
-      setAuthed(!!token);
-    });
+    if (authChecked.current) return;
+    authChecked.current = true;
+    api.auth.getToken()
+      .then((token) => setAuthed(!!token))
+      .catch(() => {
+        // IPC error ≠ logged out — keep loading state briefly then default to logged out
+        setTimeout(() => setAuthed((prev) => prev === null ? false : prev), 500);
+      });
   }, []);
 
   const [updateReady, setUpdateReady] = useState(false);
@@ -50,15 +62,32 @@ export default function App() {
     return () => api.off('update:ready', handleUpdate);
   }, []);
 
+  // Poll pending association count every 60s
+  const refreshPendingCount = useCallback(async () => {
+    try {
+      const items = await api.association.getPending();
+      setPendingAssociations(Array.isArray(items) ? items.length : 0);
+    } catch { /* non-fatal */ }
+  }, []);
+
+  useEffect(() => {
+    if (authed) {
+      refreshPendingCount();
+      const interval = setInterval(refreshPendingCount, 60_000);
+      return () => clearInterval(interval);
+    }
+  }, [authed, refreshPendingCount]);
+
+  // Show nothing while auth state is loading (prevents flash-of-login)
   if (authed === null) {
     return (
-      <div className="flex h-screen items-center justify-center bg-black">
-        <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-screen bg-black">
+        <div className="w-5 h-5 border-2 border-white/20 border-t-cyan-500 rounded-full animate-spin" />
       </div>
     );
   }
 
-  if (!authed) {
+  if (authed === false) {
     return <LoginPage onLogin={() => setAuthed(true)} />;
   }
 
@@ -77,13 +106,16 @@ export default function App() {
         </div>
       )}
       <div className="flex flex-1 overflow-hidden">
-        <Sidebar currentPage={page} onNavigate={setPage} />
-        <main className="flex-1 overflow-hidden bg-[#0A0A0A]">
-          {page === 'dashboard' && <Dashboard syncProgresses={syncProgresses} />}
-          {page === 'library' && <LibraryPage />}
-          {page === 'folders' && <FoldersPage />}
-          {page === 'activity' && <ActivityPage />}
-          {page === 'settings' && <SettingsPage onLogout={() => setAuthed(false)} />}
+        <Sidebar currentPage={page} onNavigate={setPage} pendingAssociations={pendingAssociations} />
+        <main className="flex-1 overflow-hidden bg-[#0A0A0A] relative">
+          <BounceConfirmModal />
+          <div className={page === 'dashboard' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Dashboard error"><Dashboard syncProgresses={syncProgresses} visible={page === 'dashboard'} onNavigate={setPage} /></ErrorBoundary></div>
+          <div className={page === 'library' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Library error"><LibraryPage visible={page === 'library'} /></ErrorBoundary></div>
+          <div className={page === 'folders' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Folders error"><FoldersPage visible={page === 'folders'} /></ErrorBoundary></div>
+          <div className={page === 'studio' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Studio Sync error"><StudioSyncPage syncProgresses={syncProgresses} visible={page === 'studio'} /></ErrorBoundary></div>
+          <div className={page === 'review' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="File Review error"><FileReviewPage visible={page === 'review'} onPendingCountChange={setPendingAssociations} /></ErrorBoundary></div>
+          <div className={page === 'activity' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Activity error"><ActivityPage visible={page === 'activity'} /></ErrorBoundary></div>
+          <div className={page === 'settings' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Settings error"><SettingsPage onLogout={() => setAuthed(false)} visible={page === 'settings'} /></ErrorBoundary></div>
         </main>
       </div>
     </div>

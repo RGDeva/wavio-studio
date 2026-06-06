@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { LogOut, ExternalLink, Shield, Cpu, HardDrive, Zap, BarChart2 } from 'lucide-react';
 import { api } from '../lib/api';
+import { BridgeStatusPanel } from '../components/BridgeStatusPanel';
 
 interface PlanInfo {
   plan: string;
@@ -16,6 +17,7 @@ function formatBytes(b: number) {
 
 interface SettingsPageProps {
   onLogout: () => void;
+  visible?: boolean;
 }
 
 export function SettingsPage({ onLogout }: SettingsPageProps) {
@@ -212,6 +214,9 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
             )}
           </div>
         </div>
+
+        {/* Local Bridge */}
+        <BridgeStatusPanel />
 
         {/* Security */}
         <Section title="Security" icon={<Shield className="w-4 h-4 text-emerald-400" />}>
