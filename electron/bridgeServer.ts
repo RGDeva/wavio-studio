@@ -35,6 +35,7 @@ import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassif
 import { analyzeAudio } from './audioAnalyzer';
 import { getToolByName } from './agentLoop';
 import type { ProjectContext } from './copilotTypes';
+import { API_BASE } from './config';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -722,6 +723,88 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
+  // ── POST /create-link ─────────────────────────────────────────────────────
+  if (req.method === 'POST' && route === '/create-link') {
+    try {
+      const body = await parseBody(req);
+      const { assetId, allowDownload, password, expiresAt } = body as {
+        assetId?: string; allowDownload?: boolean; password?: string; expiresAt?: string;
+      };
+      if (!assetId) { send(res, 400, { error: 'assetId required' }); return; }
+
+      const Store = (await import('electron-store')).default;
+      const store = new Store();
+      const raw = store.get('authToken', null) as string | null;
+      if (!raw) { send(res, 401, { error: 'Not authenticated' }); return; }
+      const { safeStorage } = require('electron');
+      const token: string = safeStorage.isEncryptionAvailable()
+        ? safeStorage.decryptString(Buffer.from(raw, 'base64'))
+        : raw;
+
+      const apiRes = await fetch(`${API_BASE}/desktop/index`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-Desktop-Action': 'create-share-link',
+        },
+        body: JSON.stringify({ assetId, allowDownload: allowDownload ?? true, password: password ?? null, expiresAt: expiresAt ?? null }),
+      });
+      const data = await apiRes.json() as any;
+      if (!apiRes.ok) { send(res, apiRes.status, data); return; }
+      logActivity({ id: crypto.randomUUID(), type: 'share_link_created', message: `Bridge share link: ${data.shareUrl}` });
+      send(res, 200, data);
+    } catch (err) { send(res, 500, { error: String(err) }); }
+    return;
+  }
+
+  // ── POST /revoke-link ─────────────────────────────────────────────────────
+  if (req.method === 'POST' && route === '/revoke-link') {
+    try {
+      const body = await parseBody(req);
+      const { trackingId } = body as { trackingId?: string };
+      if (!trackingId) { send(res, 400, { error: 'trackingId required' }); return; }
+
+      const Store = (await import('electron-store')).default;
+      const store = new Store();
+      const raw = store.get('authToken', null) as string | null;
+      if (!raw) { send(res, 401, { error: 'Not authenticated' }); return; }
+      const { safeStorage } = require('electron');
+      const token: string = safeStorage.isEncryptionAvailable()
+        ? safeStorage.decryptString(Buffer.from(raw, 'base64'))
+        : raw;
+
+      const apiRes = await fetch(`${API_BASE}/desktop/index`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-Desktop-Action': 'revoke-share-link',
+        },
+        body: JSON.stringify({ trackingId }),
+      });
+      const data = await apiRes.json() as any;
+      send(res, apiRes.ok ? 200 : apiRes.status, data);
+    } catch (err) { send(res, 500, { error: String(err) }); }
+    return;
+  }
+
+  // ── GET /all-projects ─────────────────────────────────────────────────────
+  if (req.method === 'GET' && route === '/all-projects') {
+    const projects = getProjects() as any[];
+    send(res, 200, {
+      projects: projects.map(p => ({
+        id: p.id,
+        name: p.project_name,
+        dawType: p.daw_type,
+        syncStatus: p.sync_status,
+        cloudId: p.cloud_id ?? null,
+        createdAt: p.created_at,
+      })),
+    });
+    return;
+  }
+
   // ── 404 ───────────────────────────────────────────────────────────────────
   send(res, 404, { error: `Unknown route: ${req.method} ${route}` });
 }
@@ -755,13 +838,13 @@ export function startBridgeServer(): void {
     console.log(`[bridge] Token written to ${TOKEN_PATH}`);
   });
 
-  _server.on('clientError', (err) => {
-  // Handle malformed JSON and other client errors
-  console.error('[bridge] Client error:', err.message);
-  // We can't send a response here as the connection is already broken
-});
+  _server.on('clientError', (err: NodeJS.ErrnoException) => {
+    // ECONNRESET / EPIPE are normal TCP teardown (health-poll clients closing early) — suppress
+    if (err.code === 'ECONNRESET' || err.code === 'EPIPE') return;
+    console.error('[bridge] Client error:', err.message);
+  });
 
-_server.on('error', (err: NodeJS.ErrnoException) => {
+  _server.on('error', (err: NodeJS.ErrnoException) => {
     if (err.code === 'EADDRINUSE') {
       console.warn(`[bridge] Port ${BRIDGE_PORT} in use — bridge server not started`);
     } else {

@@ -13,6 +13,7 @@ import {
   getFileById,
   getDb,
 } from './db';
+import { fileChecksum } from './watcher';
 import crypto from 'crypto';
 import { API_BASE } from './config';
 const POLL_INTERVAL_MS = 5000;
@@ -228,6 +229,12 @@ export class SyncAgent {
     const project = getProjectById(item.project_id) as any;
     if (!project) throw new Error('Project not found');
 
+    // Compute SHA-256 of the project file for deduplication before syncing
+    let projectChecksum: string | null = null;
+    if (fs.existsSync(project.file_path)) {
+      try { projectChecksum = await fileChecksum(project.file_path); } catch { /* non-fatal */ }
+    }
+
     // Step 1: POST project metadata to API (daw-sync)
     const res = await fetchWithTimeout(`${API_BASE}/desktop/index`, {
       method: 'POST',
@@ -243,7 +250,7 @@ export class SyncAgent {
         daw: project.daw_type,
         fileSize: project.file_size,
         lastModified: project.modified_at,
-        sha256: project.checksum ?? null,
+        sha256: projectChecksum,
       }),
     });
 

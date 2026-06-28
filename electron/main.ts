@@ -746,7 +746,7 @@ ipcMain.handle('share:createLink', async (_e, opts: {
     const timer = setTimeout(() => controller.abort(), 15_000);
     let res: Response;
     try {
-      res = await fetch(`https://wavi.stream/api/desktop/index`, {
+      res = await fetch(`${API_BASE}/desktop/index`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
