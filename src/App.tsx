@@ -9,6 +9,9 @@ import { StudioSyncPage } from './pages/StudioSyncPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { LoginPage } from './pages/LoginPage';
 import { FileReviewPage } from './pages/FileReviewPage';
+import { SearchPage } from './pages/SearchPage';
+import { CopilotPage } from './pages/CopilotPage';
+import { AbletonPage } from './pages/AbletonPage';
 import { api } from './lib/api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { BounceConfirmModal } from './components/BounceConfirmModal';
@@ -44,15 +47,27 @@ export default function App() {
     return () => api.off('sync:progress', handleProgress);
   }, []);
 
-  // Deep-link auth: wavi://auth?token=<privy_jwt> received while app is open
+  // Deep-link auth: main process receives deep link, exchanges JWT for wv_ token,
+  // then sends the wv_ token here to update UI state.
   useEffect(() => {
     const handleToken = (token: unknown) => {
       if (typeof token === 'string' && token.length > 0) {
+        // Token is already stored encrypted in the main process.
+        // setToken here is idempotent — keeps syncAgent reference consistent.
         api.auth.setToken(token).then(() => setAuthed(true));
       }
     };
+    // When a previously valid token becomes invalid (revoked / expired),
+    // main process pauses the sync agent and signals the renderer.
+    const handleAuthError = () => {
+      setAuthed(false); // drop to login screen
+    };
     api.on('auth:token-received', handleToken);
-    return () => api.off('auth:token-received', handleToken);
+    api.on('auth:error', handleAuthError);
+    return () => {
+      api.off('auth:token-received', handleToken);
+      api.off('auth:error', handleAuthError);
+    };
   }, []);
 
   // Auto-updater: notify when update is downloaded and ready to install
@@ -116,6 +131,9 @@ export default function App() {
           <div className={page === 'review' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="File Review error"><FileReviewPage visible={page === 'review'} onPendingCountChange={setPendingAssociations} /></ErrorBoundary></div>
           <div className={page === 'activity' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Activity error"><ActivityPage visible={page === 'activity'} /></ErrorBoundary></div>
           <div className={page === 'settings' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Settings error"><SettingsPage onLogout={() => setAuthed(false)} visible={page === 'settings'} /></ErrorBoundary></div>
+          <div className={page === 'search' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Search error"><SearchPage visible={page === 'search'} /></ErrorBoundary></div>
+          <div className={page === 'copilot' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Copilot error"><CopilotPage visible={page === 'copilot'} /></ErrorBoundary></div>
+          <div className={page === 'ableton' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="DAW Sync error"><AbletonPage visible={page === 'ableton'} /></ErrorBoundary></div>
         </main>
       </div>
     </div>

@@ -8,6 +8,7 @@ export default defineConfig({
     include: [
       'electron/projectAssociation/**/*.test.ts',
       'electron/sync.test.ts',
+      'electron/auth.test.ts',
     ],
     environment: 'node',
   },

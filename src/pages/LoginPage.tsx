@@ -9,21 +9,46 @@ const AUTH_URL = 'https://wavi.stream/auth?desktop=1';
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const [waiting, setWaiting] = useState(false);
+  const [exchanging, setExchanging] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Listen for deep-link JWT from browser after Privy login
   useEffect(() => {
     if (!waiting) return;
-    const handle = (incoming: unknown) => {
+
+    // Main process exchanged the Privy JWT for a wv_ token and stored it encrypted.
+    // The wv_ token is passed here only to update authed state — it is NOT stored again by the renderer.
+    const handleReceived = (incoming: unknown) => {
       const token = incoming as string;
-      if (token) {
+      if (token && typeof token === 'string') {
+        // Set the token in main process (idempotent — already stored, but keeps syncAgent reference fresh)
         api.auth.setToken(token).then(onLogin);
       }
     };
-    api.on('auth:token-received', handle);
-    return () => api.off('auth:token-received', handle);
+
+    const handleExchanging = () => setExchanging(true);
+
+    const handleError = (reason: unknown) => {
+      setExchanging(false);
+      setWaiting(false);
+      if (reason === 'exchange-failed') {
+        setError('Sign in failed — check your internet connection and try again.');
+      } else {
+        setError('Sign in failed. Please try again.');
+      }
+    };
+
+    api.on('auth:token-received', handleReceived);
+    api.on('auth:exchanging', handleExchanging);
+    api.on('auth:error', handleError);
+    return () => {
+      api.off('auth:token-received', handleReceived);
+      api.off('auth:exchanging', handleExchanging);
+      api.off('auth:error', handleError);
+    };
   }, [waiting, onLogin]);
 
   const handleSignIn = () => {
+    setError(null);
     api.shell.openExternal(AUTH_URL);
     setWaiting(true);
   };
@@ -37,6 +62,9 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         </div>
 
         <div className="bg-[#111] border border-[#222] rounded-2xl p-6 space-y-4 text-center">
+          {error && (
+            <p className="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
+          )}
           {!waiting ? (
             <>
               <div>
@@ -57,9 +85,11 @@ export function LoginPage({ onLogin }: LoginPageProps) {
               <div className="flex items-center justify-center py-2">
                 <div className="w-6 h-6 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
               </div>
-              <p className="text-sm text-white/60">Complete sign in in your browser…</p>
+              <p className="text-sm text-white/60">
+                {exchanging ? 'Securing your session…' : 'Complete sign in in your browser…'}
+              </p>
               <button
-                onClick={() => setWaiting(false)}
+                onClick={() => { setWaiting(false); setExchanging(false); }}
                 className="text-xs text-white/20 hover:text-white/40 transition-colors"
               >
                 Cancel

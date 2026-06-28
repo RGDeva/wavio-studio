@@ -15,26 +15,77 @@ import { registerAbletonHandlers } from './ableton';
 import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
-import * as Sentry from '@sentry/electron/main';
+// Sentry is loaded dynamically to avoid crash during module import
+// (Sentry's normalize.js calls electron.app.getAppPath() on module load)
+let SentryInstance: typeof import('@sentry/electron/main') | null = null;
 
-Sentry.init({ dsn: process.env.SENTRY_DSN });
+async function initSentry() {
+  try {
+    if (process.env.SENTRY_DSN) {
+      SentryInstance = await import('@sentry/electron/main');
+      SentryInstance.init({ dsn: process.env.SENTRY_DSN });
+    }
+  } catch {
+    // Sentry init failed - continue without error tracking
+    SentryInstance = null;
+  }
+}
+
+// Safe error capture helper
+function captureException(err: any) {
+  try {
+    if (SentryInstance) {
+      SentryInstance.captureException(err);
+    }
+  } catch {
+    // Ignore Sentry errors
+  }
+}
+
+// Main-process diagnostic log file - lazily initialized to avoid calling app.getPath()
+// at module load time (app may not be ready yet during certain launch contexts)
+let MAIN_LOG: string | null = null;
+function getMainLogPath(): string {
+  if (!MAIN_LOG) {
+    MAIN_LOG = path.join(app.getPath('home'), '.wavi', 'main.log');
+  }
+  return MAIN_LOG;
+}
+// Log rotation: max 5MB per file, keep 1 backup
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
+function mainLog(msg: string) {
+  try {
+    const logPath = getMainLogPath();
+    fs.mkdirSync(path.dirname(logPath), { recursive: true });
+
+    // Check log size and rotate if needed
+    try {
+      const stats = fs.statSync(logPath);
+      if (stats.size > MAX_LOG_SIZE) {
+        // Rotate: move current to backup, start fresh
+        const backupPath = logPath + '.old';
+        try { fs.renameSync(logPath, backupPath); } catch { /* ignore */ }
+      }
+    } catch { /* file doesn't exist yet */ }
+
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`);
+  } catch {}
+}
 
 // Prevent any unhandled rejection or exception from crashing the main process
 process.on('uncaughtException', (err) => {
   console.error('[main] uncaughtException:', err?.message ?? err);
-  Sentry.captureException(err);
+  mainLog(`uncaughtException: ${err?.stack ?? err?.message ?? err}`);
+  captureException(err);
 });
-process.on('unhandledRejection', (reason) => {
+process.on('unhandledRejection', (reason: any) => {
   console.error('[main] unhandledRejection:', reason);
-  Sentry.captureException(reason);
+  mainLog(`unhandledRejection: ${reason?.stack ?? reason?.message ?? reason}`);
+  captureException(reason);
 });
 
-// Register wavi:// deep-link protocol
-if (!app.isDefaultProtocolClient('wavi')) {
-  app.setAsDefaultProtocolClient('wavi');
-}
-
-const store = new Store();
+// These will be initialized inside app.whenReady()
+let store: Store;
 let mainWindow: BrowserWindow | null = null;
 let watcherManager: WatcherManager | null = null;
 let syncAgent: SyncAgent | null = null;
@@ -60,11 +111,17 @@ function createWindow() {
     icon: path.join(__dirname, '../public/icon.png'),
   });
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:5173');
-    mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
+  // Content Security Policy for security — production only.
+  // In dev, Vite needs ws:// for HMR and 'unsafe-eval' for module loading, so we skip CSP.
+  if (!isDev) {
+    mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+      callback({
+        responseHeaders: {
+          ...details.responseHeaders,
+          'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://wavi.stream https://*.supabase.co wss://*.supabase.co; img-src 'self' data: https:; media-src 'self' https: blob:; font-src 'self' data:;"]
+        }
+      });
+    });
   }
 
   // Debug: write renderer logs to file for diagnostics
@@ -77,31 +134,123 @@ function createWindow() {
   });
   mainWindow.webContents.on('render-process-gone', (_e, details) => {
     appendLog(`[renderer] CRASHED: ${details.reason} code=${details.exitCode}`);
+    mainLog(`render-process-gone: ${details.reason} code=${details.exitCode}`);
   });
   mainWindow.webContents.on('unresponsive', () => {
     appendLog('[renderer] UNRESPONSIVE');
+    mainLog('renderer unresponsive');
   });
-  mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
-    appendLog(`[renderer] FAIL LOAD: ${code} ${desc}`);
+  mainWindow.webContents.on('did-start-loading', () => appendLog('[renderer] did-start-loading'));
+  mainWindow.webContents.on('did-finish-load', () => appendLog('[renderer] did-finish-load'));
+  mainWindow.webContents.on('dom-ready', () => appendLog('[renderer] dom-ready'));
+
+  const loadRenderer = (attempt = 0) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (isDev) {
+      mainWindow.loadURL('http://localhost:5173').catch((e) => {
+        appendLog(`[renderer] loadURL error: ${e?.message ?? e}`);
+      });
+    } else {
+      mainWindow.loadFile(path.join(__dirname, '../dist/index.html')).catch((e) => {
+        appendLog(`[renderer] loadFile error: ${e?.message ?? e}`);
+      });
+    }
+  };
+
+  mainWindow.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+    appendLog(`[renderer] FAIL LOAD: ${code} ${desc} url=${url} mainFrame=${isMainFrame}`);
+    // -3 = ABORTED (benign, navigation superseded). Retry real failures on the main frame.
+    if (isMainFrame && code !== -3) {
+      setTimeout(() => loadRenderer(), 1000);
+    }
   });
+
+  // Show the window explicitly once content is ready (defensive against blank windows)
+  mainWindow.once('ready-to-show', () => {
+    appendLog('[renderer] ready-to-show');
+    mainWindow?.show();
+  });
+
+  loadRenderer();
+  if (isDev) {
+    // Defer devTools to prevent initialization race conditions
+    setTimeout(() => { try { mainWindow?.webContents.openDevTools(); } catch {} }, 1500);
+  }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
-app.whenReady().then(async () => {
-  // Init database
-  const db = initDatabase();
+// Fix recurring "Network service crashed, restarting service" on macOS.
+// Must be called before app.whenReady() but after Electron has initialized internals.
+// We wrap in a try-catch in case app is not ready yet.
+try {
+  app.commandLine.appendSwitch('disable-features', 'NetworkServiceSandbox');
+  if (process.env.WAVI_NO_SANDBOX === '1') {
+    app.commandLine.appendSwitch('no-sandbox');
+    app.commandLine.appendSwitch('disable-gpu-sandbox');
+  }
+  if (process.env.WAVI_DEBUG_PORT) {
+    app.commandLine.appendSwitch('remote-debugging-port', process.env.WAVI_DEBUG_PORT);
+  }
+} catch {
+  // commandLine may not be available in all contexts - continue without
+}
 
-  // Init watcher manager
+app.whenReady().then(async () => {
+  mainLog('--- main process started ---');
+
+  // Initialize store now that app is ready
+  store = new Store();
+
+  // Register wavi:// deep-link protocol
+  if (!app.isDefaultProtocolClient('wavi')) {
+    app.setAsDefaultProtocolClient('wavi');
+  }
+
+  // Initialize Sentry error tracking (async to avoid blocking)
+  initSentry().catch(() => {});
+
+  // Show window immediately BEFORE any blocking initialization
+  // This prevents the "loading spinner of death" from main thread blocking
+  createTray();
+  createWindow();
+
+  // Defer heavy initialization to next tick so window can render
+  await new Promise<void>(resolve => setImmediate(resolve));
+
+  // Init database (this blocks the main thread - must happen after window show)
+  mainLog('Initializing database...');
+  const t0 = Date.now();
+  const db = initDatabase();
+  mainLog(`Database initialized in ${Date.now() - t0}ms`);
+
+  // Notify renderer that DB is ready
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('main:ready');
+  }
+
+  // Init watcher manager with safe IPC sender
   watcherManager = new WatcherManager(db, (event) => {
-    mainWindow?.webContents.send('watcher:event', event);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.webContents.send('watcher:event', event);
+      } catch (e) {
+        // Window may be closing, ignore
+      }
+    }
   });
 
-  // Init sync agent
+  // Init sync agent with safe IPC sender
   syncAgent = new SyncAgent(db, (progress) => {
-    mainWindow?.webContents.send('sync:progress', progress);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      try {
+        mainWindow.webContents.send('sync:progress', progress);
+      } catch (e) {
+        // Window may be closing, ignore
+      }
+    }
     // Throttle tray rebuilds — at most once per 3s to avoid SIGABRT from rapid native menu recreation
     if (!_trayRebuildTimer) {
       _trayRebuildTimer = setTimeout(() => {
@@ -119,17 +268,21 @@ app.whenReady().then(async () => {
   const storedToken = store.get('authToken', null) as string | null;
   if (storedToken) {
     try {
-      const token = safeStorage.isEncryptionAvailable()
-        ? safeStorage.decryptString(Buffer.from(storedToken, 'base64'))
-        : storedToken;
-      syncAgent.setAuthToken(token);
-    } catch { /* token corrupt — user will re-auth */ }
+      if (safeStorage.isEncryptionAvailable()) {
+        const token = safeStorage.decryptString(Buffer.from(storedToken, 'base64'));
+        syncAgent.setAuthToken(token);
+      } else {
+        // In dev without encryption, still allow token
+        syncAgent.setAuthToken(storedToken);
+      }
+    } catch (e) {
+      console.error('[main] Token restore failed:', e);
+      // Token corrupt — user will re-auth
+    }
   }
 
-  // Show the window immediately — all folder scanning deferred below
+  // Start services — all folder scanning deferred below
   syncAgent.start();
-  createTray();
-  createWindow();
   initCopilot(store);
   registerAbletonHandlers();
   startBridgeServer();
@@ -155,35 +308,13 @@ app.whenReady().then(async () => {
       watcherManager!.addFolder(folder);
     }
 
-    // Auto-discover DAW + audio folders on very first launch
+    // Auto-discover specific DAW project subfolders on first launch.
+    // NOTE: ~/Music, ~/Desktop, ~/Downloads are NOT added as root watch paths —
+    // scanning those entire trees on machines with large libraries causes OOM → SIGKILL.
     if (!store.get('didAutoDiscover', false)) {
       store.set('didAutoDiscover', true);
       const discovered = discoverDawFolders();
-      const audioFolders = [
-        app.getPath('music'),
-        app.getPath('desktop'),
-        path.join(app.getPath('home'), 'Downloads'),
-      ].filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
-      const allFolders = [...new Set([...discovered, ...audioFolders])];
-      for (const folder of allFolders) {
-        const current = store.get('watchedFolders', []) as string[];
-        if (!current.includes(folder)) {
-          current.push(folder);
-          store.set('watchedFolders', current);
-          watcherManager!.addFolder(folder);
-        }
-      }
-    }
-
-    // Ensure common audio folders are watched (for existing users)
-    if (!store.get('didAudioFolderScan', false)) {
-      store.set('didAudioFolderScan', true);
-      const audioFolders = [
-        app.getPath('music'),
-        app.getPath('desktop'),
-        path.join(app.getPath('home'), 'Downloads'),
-      ].filter(p => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
-      for (const folder of audioFolders) {
+      for (const folder of discovered) {
         const current = store.get('watchedFolders', []) as string[];
         if (!current.includes(folder)) {
           current.push(folder);
@@ -219,8 +350,12 @@ app.on('before-quit', async (e) => {
 
 app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
-    syncAgent?.stop();
-    await watcherManager?.stopAll();
+    try {
+      syncAgent?.stop();
+      await watcherManager?.stopAll();
+    } catch (e) {
+      console.error('[main] Error during shutdown:', e);
+    }
     app.quit();
   }
 });
@@ -292,13 +427,13 @@ function rebuildTrayMenu() {
 // Deep-link: wavi://auth?token=wv_...
 // macOS: open-url fires when app is already running
 app.on('open-url', (_event, url) => {
-  handleDeepLink(url);
+  void handleDeepLink(url);
 });
 
 // Windows/Linux: second-instance fires with argv containing the URL
 app.on('second-instance', (_event, argv) => {
   const url = argv.find(arg => arg.startsWith('wavi://'));
-  if (url) handleDeepLink(url);
+  if (url) void handleDeepLink(url);
   // Focus existing window
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -306,23 +441,83 @@ app.on('second-instance', (_event, argv) => {
   }
 });
 
-function handleDeepLink(url: string) {
+// Exchange a short-lived Privy JWT for a persistent wv_ desktop token.
+// Returns the wv_ token on success, null on failure.
+async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let res: Response;
+    try {
+      res = await fetch('https://wavi.stream/api/desktop/index', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${privyJwt}`,
+          'X-Desktop-Action': 'create-desktop-token',
+        },
+        body: JSON.stringify({}),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      mainLog(`[auth] Token exchange HTTP ${res.status}`);
+      return null;
+    }
+    const data: { token?: string } = await res.json();
+    if (!data?.token?.startsWith('wv_')) {
+      mainLog('[auth] Token exchange: unexpected response shape');
+      return null;
+    }
+    return data.token;
+  } catch (e: any) {
+    mainLog(`[auth] Token exchange error: ${e?.message ?? e}`);
+    captureException(e);
+    return null;
+  }
+}
+
+async function handleDeepLink(url: string) {
   try {
     const parsed = new URL(url);
-    if (parsed.hostname === 'auth') {
-      const token = parsed.searchParams.get('token');
-      if (token && token.length > 10) {
-        const toStore = safeStorage.isEncryptionAvailable()
-          ? safeStorage.encryptString(token).toString('base64')
-          : token;
-        store.set('authToken', toStore);
-        syncAgent?.setAuthToken(token);
-        mainWindow?.webContents.send('auth:token-received', token);
-        rebuildTrayMenu();
+    if (parsed.protocol !== 'wavi:') return;
+    if (parsed.hostname !== 'auth') return;
+
+    const rawToken = parsed.searchParams.get('token');
+    if (!rawToken || rawToken.length < 10) return;
+
+    let finalToken: string;
+
+    if (rawToken.startsWith('wv_')) {
+      // Already a desktop token (future-proof for direct wv_ deep links)
+      finalToken = rawToken;
+    } else {
+      // Privy JWT — exchange for a persistent 30-day desktop token.
+      // The raw JWT is never stored; if exchange fails we do not fall back.
+      mainWindow?.webContents.send('auth:exchanging');
+      const exchanged = await exchangePrivyJwt(rawToken);
+      if (!exchanged) {
+        mainWindow?.webContents.send('auth:error', 'exchange-failed');
+        return;
       }
+      finalToken = exchanged;
     }
+
+    // Store encrypted — never log the token value
+    const toStore = safeStorage.isEncryptionAvailable()
+      ? safeStorage.encryptString(finalToken).toString('base64')
+      : finalToken;
+    store.set('authToken', toStore);
+    syncAgent?.setAuthToken(finalToken);
+    // Signal renderer that auth succeeded; send token so renderer can set authed=true.
+    // The renderer does NOT store the token on disk — that is main process responsibility.
+    mainWindow?.webContents.send('auth:token-received', finalToken);
+    rebuildTrayMenu();
   } catch (e) {
-    Sentry.captureException(e);
+    captureException(e);
+    mainLog(`[auth] handleDeepLink error: ${(e as any)?.message ?? e}`);
   }
 }
 
@@ -471,8 +666,9 @@ function discoverDawFolders(): string[] {
     // Reason
     path.join(docs, 'Reason'),
     path.join(music, 'Reason'),
-    // General music folders
-    music,
+    // NOTE: `music` (~/Music root) is intentionally excluded — adding the entire
+    // ~/Music tree as a watch path OOM-kills the process on large libraries.
+    // Users can add specific folders via the folder picker in Settings.
   ];
 
   const found = candidates.filter(p => {
@@ -915,6 +1111,39 @@ ipcMain.handle('musehub:checkUsage', async () => {
 ipcMain.handle('musehub:refreshSession', async () => {
   const result = await startMuseHubSession(store);
   return result;
+});
+
+// Memory — lightweight key-value store for Copilot context/preferences
+ipcMain.handle('memory:list', () => {
+  const entries = store.get('memory', {}) as Record<string, any>;
+  return Object.entries(entries).map(([key, v]) => ({
+    key,
+    value: typeof v === 'object' ? v.value : v,
+    category: typeof v === 'object' ? (v.category ?? 'note') : 'note',
+    createdAt: typeof v === 'object' ? (v.createdAt ?? new Date().toISOString()) : new Date().toISOString(),
+    updatedAt: typeof v === 'object' ? (v.updatedAt ?? new Date().toISOString()) : new Date().toISOString(),
+  }));
+});
+ipcMain.handle('memory:get', (_e, key: string) => {
+  const entries = store.get('memory', {}) as Record<string, any>;
+  const v = entries[key];
+  return v ? (typeof v === 'object' ? v.value : v) : null;
+});
+ipcMain.handle('memory:set', (_e, key: string, value: string, category = 'note') => {
+  const entries = store.get('memory', {}) as Record<string, any>;
+  const existing = entries[key];
+  entries[key] = {
+    value,
+    category,
+    createdAt: existing?.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  store.set('memory', entries);
+});
+ipcMain.handle('memory:delete', (_e, key: string) => {
+  const entries = store.get('memory', {}) as Record<string, any>;
+  delete entries[key];
+  store.set('memory', entries);
 });
 
 // App
