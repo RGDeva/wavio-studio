@@ -368,7 +368,6 @@ export class SyncAgent {
         fileName: file.file_name,
         fileSize: stats.size,
         sha256: file.checksum ?? null,
-        projectId: item.project_id,
       }),
     });
 

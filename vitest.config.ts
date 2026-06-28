@@ -9,6 +9,7 @@ export default defineConfig({
       'electron/projectAssociation/**/*.test.ts',
       'electron/sync.test.ts',
       'electron/auth.test.ts',
+      'electron/upload.test.ts',
     ],
     environment: 'node',
   },
