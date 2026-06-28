@@ -19,6 +19,30 @@ const API_BASE = 'https://wavi.stream/api';
 const POLL_INTERVAL_MS = 5000;
 const MAX_CONCURRENT = 2;
 const RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000]; // 5s, 30s, 2m, 5m
+const FETCH_TIMEOUT_MS = 30000; // 30 second timeout for API calls
+const UPLOAD_TIMEOUT_MS = 300000; // 5 minute timeout for file uploads
+
+// Fetch with timeout to prevent hanging
+async function fetchWithTimeout(url: string, options: RequestInit & { timeout?: number } = {}): Promise<Response> {
+  const { timeout = FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+    return response;
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timeout after ${timeout}ms: ${url}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 export interface SyncProgress {
   itemId: string;
@@ -167,10 +191,15 @@ export class SyncAgent {
         return;
       }
 
+      const delay = failed ? 0 : RETRY_DELAYS_MS[Math.min(retries - 1, RETRY_DELAYS_MS.length - 1)]
+        + Math.floor(Math.random() * 1000);
+      const nextRetryAt = failed ? null : new Date(Date.now() + delay).toISOString();
+
       updateSyncItem(item.id, {
         status: failed ? 'failed' : 'retrying',
         retries,
         error_message: err?.message ?? 'Unknown error',
+        next_retry_at: nextRetryAt,
       });
 
       this.onProgress({
@@ -189,10 +218,8 @@ export class SyncAgent {
         metadata: { itemId: item.id, retries },
       });
 
-      // Exponential backoff before next retry
+      // Schedule in-memory retry tick (belt-and-suspenders alongside next_retry_at DB gate)
       if (!failed) {
-        const delay = RETRY_DELAYS_MS[Math.min(retries - 1, RETRY_DELAYS_MS.length - 1)]
-          + Math.floor(Math.random() * 1000);
         setTimeout(() => this.tick(), delay);
       }
     }
@@ -203,7 +230,7 @@ export class SyncAgent {
     if (!project) throw new Error('Project not found');
 
     // Step 1: POST project metadata to API (daw-sync)
-    const res = await fetch(`${API_BASE}/desktop/index`, {
+    const res = await fetchWithTimeout(`${API_BASE}/desktop/index`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -235,7 +262,7 @@ export class SyncAgent {
       const fileName = path.basename(project.file_path);
 
       // Get pre-signed upload URL
-      const presignRes = await fetch(`${API_BASE}/storage/presign`, {
+      const presignRes = await fetchWithTimeout(`${API_BASE}/storage/presign`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -260,10 +287,11 @@ export class SyncAgent {
           });
 
           const fileStream = fs.createReadStream(project.file_path);
-          const uploadRes = await fetch(presignData.uploadUrl, {
+          const uploadRes = await fetchWithTimeout(presignData.uploadUrl, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(stats.size) },
             body: fileStream as any,
+            timeout: UPLOAD_TIMEOUT_MS,
             // @ts-ignore — duplex required in Node 18+
             duplex: 'half',
           });
@@ -329,7 +357,7 @@ export class SyncAgent {
     const stats = fs.statSync(file.file_path);
 
     // Step 1: Get pre-signed upload URL (handles dedup check server-side)
-    const presignRes = await fetch(`${API_BASE}/storage/presign`, {
+    const presignRes = await fetchWithTimeout(`${API_BASE}/storage/presign`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -358,10 +386,11 @@ export class SyncAgent {
         status: 'uploading', bytesUploaded: 0, bytesTotal: fileSize2, percentage: 0,
       });
       const fileStream = fs.createReadStream(file.file_path);
-      const uploadRes = await fetch(presignData.uploadUrl, {
+      const uploadRes = await fetchWithTimeout(presignData.uploadUrl, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(fileSize2) },
         body: fileStream as any,
+        timeout: UPLOAD_TIMEOUT_MS,
         // @ts-ignore — duplex required in Node 18+
         duplex: 'half',
       });
@@ -389,7 +418,7 @@ export class SyncAgent {
       } catch {}
     }
 
-    const registerRes = await fetch(`${API_BASE}/desktop/index`, {
+    const registerRes = await fetchWithTimeout(`${API_BASE}/desktop/index`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

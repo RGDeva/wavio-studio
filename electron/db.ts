@@ -40,6 +40,17 @@ export function initDatabase(): Database.Database {
   )`); } catch { /* already exists */ }
   // Migrations for bounce_candidates
   try { db.exec('ALTER TABLE bounce_candidates ADD COLUMN checksum TEXT'); } catch { /* already exists */ }
+  // Retry time gate: prevents immediate re-processing of 'retrying' rows after restart
+  try { db.exec('ALTER TABLE sync_queue ADD COLUMN next_retry_at TEXT'); } catch { /* already exists */ }
+  // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
+  // so they are treated as unknown and rehashed on next access rather than silently mismatching
+  try {
+    db.exec(`
+      UPDATE files    SET checksum = NULL WHERE checksum IS NOT NULL AND length(checksum) = 16 AND checksum GLOB '[0-9a-f]*';
+      UPDATE versions SET checksum = NULL WHERE checksum IS NOT NULL AND length(checksum) = 16 AND checksum GLOB '[0-9a-f]*';
+      UPDATE bounce_candidates SET checksum = NULL WHERE checksum IS NOT NULL AND length(checksum) = 16 AND checksum GLOB '[0-9a-f]*';
+    `);
+  } catch { /* tables may not exist in edge-case fresh DBs */ }
   // Unique constraint on file_path so the same file can't produce duplicate candidates
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bounce_candidates_path ON bounce_candidates(file_path)'); } catch { /* already exists */ }
   // Unique constraint on versions to prevent same checksum being stored twice per project
@@ -390,12 +401,14 @@ export function enqueueSyncItem(item: {
 }
 
 export function getPendingSyncItems(limit = 10) {
+  const now = new Date().toISOString();
   return db.prepare(`
     SELECT * FROM sync_queue
     WHERE status IN ('pending', 'retrying')
+      AND (next_retry_at IS NULL OR next_retry_at <= ?)
     ORDER BY priority DESC, created_at ASC
     LIMIT ?
-  `).all(limit);
+  `).all(now, limit);
 }
 
 export function updateSyncItem(id: string, updates: Record<string, unknown>) {

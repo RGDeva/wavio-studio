@@ -41,10 +41,10 @@ export async function fileChecksum(filePath: string): Promise<string> {
       const hash = crypto.createHash('sha256');
       const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
       stream.on('data', (chunk) => hash.update(chunk));
-      stream.on('end', () => resolve(hash.digest('hex').slice(0, 16)));
-      stream.on('error', () => resolve(generateId().slice(0, 16)));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', () => resolve(crypto.randomUUID()));
     } catch {
-      resolve(generateId().slice(0, 16));
+      resolve(crypto.randomUUID());
     }
   });
 }
@@ -228,20 +228,26 @@ export class WatcherManager {
    * Runs after chokidar 'ready' so the native fsevents watcher is fully initialised
    * and won't race with cleanup.  Files are fed through handleFileEvent('add', …)
    * in small batches with yielding so the main thread stays responsive.
+   * 
+   * CRITICAL: Uses async fs.promises.readdir to avoid blocking the main thread
+   * (synchronous fs.readdirSync causes 10+ second hangs on APFS with large folders)
    */
   private async scanExisting(folderPath: string) {
     const SCAN_EXTENSIONS = new Set([...DAW_EXTENSIONS, ...DEPENDENCY_EXTENSIONS]);
     const MAX_DEPTH = 3;
     const BATCH_SIZE = 50;
+    const MAX_FILES = 2000; // hard cap per folder — prevents OOM on large libraries
     const ignoreRe = /(^|[/\\])(\.|(node_modules|__MACOSX|Backup|Autosave|\.trash))/;
 
     const queue: { dir: string; depth: number }[] = [{ dir: folderPath, depth: 0 }];
     let batch = 0;
+    let totalFiles = 0;
 
-    while (queue.length > 0 && !this._stopped) {
+    while (queue.length > 0 && !this._stopped && totalFiles < MAX_FILES) {
       const { dir, depth } = queue.shift()!;
       let entries: fs.Dirent[];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+      // Use async readdir to prevent main thread blocking (fs.readdirSync hangs on APFS)
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
       catch { continue; }
 
       for (const entry of entries) {
@@ -262,10 +268,15 @@ export class WatcherManager {
             } else {
               this.handleFileEvent('add', abs);
             }
+            totalFiles++;
             batch++;
             if (batch >= BATCH_SIZE) {
               batch = 0;
               await new Promise(r => setTimeout(r, 50));
+            }
+            if (totalFiles >= MAX_FILES) {
+              console.warn(`[watcher] scanExisting hit ${MAX_FILES} file cap for ${folderPath} — stopping scan`);
+              return;
             }
           }
         }
