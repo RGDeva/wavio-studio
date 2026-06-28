@@ -724,6 +724,58 @@ ipcMain.handle('auth:clearToken', () => {
   syncAgent?.setAuthToken(null);
 });
 
+// Share links — create or retrieve a share link for a synced asset
+ipcMain.handle('share:createLink', async (_e, opts: {
+  assetId: string;
+  allowDownload?: boolean;
+  password?: string;
+  expiresAt?: string;
+}) => {
+  // Read the decrypted token from the secure store (same as startup restoration)
+  const storedRaw = store.get('authToken', null) as string | null;
+  if (!storedRaw) return { error: 'Not authenticated' };
+  let token: string;
+  try {
+    token = safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(Buffer.from(storedRaw, 'base64'))
+      : storedRaw;
+  } catch { return { error: 'Token decrypt failed' }; }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let res: Response;
+    try {
+      res = await fetch(`https://wavi.stream/api/desktop/index`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-Desktop-Action': 'create-share-link',
+        },
+        body: JSON.stringify({
+          assetId: opts.assetId,
+          allowDownload: opts.allowDownload ?? true,
+          password: opts.password ?? null,
+          expiresAt: opts.expiresAt ?? null,
+        }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as any;
+      return { error: body?.error ?? `HTTP ${res.status}` };
+    }
+    const data = await res.json() as { shareUrl: string; trackingId: string; reused: boolean };
+    logActivity({ id: crypto.randomUUID(), type: 'share_link_created', message: `Share link: ${data.shareUrl}` });
+    return { shareUrl: data.shareUrl, trackingId: data.trackingId, reused: data.reused };
+  } catch (e: any) {
+    captureException(e);
+    return { error: e?.message ?? 'Unknown error' };
+  }
+});
+
 // Folders
 ipcMain.handle('folders:getAll', () => {
   return store.get('watchedFolders', []);

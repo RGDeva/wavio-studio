@@ -11,7 +11,9 @@ export interface WaviAPI {
     clearToken: () => Promise<void>;
   };
   copilot: {
-    toggle: () => Promise<void>;
+    toggle:     () => Promise<void>;
+    getContext: () => Promise<any>;
+    chat:       (messages: Array<{role:string;content:string}>, context: any) => Promise<string>;
   };
   folders: {
     getAll: () => Promise<string[]>;
@@ -46,6 +48,14 @@ export interface WaviAPI {
     openPath: (p: string) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
   };
+  share: {
+    createLink: (opts: {
+      assetId: string;
+      allowDownload?: boolean;
+      password?: string;
+      expiresAt?: string;
+    }) => Promise<{ shareUrl?: string; trackingId?: string; reused?: boolean; error?: string }>;
+  };
   app: {
     relaunch: () => Promise<void>;
   };
@@ -77,6 +87,16 @@ export interface WaviAPI {
     undo:         (associationId: string)                    => Promise<{ ok: boolean }>;
     classifyFile: (filePath: string)                         => Promise<any>;
   };
+  memory: {
+    list:   ()                                               => Promise<any[]>;
+    get:    (key: string)                                    => Promise<string | null>;
+    set:    (key: string, value: string, category?: string) => Promise<void>;
+    delete: (key: string)                                    => Promise<void>;
+  };
+  ableton: {
+    selectFolder:  ()                                        => Promise<{ canceled: boolean; folderPath?: string; snapshot?: any }>;
+    syncToCloud:   (snapshot: any, authToken: string)        => Promise<{ success?: boolean; cloudProjectId?: string; error?: string }>;
+  };
   on: (channel: string, listener: (...args: unknown[]) => void) => void;
   off: (channel: string, listener: (...args: unknown[]) => void) => void;
 }
@@ -84,13 +104,14 @@ export interface WaviAPI {
 const _noop = () => Promise.resolve(null as any);
 const _stub: WaviAPI = {
   auth: { getToken: _noop, setToken: _noop, clearToken: _noop },
-  copilot: { toggle: _noop },
+  copilot: { toggle: _noop, getContext: _noop, chat: _noop },
   folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
   files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]) },
   sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop },
+  share: { createLink: _noop },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },
@@ -102,6 +123,16 @@ const _stub: WaviAPI = {
     reject:       _noop,
     undo:         _noop,
     classifyFile: _noop,
+  },
+  memory: {
+    list:   () => Promise.resolve([]),
+    get:    _noop,
+    set:    _noop,
+    delete: _noop,
+  },
+  ableton: {
+    selectFolder:  () => Promise.resolve({ canceled: true }),
+    syncToCloud:   _noop,
   },
   on: () => {},
   off: () => {},

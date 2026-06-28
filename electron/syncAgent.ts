@@ -447,7 +447,8 @@ export class SyncAgent {
       throw new Error(`Asset registration failed: HTTP ${registerRes.status} — ${errBody?.error ?? 'unknown'}`);
     }
     const regData = await registerRes.json().catch(() => ({})) as any;
-    updateFileSyncStatus(file.id, 'synced', regData.fileUrl ?? presignData.storageKey);
+    // Store cloud asset ID so share link creation can use it without a round-trip
+    updateFileSyncStatus(file.id, 'synced', regData.fileUrl ?? presignData.storageKey, regData.assetId ?? undefined);
 
     this.onProgress({
       itemId: item.id,

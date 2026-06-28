@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error']);
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent']);
 
 contextBridge.exposeInMainWorld('waviAPI', {
@@ -56,6 +56,16 @@ contextBridge.exposeInMainWorld('waviAPI', {
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
   },
 
+  // Share links
+  share: {
+    createLink: (opts: {
+      assetId: string;
+      allowDownload?: boolean;
+      password?: string;
+      expiresAt?: string;
+    }) => ipcRenderer.invoke('share:createLink', opts),
+  },
+
   // App
   app: {
     relaunch: () => ipcRenderer.invoke('app:relaunch'),
@@ -74,13 +84,23 @@ contextBridge.exposeInMainWorld('waviAPI', {
 
   // Copilot
   copilot: {
-    toggle: () => ipcRenderer.invoke('copilot:toggle'),
+    toggle:     () => ipcRenderer.invoke('copilot:toggle'),
+    getContext: () => ipcRenderer.invoke('copilot:getContext'),
+    chat:       (messages: unknown[], context: unknown) => ipcRenderer.invoke('copilot:chat', messages, context),
   },
 
   // Ableton DAW Companion
   ableton: {
     selectFolder: () => ipcRenderer.invoke('ableton:select-folder'),
     syncToCloud: (snapshot: unknown, authToken: string) => ipcRenderer.invoke('ableton:sync-to-cloud', snapshot, authToken),
+  },
+
+  // Memory (Copilot persistent context)
+  memory: {
+    list:   ()                                              => ipcRenderer.invoke('memory:list'),
+    get:    (key: string)                                   => ipcRenderer.invoke('memory:get', key),
+    set:    (key: string, value: string, category?: string) => ipcRenderer.invoke('memory:set', key, value, category),
+    delete: (key: string)                                   => ipcRenderer.invoke('memory:delete', key),
   },
 
   // Bridge status

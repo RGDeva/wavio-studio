@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2 } from 'lucide-react';
+import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2, Link, Copy, Check } from 'lucide-react';
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { DawLogo } from '../components/DawLogo';
@@ -127,29 +127,8 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
         return;
       }
 
-      // Get active project or create a default one
-      let activeProject = projects.find(p => p.active);
-      if (!activeProject) {
-        // Create a default project for imported files
-        const projectName = `Imported Files ${new Date().toLocaleDateString()}`;
-        activeProject = await api.projects.create({
-          project_name: projectName,
-          daw_type: 'manual',
-          file_path: `${require('os').homedir()}/Music/${projectName}`,
-        });
-        if (activeProject) {
-          setProjects(prev => [...prev, activeProject]);
-        }
-      }
-
-      if (!activeProject) {
-        setImportStatus('No active project to import to');
-        setTimeout(() => setImportStatus(null), 3000);
-        return;
-      }
-
       // Process each file through the sync agent
-      const filePaths = validFiles.map(file => file.path || (file as any).webkitRelativePath || file.name);
+      const filePaths = validFiles.map(file => (file as any).path || (file as any).webkitRelativePath || file.name);
       await api.files.import(filePaths);
 
       setImportStatus(`Imported ${validFiles.length} file${validFiles.length > 1 ? 's' : ''}`);
@@ -386,6 +365,54 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareLoading, setShareLoading] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const createShareLink = async () => {
+    if (shareLoading) return;
+    // If we already have a URL, just copy it again
+    if (shareUrl) {
+      navigator.clipboard.writeText(shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+      return;
+    }
+    setShareLoading(true);
+    setShareError(null);
+    try {
+      // Find the best synced asset for this project (prefer master, then any synced file)
+      const files = await api.files.getByProject(project.id);
+      const synced = (files as any[]).filter((f: any) => f.sync_status === 'synced' && f.cloud_url);
+      const best = synced.find((f: any) => f.role === 'master' || f.role === 'mix')
+        ?? synced.find((f: any) => ['wav','mp3','flac','aiff','aif'].includes(f.file_type))
+        ?? synced[0];
+
+      if (!best) {
+        setShareError('No synced files yet — wait for the upload to complete.');
+        setShareLoading(false);
+        return;
+      }
+
+      // Use the cloud asset ID stored in cloud_url or id field
+      const assetId = best.cloud_asset_id ?? best.cloud_id ?? null;
+      if (!assetId) {
+        setShareError('Asset not yet registered with Wavi. Sync the project first.');
+        setShareLoading(false);
+        return;
+      }
+
+      const result = await api.share.createLink({ assetId, allowDownload: true });
+      if (result.error) {
+        setShareError(result.error);
+      } else if (result.shareUrl) {
+        setShareUrl(result.shareUrl);
+        navigator.clipboard.writeText(result.shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+      }
+    } catch (e: any) {
+      setShareError(e?.message ?? 'Failed to create link');
+    }
+    setShareLoading(false);
+  };
 
   const toggleVersions = async () => {
     if (expanded) { setExpanded(false); return; }
@@ -440,6 +467,37 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
             </button>
             <span>{formatRelativeTime(project.modified_at)}</span>
           </div>
+          {/* Create Link button — visible when project is synced */}
+          {project.sync_status === 'synced' && (
+            <div className="mt-2 flex flex-col items-end gap-1">
+              <button
+                onClick={createShareLink}
+                disabled={shareLoading}
+                className="flex items-center gap-1 text-[10px] font-medium text-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
+                title={shareUrl ? 'Copy link' : 'Create Wavi link'}
+              >
+                {shareLoading
+                  ? <div className="w-2.5 h-2.5 border border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                  : copied
+                  ? <Check className="w-2.5 h-2.5 text-green-400" />
+                  : shareUrl
+                  ? <Copy className="w-2.5 h-2.5" />
+                  : <Link className="w-2.5 h-2.5" />
+                }
+                {shareLoading ? 'Creating…' : copied ? 'Copied!' : shareUrl ? 'Copy link' : 'Create link'}
+              </button>
+              {shareError && <p className="text-[9px] text-red-400 text-right max-w-[160px]">{shareError}</p>}
+              {shareUrl && !copied && (
+                <a
+                  href="#"
+                  onClick={(e) => { e.preventDefault(); api.shell.openExternal(shareUrl); }}
+                  className="text-[9px] text-white/20 hover:text-white/40 transition-colors"
+                >
+                  Open ↗
+                </a>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

@@ -42,6 +42,8 @@ export function initDatabase(): Database.Database {
   try { db.exec('ALTER TABLE bounce_candidates ADD COLUMN checksum TEXT'); } catch { /* already exists */ }
   // Retry time gate: prevents immediate re-processing of 'retrying' rows after restart
   try { db.exec('ALTER TABLE sync_queue ADD COLUMN next_retry_at TEXT'); } catch { /* already exists */ }
+  // Store cloud asset ID returned by register-asset so share link creation can use it
+  try { db.exec('ALTER TABLE files ADD COLUMN cloud_asset_id TEXT'); } catch { /* already exists */ }
   // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
   // so they are treated as unknown and rehashed on next access rather than silently mismatching
   try {
@@ -378,9 +380,9 @@ export function getFileStats() {
   };
 }
 
-export function updateFileSyncStatus(id: string, status: string, cloudUrl?: string) {
-  db.prepare('UPDATE files SET sync_status = ?, cloud_url = ? WHERE id = ?')
-    .run(status, cloudUrl ?? null, id);
+export function updateFileSyncStatus(id: string, status: string, cloudUrl?: string, cloudAssetId?: string) {
+  db.prepare('UPDATE files SET sync_status = ?, cloud_url = ?, cloud_asset_id = ? WHERE id = ?')
+    .run(status, cloudUrl ?? null, cloudAssetId ?? null, id);
 }
 
 // ── Sync Queue ────────────────────────────────────────────────────────────────
