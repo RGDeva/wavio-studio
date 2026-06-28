@@ -10,6 +10,7 @@ export default defineConfig({
       'electron/sync.test.ts',
       'electron/auth.test.ts',
       'electron/upload.test.ts',
+      'electron/db.integration.test.ts',
     ],
     environment: 'node',
   },

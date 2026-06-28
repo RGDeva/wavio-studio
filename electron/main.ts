@@ -456,7 +456,7 @@ async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
           Authorization: `Bearer ${privyJwt}`,
           'X-Desktop-Action': 'create-desktop-token',
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ deviceLabel: `Wavi Studio — ${require('os').hostname()}` }),
         signal: controller.signal,
       });
     } finally {
@@ -466,7 +466,7 @@ async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
       mainLog(`[auth] Token exchange HTTP ${res.status}`);
       return null;
     }
-    const data: { token?: string } = await res.json();
+    const data: { token?: string; expiresAt?: string } = await res.json();
     if (!data?.token?.startsWith('wv_')) {
       mainLog('[auth] Token exchange: unexpected response shape');
       return null;

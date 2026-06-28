@@ -255,7 +255,8 @@ export class SyncAgent {
 
     const data = await res.json();
     const cloudProjectId = data.projectId ?? data.id;
-    updateProjectSyncStatus(project.id, 'synced', cloudProjectId);
+    const cloudVersionId = data.projectVersionId ?? null;
+    updateProjectSyncStatus(project.id, 'synced', cloudProjectId, cloudVersionId);
 
     // Step 2: Upload the actual project file via presign → PUT → register-asset
     if (fs.existsSync(project.file_path)) {

@@ -44,6 +44,8 @@ export function initDatabase(): Database.Database {
   try { db.exec('ALTER TABLE sync_queue ADD COLUMN next_retry_at TEXT'); } catch { /* already exists */ }
   // Store cloud asset ID returned by register-asset so share link creation can use it
   try { db.exec('ALTER TABLE files ADD COLUMN cloud_asset_id TEXT'); } catch { /* already exists */ }
+  // Store cloud project_version ID returned by daw-sync so share links can reference versions
+  try { db.exec('ALTER TABLE projects ADD COLUMN cloud_version_id TEXT'); } catch { /* already exists */ }
   // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
   // so they are treated as unknown and rehashed on next access rather than silently mismatching
   try {
@@ -252,11 +254,12 @@ export function getProjectById(id: string) {
 export function updateProjectSyncStatus(
   id: string,
   status: string,
-  cloudId?: string
+  cloudId?: string,
+  cloudVersionId?: string
 ) {
   db.prepare(`
-    UPDATE projects SET sync_status = ?, cloud_id = ?, last_synced_at = ? WHERE id = ?
-  `).run(status, cloudId ?? null, new Date().toISOString(), id);
+    UPDATE projects SET sync_status = ?, cloud_id = ?, cloud_version_id = ?, last_synced_at = ? WHERE id = ?
+  `).run(status, cloudId ?? null, cloudVersionId ?? null, new Date().toISOString(), id);
 }
 
 // ── Files ─────────────────────────────────────────────────────────────────────
