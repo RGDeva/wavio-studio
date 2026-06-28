@@ -5,7 +5,11 @@ interface LoginPageProps {
   onLogin: () => void;
 }
 
-const AUTH_URL = 'https://wavi.stream/auth?desktop=1';
+function getAuthUrl(): string {
+  const apiBase = window.waviAPI?.config?.apiBase ?? 'https://wavi.stream/api';
+  const webBase = apiBase.replace(/\/api$/, '');
+  return `${webBase}/auth?desktop=1`;
+}
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const [waiting, setWaiting] = useState(false);
@@ -49,7 +53,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   const handleSignIn = () => {
     setError(null);
-    api.shell.openExternal(AUTH_URL);
+    api.shell.openExternal(getAuthUrl());
     setWaiting(true);
   };
 
