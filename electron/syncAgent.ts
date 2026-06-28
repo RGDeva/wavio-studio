@@ -451,6 +451,7 @@ export class SyncAgent {
     let daw: string | null = null;
     let projectName: string | null = null;
     let cloudProjectId: string | null = null;
+    let cloudVersionId: string | null = null;
     if (item.project_id && item.project_id !== '__standalone__') {
       try {
         const project = getProjectById(item.project_id) as any;
@@ -458,6 +459,7 @@ export class SyncAgent {
           daw = project.daw_type ?? null;
           projectName = project.project_name ?? null;
           cloudProjectId = project.cloud_id ?? null; // use cloud UUID, not local UUID
+          cloudVersionId = project.cloud_version_id ?? null;
         }
       } catch {}
     }
@@ -474,7 +476,8 @@ export class SyncAgent {
         storageKey: presignData.storageKey ?? presignData.fileUrl,
         fileSize: stats.size,
         sha256: file.checksum ?? null,
-        projectId: cloudProjectId,   // cloud UUID or null — not the local ID
+        projectId: cloudProjectId,       // cloud UUID or null — not the local ID
+        projectVersionId: cloudVersionId, // current project version for history tracking
         bpm: file.bpm ?? null,
         keyNote: file.key_note ?? null,
         duration: file.duration ?? null,
