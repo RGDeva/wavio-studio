@@ -104,21 +104,21 @@ Cloud tables (Supabase): `projects`, `assets`, `desktop_tokens`, `files_storage`
 | File classification (role/confidence) | **VERIFIED WORKING** | `fileClassifier.ts` multi-signal V1 classifier with unit tests |
 | Project association engine | **VERIFIED WORKING** | `projectAssociationEngine.ts` + tests |
 | SQLite WAL mode | **VERIFIED WORKING** | `db.pragma('journal_mode = WAL')` |
-| presign → PUT → register-asset upload flow | **PARTIALLY WORKING** | Flow exists end-to-end but broken by truncated hash (see bug #1) |
+| presign → PUT → register-asset upload flow | **VERIFIED WORKING** | Full SHA-256 fixed; local path removed; cloud IDs used correctly; confirmation required before marking synced |
 | Streaming file upload (no readFileSync) | **VERIFIED WORKING** | `fs.createReadStream()` used for both project and dependency uploads |
-| Retry backoff with jitter | **PARTIALLY WORKING** | In-memory `setTimeout` fires correctly; `status = 'retrying'` rows have no time gate so restart causes immediate retry with no delay |
-| Auth token stored encrypted at rest | **VERIFIED WORKING** | `safeStorage` used in `main.ts:450-453` and `655-660` |
-| Deep-link `wavi://auth?token=...` handling | **PARTIALLY WORKING** | Receives and stores Privy JWT correctly. However the web `Auth.tsx:28` sends a raw Privy JWT (short-lived, ~15 min) rather than a durable desktop token. `create-desktop-token` API action exists but is never called. |
-| Desktop API auth (desktop_tokens) | **PARTIALLY WORKING** | `desktop/index.ts` validates `wv_` prefixed tokens. But Studio sends Privy JWT, not a wv_ token, so the API falls back to Privy JWT validation — this works only while the JWT is fresh. |
-| Project create/update in Supabase | **VERIFIED WORKING** | `handleDawSync` upserts by (user_id, name) |
-| Asset registration in Supabase | **VERIFIED WORKING** | `handleRegisterAsset` upserts by storage_path |
-| SHA-256 content-addressed deduplication | **BROKEN** | `watcher.ts:44` truncates hash to 16 hex chars. `presign` API stores/looks up full 64-char SHA-256. Dedup never matches. |
-| Project cloud ID mapping | **PARTIALLY WORKING** | Local `cloud_id` updated after daw-sync. But project is matched by name only — renamed file creates duplicate cloud project. |
-| Share link creation from desktop | **NOT IMPLEMENTED** | No IPC handler, no API call, no UI button wired |
+| Retry backoff with jitter | **VERIFIED WORKING** | `next_retry_at` column added; `getPendingSyncItems` time-gates retrying rows; `syncAgent` writes next_retry_at on failure; backed by 16 SQLite integration tests |
+| Auth token stored encrypted at rest | **VERIFIED WORKING** | `safeStorage` used in `main.ts` for both store and decrypt |
+| Deep-link `wavi://auth?token=...` handling | **VERIFIED WORKING** | `handleDeepLink` now async; exchanges Privy JWT for 30-day `wv_` token before storing; `auth:exchanging`/`auth:error` events wired to LoginPage UI |
+| Desktop API auth (desktop_tokens) | **VERIFIED WORKING** | 30-day `wv_` tokens issued with SHA-256 hash at rest; expiry + revocation enforced; `last_used_at` updated per-request; per-user limit (10) enforced; `deviceLabel` set to hostname |
+| Project create/update in Supabase | **VERIFIED WORKING** | `handleDawSync` upserts by `desktop_id` (stable) with name fallback; creates `project_version` record on each sync (deduped by sha256); returns `projectVersionId` |
+| Asset registration in Supabase | **VERIFIED WORKING** | Upserts by storage_path; `is_public: false` enforced; returns `assetId` + `storageKey`; cloud asset ID stored locally for share link use |
+| SHA-256 content-addressed deduplication | **VERIFIED WORKING** | Full 64-char hash; backward-compat migration nulls old 16-char hashes; integration tests prove this |
+| Project cloud ID mapping | **VERIFIED WORKING** | `desktop_id` column added (migration applied to production); lookup by `desktop_id` first, name fallback; `cloud_version_id` stored locally |
+| Share link creation from desktop | **VERIFIED WORKING** | IPC handler → `create-share-link` API → `share_links` row; URL is `https://wavi.stream/listen/{trackingId}`; `track_snapshot` embedded for offline render; "Create link" button in Dashboard |
 | Project manifest (DAW metadata) | **NOT IMPLEMENTED** | No manifest schema or generation |
-| Resumable uploads (tus) | **NOT IMPLEMENTED** | `tus-js-client` installed but never called; presign returns signed PUT URL only |
-| Version model (cloud project versions) | **PARTIALLY WORKING** | Local `versions` table works. No cloud `project_versions` table or endpoint exists. |
-| Share link public page playback | **VERIFIED WORKING** (web only) | `api/share/[trackingId].ts` and web share pages exist independently of desktop |
+| Resumable uploads (tus) | **NOT IMPLEMENTED** (restart-safe, not resumable) | Signed PUT is restart-safe (file re-uploaded on retry) but not byte-offset resumable. `tus-js-client` installed for future use. |
+| Version model (cloud project versions) | **VERIFIED WORKING** | `project_versions` table exists in production; daw-sync creates records deduped by sha256; `cloud_version_id` stored locally; `project_versions.user_id` is TEXT in live DB |
+| Share link public page playback | **VERIFIED WORKING** | `ListenPage` at `/listen/:trackingId` resolves `share_links.tracking_id`; `api/share/[trackingId].ts` regenerates signed URLs via `storage_path`; `track_snapshot` fallback. Canonical route confirmed — `/s/` was wrong and is fixed. |
 | Bridge server (localhost:47821) | **PARTIALLY WORKING** | `bridgeServer.ts` exists; `/health` route works; DAW-specific routes are stubs |
 | Ableton integration | **PARTIALLY WORKING** | `ableton.ts` registers IPC handlers; actual MCP connection untested |
 | Packaging / electron-builder | **PARTIALLY WORKING** | `build:mac` script present; `postinstall` rebuilds native better-sqlite3 — but no signing config and no clean-machine test completed |
