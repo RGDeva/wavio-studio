@@ -239,11 +239,12 @@ export class SyncAgent {
       },
       body: JSON.stringify({
         projectName: project.project_name,
-        sessionPath: project.file_path,
+        fileName: path.basename(project.file_path),   // basename only — no local absolute path
+        localProjectId: project.id,                   // stable local UUID for server-side dedup
         daw: project.daw_type,
         fileSize: project.file_size,
         lastModified: project.modified_at,
-        sha256: project.sha256 ?? null,
+        sha256: project.checksum ?? null,
       }),
     });
 
@@ -404,16 +405,18 @@ export class SyncAgent {
       });
     }
 
-    // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase
-    // Resolve project info for daw + projectName
+    // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase.
+    // Resolve cloud project ID — local IDs do not exist in Supabase, use cloud_id.
     let daw: string | null = null;
     let projectName: string | null = null;
+    let cloudProjectId: string | null = null;
     if (item.project_id && item.project_id !== '__standalone__') {
       try {
         const project = getProjectById(item.project_id) as any;
         if (project) {
           daw = project.daw_type ?? null;
           projectName = project.project_name ?? null;
+          cloudProjectId = project.cloud_id ?? null; // use cloud UUID, not local UUID
         }
       } catch {}
     }
@@ -430,7 +433,7 @@ export class SyncAgent {
         storageKey: presignData.storageKey ?? presignData.fileUrl,
         fileSize: stats.size,
         sha256: file.checksum ?? null,
-        projectId: item.project_id !== '__standalone__' ? item.project_id : null,
+        projectId: cloudProjectId,   // cloud UUID or null — not the local ID
         bpm: file.bpm ?? null,
         keyNote: file.key_note ?? null,
         duration: file.duration ?? null,
@@ -440,7 +443,11 @@ export class SyncAgent {
       }),
     });
 
-    const regData = await registerRes.json().catch(() => ({}));
+    if (!registerRes.ok) {
+      const errBody = await registerRes.json().catch(() => ({})) as any;
+      throw new Error(`Asset registration failed: HTTP ${registerRes.status} — ${errBody?.error ?? 'unknown'}`);
+    }
+    const regData = await registerRes.json().catch(() => ({})) as any;
     updateFileSyncStatus(file.id, 'synced', regData.fileUrl ?? presignData.storageKey);
 
     this.onProgress({
