@@ -173,8 +173,7 @@ function createWindow() {
   });
 
   loadRenderer();
-  if (isDev) {
-    // Defer devTools to prevent initialization race conditions
+  if (isDev && process.env.WAVI_DEVTOOLS === '1') {
     setTimeout(() => { try { mainWindow?.webContents.openDevTools(); } catch {} }, 1500);
   }
 
