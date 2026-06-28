@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import { app } from 'electron';
+import crypto from 'crypto';
 
 let db: Database.Database;
 
@@ -8,11 +9,21 @@ export function getDb(): Database.Database {
   return db;
 }
 
-export function initDatabase(): Database.Database {
-  const userDataPath = app.getPath('userData');
-  const dbPath = path.join(userDataPath, 'wavio-studio.db');
+/** Testing entry point — takes an explicit path (use ':memory:' in tests). */
+export function initDatabaseForTesting(dbPath: string): Database.Database {
+  return _initDatabaseAtPath(dbPath);
+}
 
-  db = new Database(dbPath);
+export function initDatabase(opts: { dbName?: string } = {}): Database.Database {
+  const userDataPath = app.getPath('userData');
+  const dbName = opts.dbName ?? 'wavio-studio.db';
+  const dbPath = path.join(userDataPath, dbName);
+  return _initDatabaseAtPath(dbPath);
+}
+
+function _initDatabaseAtPath(dbPath: string): Database.Database {
+  const instance = new Database(dbPath);
+  db = instance;
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
@@ -217,7 +228,8 @@ export function initDatabase(): Database.Database {
     );
   `);
 
-  return db;
+  db = instance;
+  return instance;
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────────
@@ -390,6 +402,34 @@ export function updateFileSyncStatus(id: string, status: string, cloudUrl?: stri
 
 // ── Sync Queue ────────────────────────────────────────────────────────────────
 
+export function enqueueSyncItemIdempotent(item: {
+  id: string;
+  project_id: string;
+  file_id?: string;
+  file_name?: string;
+  type: string;
+  priority?: number;
+  created_at: string;
+}): { inserted: boolean; id?: string; existingId?: string } {
+  const existing = db.prepare(`
+    SELECT id FROM sync_queue
+    WHERE type = ? AND project_id = ? AND COALESCE(file_id, '') = COALESCE(?, '')
+      AND status IN ('pending', 'uploading', 'retrying')
+    LIMIT 1
+  `).get(item.type, item.project_id, item.file_id ?? null) as { id: string } | undefined;
+
+  if (existing) {
+    return { inserted: false, existingId: existing.id };
+  }
+
+  db.prepare(`
+    INSERT OR IGNORE INTO sync_queue (id, project_id, file_id, file_name, type, priority, created_at)
+    VALUES (@id, @project_id, @file_id, @file_name, @type, @priority, @created_at)
+  `).run({ priority: 5, file_id: null, file_name: null, ...item });
+
+  return { inserted: true, id: item.id };
+}
+
 export function enqueueSyncItem(item: {
   id: string;
   project_id: string;
@@ -399,10 +439,52 @@ export function enqueueSyncItem(item: {
   priority?: number;
   created_at: string;
 }) {
-  db.prepare(`
-    INSERT OR IGNORE INTO sync_queue (id, project_id, file_id, file_name, type, priority, created_at)
-    VALUES (@id, @project_id, @file_id, @file_name, @type, @priority, @created_at)
-  `).run({ priority: 5, file_id: null, file_name: null, ...item });
+  enqueueSyncItemIdempotent(item);
+}
+
+export function repairStalledQueue(): { recovered: number; deduped: number } {
+  // 1. Reset uploading → pending (crash recovery)
+  const resetResult = db.prepare(`
+    UPDATE sync_queue SET status = 'pending', started_at = NULL
+    WHERE status = 'uploading'
+  `).run();
+  const recovered = resetResult.changes;
+
+  // 2. Collapse duplicate active rows — keep newest by created_at, delete rest
+  const duplicates = db.prepare(`
+    SELECT id FROM sync_queue
+    WHERE status IN ('pending', 'retrying')
+      AND id NOT IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY type, project_id, COALESCE(file_id, '')
+            ORDER BY created_at DESC
+          ) AS rn FROM sync_queue
+          WHERE status IN ('pending', 'retrying')
+        ) WHERE rn = 1
+      )
+  `).all() as { id: string }[];
+
+  let deduped = 0;
+  if (duplicates.length > 0) {
+    const ids = duplicates.map(r => r.id);
+    const placeholders = ids.map(() => '?').join(',');
+    db.prepare(`DELETE FROM sync_queue WHERE id IN (${placeholders})`).run(...ids);
+    deduped = ids.length;
+  }
+
+  if (recovered > 0 || deduped > 0) {
+    db.prepare(`
+      INSERT INTO activity_log (id, type, message, created_at)
+      VALUES (?, 'queue_repair', ?, ?)
+    `).run(
+      crypto.randomUUID(),
+      `Queue repair: recovered ${recovered} stalled, deduped ${deduped} duplicates`,
+      new Date().toISOString(),
+    );
+  }
+
+  return { recovered, deduped };
 }
 
 export function getPendingSyncItems(limit = 10) {

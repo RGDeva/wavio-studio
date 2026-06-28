@@ -221,10 +221,15 @@ app.whenReady().then(async () => {
   // Defer heavy initialization to next tick so window can render
   await new Promise<void>(resolve => setImmediate(resolve));
 
+  // E2E isolation mode
+  if (process.env.WAVI_E2E === '1') {
+    console.warn('[E2E] Isolated test mode: DB=wavio-studio-e2e.db, watching only E2E folder');
+  }
+
   // Init database (this blocks the main thread - must happen after window show)
   mainLog('Initializing database...');
   const t0 = Date.now();
-  const db = initDatabase();
+  const db = initDatabase({ dbName: process.env.WAVI_E2E === '1' ? 'wavio-studio-e2e.db' : 'wavio-studio.db' });
   mainLog(`Database initialized in ${Date.now() - t0}ms`);
 
   // Notify renderer that DB is ready
@@ -303,6 +308,13 @@ app.whenReady().then(async () => {
 
   // Defer folder watching + scanning so the window opens without blocking on APFS disk I/O
   setTimeout(() => {
+    // E2E isolation: override watched folders so tests don't touch the user's real library
+    if (process.env.WAVI_E2E === '1') {
+      const e2eFolder = process.env.WAVI_E2E_FOLDER ?? '/tmp/wavi-e2e';
+      watcherManager!.addFolder(e2eFolder);
+      return;
+    }
+
     // Restore watched folders from store
     const folders = store.get('watchedFolders', []) as string[];
     for (const folder of folders) {

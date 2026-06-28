@@ -12,14 +12,27 @@ import {
   getFilesByProject,
   getFileById,
   getDb,
+  repairStalledQueue,
 } from './db';
 import { fileChecksum } from './watcher';
 import crypto from 'crypto';
 import { API_BASE } from './config';
+function formatSyncError(err: any): string {
+  const msg: string = err?.message ?? 'Unknown error';
+  // Node native fetch AbortError: cause is DOMException with name 'AbortError'
+  if (msg === 'fetch failed' && err?.cause) {
+    const cause = err.cause;
+    const causeCode = cause?.code ?? cause?.name ?? '';
+    const causeMsg = cause?.message ?? '';
+    return `fetch failed [${causeCode || causeMsg || 'no cause'}]`;
+  }
+  return msg;
+}
+
 const POLL_INTERVAL_MS = 5000;
 const MAX_CONCURRENT = 2;
 const RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000]; // 5s, 30s, 2m, 5m
-const FETCH_TIMEOUT_MS = 30000; // 30 second timeout for API calls
+const FETCH_TIMEOUT_MS = 60000; // 60s for Vercel Hobby cold-starts
 const UPLOAD_TIMEOUT_MS = 300000; // 5 minute timeout for file uploads
 
 // Fetch with timeout to prevent hanging
@@ -81,6 +94,9 @@ export class SyncAgent {
   start() {
     if (this.running) return;
     this.running = true;
+    // Crash recovery: reset zombie 'uploading' rows and collapse duplicates
+    const r = repairStalledQueue();
+    console.log(`[sync] startup repair: recovered=${r.recovered} deduped=${r.deduped}`);
     this.pollTimer = setInterval(() => this._tick(), POLL_INTERVAL_MS);
     this._tick();
   }
@@ -195,10 +211,11 @@ export class SyncAgent {
         + Math.floor(Math.random() * 1000);
       const nextRetryAt = failed ? null : new Date(Date.now() + delay).toISOString();
 
+      const errMsg = formatSyncError(err);
       updateSyncItem(item.id, {
         status: failed ? 'failed' : 'retrying',
         retries,
-        error_message: err?.message ?? 'Unknown error',
+        error_message: errMsg,
         next_retry_at: nextRetryAt,
       });
 
@@ -207,13 +224,13 @@ export class SyncAgent {
         projectId: item.project_id,
         type: item.type,
         status: failed ? 'failed' : 'retrying',
-        error: err?.message,
+        error: errMsg,
       });
 
       logActivity({
         id: generateId(),
         type: 'sync_error',
-        message: `Sync failed: ${err?.message ?? 'Unknown error'}`,
+        message: `Sync failed: ${errMsg}`,
         project_id: item.project_id,
         metadata: { itemId: item.id, retries },
       });
@@ -409,6 +426,24 @@ export class SyncAgent {
         itemId: item.id, projectId: item.project_id, type: 'file',
         status: 'uploading', bytesUploaded: fileSize2, bytesTotal: fileSize2, percentage: 99,
       });
+
+      // Confirm the upload with the server so future presigns can dedup correctly
+      try {
+        await fetchWithTimeout(`${API_BASE}/storage/confirm`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.authToken}`,
+          },
+          body: JSON.stringify({
+            sha256: file.checksum ?? null,
+            storageKey: presignData.storageKey,
+          }),
+        });
+      } catch {
+        // Non-fatal: confirm failure means next presign re-uploads instead of dedup
+        // The asset registration still proceeds
+      }
     }
 
     // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase.

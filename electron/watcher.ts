@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
-import { upsertProject, upsertFile, upsertStandaloneFile, enqueueSyncItem, logActivity, createVersion, addBounceCandidate, getBounceCandidateByPath, versionExistsByChecksum, versionExistsByPath, updateFileClassificationByPath } from './db';
+import { upsertProject, upsertFile, upsertStandaloneFile, enqueueSyncItem, enqueueSyncItemIdempotent, logActivity, createVersion, addBounceCandidate, getBounceCandidateByPath, versionExistsByChecksum, versionExistsByPath, updateFileClassificationByPath } from './db';
 import { detectBpm } from './bpmDetector';
 import { analyzeAudio } from './audioAnalyzer';
 import { classifyFile as classifyFileLegacy } from './classifier';
@@ -357,7 +357,7 @@ export class WatcherManager {
           checksum: newChecksum,
           created_at: new Date().toISOString(),
         });
-        enqueueSyncItem({
+        enqueueSyncItemIdempotent({
           id: generateId(),
           project_id: projectId,
           file_name: path.basename(filePath),
@@ -367,7 +367,7 @@ export class WatcherManager {
         });
       }, 10_000));
     } else if (event === 'add') {
-      enqueueSyncItem({
+      enqueueSyncItemIdempotent({
         id: generateId(),
         project_id: projectId,
         file_name: path.basename(filePath),
@@ -501,7 +501,7 @@ export class WatcherManager {
       }
 
       // Enqueue for sync AFTER DB row exists (avoids race condition)
-      enqueueSyncItem({
+      enqueueSyncItemIdempotent({
         id: generateId(),
         project_id: projectId ?? '__standalone__',
         file_id: fileId,

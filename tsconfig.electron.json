@@ -10,5 +10,6 @@
     "resolveJsonModule": true,
     "esModuleInterop": true
   },
-  "include": ["electron"]
+  "include": ["electron"],
+  "exclude": ["electron/**/*.test.ts", "electron/**/*.spec.ts"]
 }
