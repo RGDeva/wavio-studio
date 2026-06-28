@@ -107,12 +107,7 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
     `);
     db.pragma('foreign_keys = ON');
   }
-  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(file_path)'); } catch { /* already exists */ }
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id)'); } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_at DESC)'); } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_files_sync ON files(sync_status)'); } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)'); } catch {}
-  try { db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)'); } catch {}
+  // Indexes are created after CREATE TABLE (moved below) so they work on fresh DBs too
 
   // ── Phase 1: Project Association Engine columns ──────────────────────────
   try { db.exec("ALTER TABLE files ADD COLUMN classifier_role TEXT DEFAULT 'misc'"); } catch { /* already exists */ }
@@ -167,6 +162,7 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       version_count INTEGER DEFAULT 1,
       sync_status TEXT DEFAULT 'pending',
       cloud_id TEXT,
+      cloud_version_id TEXT,
       created_at TEXT NOT NULL,
       modified_at TEXT NOT NULL,
       last_synced_at TEXT
@@ -181,6 +177,7 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       file_size INTEGER DEFAULT 0,
       sync_status TEXT DEFAULT 'pending',
       cloud_url TEXT,
+      cloud_asset_id TEXT,
       checksum TEXT,
       bpm INTEGER,
       key_note TEXT,
@@ -194,6 +191,7 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       file_id TEXT,
+      file_name TEXT,
       type TEXT NOT NULL,
       status TEXT DEFAULT 'pending',
       priority INTEGER DEFAULT 5,
@@ -204,7 +202,8 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       upload_url TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
-      completed_at TEXT
+      completed_at TEXT,
+      next_retry_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS activity_log (
@@ -227,6 +226,14 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       created_at TEXT NOT NULL
     );
   `);
+
+  // Indexes — run after CREATE TABLE so fresh DBs and existing DBs both get them
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(file_path)'); } catch { /* already exists */ }
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_at DESC)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_files_sync ON files(sync_status)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)'); } catch {}
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)'); } catch {}
 
   db = instance;
   return instance;
