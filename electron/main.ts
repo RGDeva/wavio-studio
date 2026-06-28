@@ -15,6 +15,7 @@ import { registerAbletonHandlers } from './ableton';
 import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
+import { API_BASE, logApiEnvironment } from './config';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -200,6 +201,7 @@ try {
 
 app.whenReady().then(async () => {
   mainLog('--- main process started ---');
+  logApiEnvironment();
 
   // Initialize store now that app is ready
   store = new Store();
@@ -449,7 +451,7 @@ async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
     const timer = setTimeout(() => controller.abort(), 15_000);
     let res: Response;
     try {
-      res = await fetch('https://wavi.stream/api/desktop/index', {
+      res = await fetch(`${API_BASE}/desktop/index`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

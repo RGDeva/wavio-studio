@@ -14,8 +14,7 @@ import {
   getDb,
 } from './db';
 import crypto from 'crypto';
-
-const API_BASE = 'https://wavi.stream/api';
+import { API_BASE } from './config';
 const POLL_INTERVAL_MS = 5000;
 const MAX_CONCURRENT = 2;
 const RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000]; // 5s, 30s, 2m, 5m
