@@ -798,7 +798,11 @@ ipcMain.handle('share:createLink', async (_e, opts: {
 
 // Folders
 ipcMain.handle('folders:getAll', () => {
-  return store.get('watchedFolders', []);
+  const folders = store.get('watchedFolders', []) as string[];
+  // Filter out stale paths (e.g. deleted e2e test dirs) so UI stays clean
+  const existing = folders.filter(f => { try { return fs.statSync(f).isDirectory(); } catch { return false; } });
+  if (existing.length !== folders.length) store.set('watchedFolders', existing);
+  return existing;
 });
 
 ipcMain.handle('folders:discover', () => {
