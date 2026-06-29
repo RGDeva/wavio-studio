@@ -15,7 +15,7 @@ import { registerAbletonHandlers } from './ableton';
 import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
-import { API_BASE, logApiEnvironment } from './config';
+import { API_BASE, WEB_BASE, logApiEnvironment } from './config';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -952,12 +952,13 @@ ipcMain.handle('sync:now', () => { syncAgent?.retryFailed(); syncAgent?.tick?.()
 // Activity
 ipcMain.handle('activity:getAll', () => getActivityLog(100));
 
-// Shell — open external URL (restricted to wavi.stream)
+// Shell — open external URL (restricted to known hosts)
 ipcMain.handle('shell:openExternal', (_e, url: string) => {
   try {
     const parsed = new URL(url);
-    const allowed = ['wavi.stream', 'github.com', 'privy.io'];
-    if (parsed.protocol !== 'https:' || !allowed.some(h => parsed.hostname.endsWith(h))) return;
+    const webBaseHost = new URL(WEB_BASE).hostname;
+    const allowed = ['wavi.stream', 'github.com', 'privy.io', webBaseHost];
+    if (parsed.protocol !== 'https:' || !allowed.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`))) return;
     shell.openExternal(url);
   } catch { /* invalid URL */ }
 });
