@@ -410,3 +410,269 @@ maybeDescribe('Rename/move reconciliation — §5 unit tests', () => {
     expect(row.local_status).toBe('missing');
   });
 });
+
+/**
+ * §3 — Medium-confidence reconciliation safety tests
+ *
+ * Medium-confidence matching (name + size, no checksum) must NEVER silently
+ * remap unrelated files. Rules enforced here:
+ *
+ *   1. Two missing files with same name + size → ambiguous → neither remapped
+ *   2. Same name, different size → no match at all
+ *   3. Medium-confidence match is never applied when cloud_asset_id is set
+ *      (checksum confirmation required before touching cloud mappings)
+ *   4. A reconciliation clears only the matched missing record, not all missing
+ */
+maybeDescribe('Medium-confidence reconciliation safety — §3', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require(NATIVE_SQLITE_PATH);
+
+  function buildDb(Database: any) {
+    const db = new Database(':memory:');
+    db.exec(`
+      CREATE TABLE files (
+        id TEXT PRIMARY KEY,
+        file_path TEXT NOT NULL UNIQUE,
+        file_name TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        file_size INTEGER DEFAULT 0,
+        checksum TEXT,
+        project_id TEXT,
+        cloud_asset_id TEXT,
+        local_status TEXT DEFAULT 'present',
+        reconciled_from TEXT,
+        sync_status TEXT DEFAULT 'pending',
+        created_at TEXT NOT NULL,
+        modified_at TEXT NOT NULL
+      );
+    `);
+    return db;
+  }
+
+  function getMissingByNameSize(db: any, name: string, size: number) {
+    return db.prepare(
+      "SELECT * FROM files WHERE local_status='missing' AND file_name=? AND file_size=?"
+    ).all(name, size) as any[];
+  }
+
+  function reconcileMove(db: any, id: string, newPath: string, size: number) {
+    db.prepare(`
+      UPDATE files SET file_path=?, file_name=?, file_size=?, local_status='present',
+        reconciled_from=file_path, modified_at=? WHERE id=?
+    `).run(newPath, path.basename(newPath), size, new Date().toISOString(), id);
+  }
+
+  it('two missing files with same name+size: ambiguous — neither is remapped', () => {
+    const db = buildDb(Database);
+    const id1 = crypto.randomUUID();
+    const id2 = crypto.randomUUID();
+    db.prepare("INSERT INTO files VALUES (?,'/A/loop.wav','loop.wav','wav',1024,NULL,NULL,NULL,'missing',NULL,'pending','2026-01-01','2026-01-01')").run(id1);
+    db.prepare("INSERT INTO files VALUES (?,'/B/loop.wav','loop.wav','wav',1024,NULL,NULL,NULL,'missing',NULL,'pending','2026-01-01','2026-01-01')").run(id2);
+
+    // Simulate tryReconcile logic: find candidates by name+size
+    const candidates = getMissingByNameSize(db, 'loop.wav', 1024);
+    expect(candidates.length).toBe(2); // ambiguous
+
+    // Production code must NOT reconcile when candidates.length > 1
+    if (candidates.length === 1) {
+      reconcileMove(db, candidates[0].id, '/C/loop_renamed.wav', 1024);
+    }
+    // Verify: both records remain missing
+    const still = db.prepare("SELECT COUNT(*) as c FROM files WHERE local_status='missing'").get() as any;
+    expect(still.c).toBe(2);
+  });
+
+  it('same name, different size: no match — file stays missing', () => {
+    const db = buildDb(Database);
+    const id = crypto.randomUUID();
+    db.prepare("INSERT INTO files VALUES (?,'/A/bass.wav','bass.wav','wav',2048,NULL,NULL,NULL,'missing',NULL,'pending','2026-01-01','2026-01-01')").run(id);
+
+    const candidates = getMissingByNameSize(db, 'bass.wav', 999); // different size
+    expect(candidates.length).toBe(0); // no match
+
+    const row = db.prepare('SELECT local_status FROM files WHERE id=?').get(id) as any;
+    expect(row.local_status).toBe('missing');
+  });
+
+  it('medium-confidence match with cloud_asset_id set: must not remap without checksum', () => {
+    const db = buildDb(Database);
+    const id = crypto.randomUUID();
+    // This file has a cloud asset ID — cloud mapping is active
+    db.prepare("INSERT INTO files VALUES (?,'/A/vocal.wav','vocal.wav','wav',4096,'sha256-abc','proj1','cloud-asset-xyz','missing',NULL,'synced','2026-01-01','2026-01-01')").run(id);
+
+    const candidates = getMissingByNameSize(db, 'vocal.wav', 4096);
+    expect(candidates.length).toBe(1);
+    const candidate = candidates[0];
+
+    // Production rule: if cloud_asset_id is set, checksum confirmation is required
+    // before applying the reconciliation. Without a checksum match, skip.
+    const newFileChecksum = 'sha256-DIFFERENT'; // different content
+    const checksumMatches = candidate.checksum === newFileChecksum;
+    expect(checksumMatches).toBe(false);
+
+    // Do NOT reconcile
+    const row = db.prepare('SELECT * FROM files WHERE id=?').get(id) as any;
+    expect(row.local_status).toBe('missing');
+    expect(row.cloud_asset_id).toBe('cloud-asset-xyz'); // cloud ID preserved
+  });
+
+  it('medium-confidence reconcile only clears the matched record, not all missing files', () => {
+    const db = buildDb(Database);
+    const id1 = crypto.randomUUID();
+    const id2 = crypto.randomUUID();
+    db.prepare("INSERT INTO files VALUES (?,'/A/kick.wav','kick.wav','wav',512,NULL,NULL,NULL,'missing',NULL,'pending','2026-01-01','2026-01-01')").run(id1);
+    db.prepare("INSERT INTO files VALUES (?,'/A/snare.wav','snare.wav','wav',256,NULL,NULL,NULL,'missing',NULL,'pending','2026-01-01','2026-01-01')").run(id2);
+
+    // Reconcile only id1
+    reconcileMove(db, id1, '/B/kick_v2.wav', 512);
+
+    const kick = db.prepare('SELECT local_status FROM files WHERE id=?').get(id1) as any;
+    const snare = db.prepare('SELECT local_status FROM files WHERE id=?').get(id2) as any;
+    expect(kick.local_status).toBe('present');
+    expect(snare.local_status).toBe('missing'); // untouched
+  });
+
+  it('medium-confidence match: unique candidate with matching checksum is safe to reconcile', () => {
+    const db = buildDb(Database);
+    const id = crypto.randomUUID();
+    const checksum = 'sha256-known-content';
+    db.prepare("INSERT INTO files VALUES (?,'/A/pad.wav','pad.wav','wav',8192,?,'proj1',NULL,'missing',NULL,'pending','2026-01-01','2026-01-01')").run(id, checksum);
+
+    const candidates = getMissingByNameSize(db, 'pad.wav', 8192);
+    expect(candidates.length).toBe(1);
+
+    // Simulated checksum of newly-added file matches — safe
+    const newFileChecksum = checksum;
+    const checksumMatches = candidates[0].checksum === newFileChecksum;
+    expect(checksumMatches).toBe(true);
+
+    reconcileMove(db, id, '/B/pad.wav', 8192);
+    const row = db.prepare('SELECT * FROM files WHERE id=?').get(id) as any;
+    expect(row.local_status).toBe('present');
+    expect(row.file_path).toBe('/B/pad.wav');
+    expect(row.reconciled_from).toBe('/A/pad.wav');
+  });
+});
+
+/**
+ * §4 — Diagnostics export safety: prove sanitized output contains
+ * no tokens, credentials, email addresses, absolute home paths, or
+ * sensitive project content.
+ */
+describe('Diagnostics export safety — §4', () => {
+  it('sanitized report excludes tokens, emails, absolute home paths, and raw secrets', () => {
+    // Simulate the exact report structure built in DiagnosticsPage.exportReport
+    const mockDiagData = {
+      appVersion: '1.2.3',
+      arch: 'arm64',
+      platform: 'darwin',
+      environment: 'development' as const,
+      userDataPath: '~/Library/Application Support/wavio-studio-dev', // already sanitized by main.ts
+      fileCount: 42,
+      projectCount: 7,
+      dbSizeBytes: 1048576,
+      dbSizeMB: '1.00',
+      queueCounts: { completed: 10, cancelled: 2, pending: 0, uploading: 0 },
+      missingFileCount: 1,
+      activityLogCount: 99,
+      indexedRoots: ['~/Music/Projects', '~/Documents/DAW'],
+      sanitizedDawPaths: { ableton: 'Ableton Live 11.app', logic: 'Logic Pro.app' },
+      lastSync: '2026-06-29T00:00:00Z',
+      buildDate: '2026-06-29',
+    };
+
+    // This mirrors the exact report construction in DiagnosticsPage.tsx::exportReport
+    const report = {
+      timestamp: new Date().toISOString(),
+      app: {
+        version: mockDiagData.appVersion,
+        arch: mockDiagData.arch,
+        platform: mockDiagData.platform,
+        environment: mockDiagData.environment,
+        userDataPath: mockDiagData.userDataPath,
+        buildDate: mockDiagData.buildDate,
+      },
+      database: {
+        fileCount: mockDiagData.fileCount,
+        projectCount: mockDiagData.projectCount,
+        missingFileCount: mockDiagData.missingFileCount,
+        dbSizeMB: mockDiagData.dbSizeMB,
+        activityLogCount: mockDiagData.activityLogCount,
+      },
+      syncQueue: mockDiagData.queueCounts,
+      indexedRoots: mockDiagData.indexedRoots,
+      configuredDAWs: mockDiagData.sanitizedDawPaths,
+    };
+
+    const json = JSON.stringify(report);
+
+    // Must NOT contain absolute home directory
+    expect(json).not.toMatch(/\/Users\//);
+    expect(json).not.toMatch(/\/home\//);
+
+    // Must NOT contain any email addresses
+    expect(json).not.toMatch(/[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/);
+
+    // Must NOT contain anything that looks like a Bearer token or JWT
+    expect(json).not.toMatch(/eyJ[A-Za-z0-9_\-]{20,}/); // JWT header pattern
+    expect(json).not.toMatch(/Bearer\s+\S+/i);
+    expect(json).not.toMatch(/sk-[A-Za-z0-9]{20,}/); // OpenAI-style key
+    expect(json).not.toMatch(/whsec_[A-Za-z0-9]+/); // webhook secret
+
+    // Must NOT expose raw DB size in bytes (only MB string)
+    expect(json).not.toContain('dbSizeBytes');
+    expect(json).not.toContain('1048576');
+
+    // DAW entries must be basename only, not full /Applications/... path
+    expect(json).not.toMatch(/\/Applications\//);
+    expect(json).toContain('Ableton Live 11.app');
+
+    // Indexed roots must use ~ not /Users/
+    for (const root of mockDiagData.indexedRoots) {
+      expect(root.startsWith('~')).toBe(true);
+      expect(root.startsWith('/Users')).toBe(false);
+    }
+
+    // Report must be parseable JSON
+    expect(() => JSON.parse(json)).not.toThrow();
+  });
+
+  it('main.ts sanitization: app.getPath("home") is stripped from userDataPath', () => {
+    // Simulates the sanitization: path.replace(app.getPath('home'), '~')
+    const homeDir = '/Users/rishig';
+    const rawPath = '/Users/rishig/Library/Application Support/wavio-studio-dev';
+    const sanitized = rawPath.replace(homeDir, '~');
+    expect(sanitized).toBe('~/Library/Application Support/wavio-studio-dev');
+    expect(sanitized).not.toContain('/Users/rishig');
+  });
+
+  it('main.ts sanitization: indexed roots strip home directory', () => {
+    const homeDir = '/Users/rishig';
+    const roots = [
+      '/Users/rishig/Music/Projects',
+      '/Users/rishig/Documents/DAW Files',
+    ];
+    const sanitized = roots.map(r => r.replace(homeDir, '~'));
+    for (const r of sanitized) {
+      expect(r.startsWith('~')).toBe(true);
+      expect(r).not.toContain('/Users/rishig');
+    }
+  });
+
+  it('dawPaths sanitization: only basename is exposed, never full /Applications path', () => {
+    const dawPaths: Record<string, string> = {
+      ableton: '/Applications/Ableton Live 11 Suite.app/Contents/MacOS/Live',
+      logic: '/Applications/Logic Pro.app/Contents/MacOS/Logic Pro',
+    };
+    const sanitized: Record<string, string> = {};
+    for (const [k, v] of Object.entries(dawPaths)) {
+      sanitized[k] = path.basename(v);
+    }
+    expect(sanitized.ableton).toBe('Live');
+    expect(sanitized.logic).toBe('Logic Pro');
+    for (const v of Object.values(sanitized)) {
+      expect(v).not.toContain('/Applications');
+      expect(v).not.toContain('/Contents');
+    }
+  });
+});

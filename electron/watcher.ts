@@ -675,7 +675,14 @@ export class WatcherManager {
     }
 
     // Medium path: match by filename + size (no checksum yet)
-    const byNameSize = missing.filter(m => path.basename(m.file_path) === newName && m.file_size === stats.size);
+    // Safety rule: if the candidate has a cloud_asset_id, skip medium-confidence
+    // reconciliation — checksum confirmation is required before touching any cloud
+    // mapping. The file will remain 'missing' until a high-confidence match arrives.
+    const byNameSize = missing.filter(m =>
+      path.basename(m.file_path) === newName &&
+      m.file_size === stats.size &&
+      !m.cloud_asset_id  // never remap cloud-linked files without checksum proof
+    );
     if (byNameSize.length === 1) {
       const candidate = byNameSize[0];
       reconcileMovedFile({ id: candidate.id, newPath, newSize: stats.size, newMtime: stats.mtime.toISOString() });
