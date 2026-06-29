@@ -235,6 +235,33 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)'); } catch {}
 
+  // Trim runaway tables that cause slow WAL recovery (observed: 100k+ sync_queue rows → 25s startup)
+  // Keep only recent records to bound DB size. Uses DELETE with rowid ordering (fast).
+  try {
+    const MAX_SYNC_QUEUE = 5_000;
+    const sqCount = (db.prepare('SELECT COUNT(*) as c FROM sync_queue').get() as { c: number }).c;
+    if (sqCount > MAX_SYNC_QUEUE) {
+      db.exec(`
+        DELETE FROM sync_queue WHERE id IN (
+          SELECT id FROM sync_queue ORDER BY created_at ASC LIMIT ${sqCount - MAX_SYNC_QUEUE}
+        )
+      `);
+      db.exec('VACUUM');
+    }
+  } catch { /* table may not exist on first migration */ }
+
+  try {
+    const MAX_ACTIVITY_LOG = 10_000;
+    const alCount = (db.prepare('SELECT COUNT(*) as c FROM activity_log').get() as { c: number }).c;
+    if (alCount > MAX_ACTIVITY_LOG) {
+      db.exec(`
+        DELETE FROM activity_log WHERE id IN (
+          SELECT id FROM activity_log ORDER BY created_at ASC LIMIT ${alCount - MAX_ACTIVITY_LOG}
+        )
+      `);
+    }
+  } catch {}
+
   db = instance;
   return instance;
 }
