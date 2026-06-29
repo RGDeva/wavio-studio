@@ -464,6 +464,44 @@ export class SyncAgent {
       } catch {}
     }
 
+    // Immutable version bump: if this WAV file was previously registered (has cloud_asset_id)
+    // and its content changed (new checksum), create a new project_version so each
+    // bounce revision gets its own immutable snapshot.
+    if (file.cloud_asset_id && cloudProjectId && cloudVersionId) {
+      try {
+        const bumpRes = await fetchWithTimeout(`${API_BASE}/desktop/index`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${this.authToken}`,
+            'X-Desktop-Action': 'daw-sync',
+          },
+          body: JSON.stringify({
+            projectName: projectName ?? path.basename(file.file_path, path.extname(file.file_path)),
+            fileName: file.file_name,
+            localProjectId: item.project_id !== '__standalone__' ? item.project_id : undefined,
+            daw: daw ?? null,
+            fileSize: stats.size,
+            lastModified: new Date().toISOString(),
+            // Prefix distinguishes WAV-triggered versions from DAW-file versions.
+            // sha256 dedup in daw-sync ensures identical bounces don't create duplicate versions.
+            sha256: `bounce:${file.checksum ?? presignData.storageKey}`,
+          }),
+        });
+        if (bumpRes.ok) {
+          const bumpData = await bumpRes.json();
+          const newVersionId: string | null = bumpData.projectVersionId ?? null;
+          if (newVersionId && newVersionId !== cloudVersionId) {
+            cloudVersionId = newVersionId;
+            updateProjectSyncStatus(item.project_id, 'synced', cloudProjectId, newVersionId);
+            console.log(`[syncAgent] WAV revision → new project version: ${newVersionId}`);
+          }
+        }
+      } catch (bumpErr: any) {
+        console.warn('[syncAgent] WAV version bump failed (non-fatal):', bumpErr?.message);
+      }
+    }
+
     const registerRes = await fetchWithTimeout(`${API_BASE}/desktop/index`, {
       method: 'POST',
       headers: {

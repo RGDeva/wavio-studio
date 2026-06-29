@@ -213,31 +213,20 @@ app.whenReady().then(async () => {
   // Initialize Sentry error tracking (async to avoid blocking)
   initSentry().catch(() => {});
 
-  // Show window immediately BEFORE any blocking initialization
-  // This prevents the "loading spinner of death" from main thread blocking
-  createTray();
-  createWindow();
-
-  // Defer heavy initialization to next tick so window can render
-  await new Promise<void>(resolve => setImmediate(resolve));
-
   // E2E isolation mode
   if (process.env.WAVI_E2E === '1') {
     console.warn('[E2E] Isolated test mode: DB=wavio-studio-e2e.db, watching only E2E folder');
   }
 
-  // Init database (this blocks the main thread - must happen after window show)
+  // Step 1-3: Initialize DB + run all schema migrations synchronously.
+  // better-sqlite3 is fast (<100ms on existing DBs) so we do this before showing
+  // the window — that way any IPC calls the renderer fires at mount time are safe.
   mainLog('Initializing database...');
   const t0 = Date.now();
   const db = initDatabase({ dbName: process.env.WAVI_E2E === '1' ? 'wavio-studio-e2e.db' : 'wavio-studio.db' });
   mainLog(`Database initialized in ${Date.now() - t0}ms`);
 
-  // Notify renderer that DB is ready
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('main:ready');
-  }
-
-  // Init watcher manager with safe IPC sender
+  // Step 4: Initialize watcher manager with safe IPC sender
   watcherManager = new WatcherManager(db, (event) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       try {
@@ -287,11 +276,22 @@ app.whenReady().then(async () => {
     }
   }
 
-  // Start services — all folder scanning deferred below
+  // Step 4 (cont): Start services — all folder scanning deferred below
   syncAgent.start();
   initCopilot(store);
   registerAbletonHandlers();
   startBridgeServer();
+
+  // Steps 6-7: Create window after DB + services are ready — eliminates IPC race
+  // where renderer fires projects:getAll before initDatabase() completed.
+  createTray();
+  createWindow();
+  // Notify renderer once the page finishes loading (DB is already initialized above)
+  mainWindow?.webContents.once('did-finish-load', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('main:ready');
+    }
+  });
 
   // MuseHub SDK — initialize if launched from MuseHub
   if (initMuseSdk()) {

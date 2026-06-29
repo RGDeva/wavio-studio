@@ -411,6 +411,15 @@ export class WatcherManager {
 
     // Async analysis pipeline — does not block watcher or upload queue
     fileChecksum(filePath).then(async (checksum) => {
+      // Pre-enqueue hash guard: if the file content is unchanged and already uploaded,
+      // skip all processing. Mtime-only touches produce zero network activity.
+      const existingRow = this.db
+        .prepare('SELECT checksum, sync_status, cloud_asset_id FROM files WHERE file_path = ?')
+        .get(filePath) as { checksum: string; sync_status: string; cloud_asset_id: string } | undefined;
+      if (existingRow?.cloud_asset_id && existingRow.checksum === checksum) {
+        return; // same content, already registered — nothing to do
+      }
+
       let bpm: number | null = null;
       let key_note: string | null = null;
       let duration: number | null = null;
