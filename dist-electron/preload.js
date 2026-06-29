@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
 const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress']);
-const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths']);
+const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths', 'folderScanMeta']);
 electron_1.contextBridge.exposeInMainWorld('waviAPI', {
     // Auth
     auth: {
@@ -18,6 +18,12 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
         remove: (folderPath) => electron_1.ipcRenderer.invoke('folders:remove', folderPath),
         discover: () => electron_1.ipcRenderer.invoke('folders:discover'),
         addPath: (folderPath) => electron_1.ipcRenderer.invoke('folders:addPath', folderPath),
+        rescan: (folderPath) => electron_1.ipcRenderer.invoke('folders:rescan', folderPath),
+        scanMeta: () => electron_1.ipcRenderer.invoke('folders:scanMeta'),
+        fileCounts: () => electron_1.ipcRenderer.invoke('folders:fileCounts'),
+        excludePath: (subPath) => electron_1.ipcRenderer.invoke('folders:excludePath', subPath),
+        getExcluded: () => electron_1.ipcRenderer.invoke('folders:getExcluded'),
+        unexcludePath: (subPath) => electron_1.ipcRenderer.invoke('folders:unexcludePath', subPath),
     },
     // Projects
     projects: {

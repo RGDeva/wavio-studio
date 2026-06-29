@@ -838,7 +838,78 @@ ipcMain.handle('folders:remove', (_e, folderPath: string) => {
   const folders = store.get('watchedFolders', []) as string[];
   const updated = folders.filter((f) => f !== folderPath);
   store.set('watchedFolders', updated);
+  // Also remove from excluded paths for this folder
+  const excluded = store.get('excludedPaths', []) as string[];
+  store.set('excludedPaths', excluded.filter((e) => !e.startsWith(folderPath)));
   watcherManager?.removeFolder(folderPath);
+});
+
+// Per-folder rescan: run discoverAudioFiles scoped to a single root
+ipcMain.handle('folders:rescan', async (_e, folderPath: string) => {
+  if (discoveryAbortSignal) discoveryAbortSignal.aborted = true;
+  const signal = { aborted: false };
+  discoveryAbortSignal = signal;
+
+  const excluded = store.get('excludedPaths', []) as string[];
+  const startMs = Date.now();
+  let imported = 0;
+  let duplicates = 0;
+
+  const { paths, result } = await discoverAudioFiles(
+    { roots: [folderPath], extraRoots: [], excludePaths: excluded, maxFiles: 50_000, maxDurationMs: 120_000, signal },
+    (progress) => { mainWindow?.webContents.send('discovery:progress', progress); },
+  );
+
+  for (const p of paths) {
+    if (signal.aborted) break;
+    if (await checkFileExists(p)) { duplicates++; } else { if (await importAudioFile(p)) imported++; }
+  }
+
+  discoveryAbortSignal = null;
+  const durationMs = Date.now() - startMs;
+
+  // Persist last-scanned timestamp and file count for this folder
+  const scanMeta = store.get('folderScanMeta', {}) as Record<string, { lastScanned: string; fileCount: number }>;
+  scanMeta[folderPath] = { lastScanned: new Date().toISOString(), fileCount: result.found };
+  store.set('folderScanMeta', scanMeta);
+
+  mainWindow?.webContents.send('discovery:progress', { phase: 'done', found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors });
+  return { found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors, durationMs, cancelled: signal.aborted };
+});
+
+// Folder scan metadata (last scanned, file count)
+ipcMain.handle('folders:scanMeta', () => {
+  return store.get('folderScanMeta', {});
+});
+
+// Exclude a subfolder from future scans
+ipcMain.handle('folders:excludePath', (_e, subPath: string) => {
+  const excluded = store.get('excludedPaths', []) as string[];
+  if (!excluded.includes(subPath)) {
+    excluded.push(subPath);
+    store.set('excludedPaths', excluded);
+  }
+});
+
+ipcMain.handle('folders:getExcluded', () => store.get('excludedPaths', []));
+
+ipcMain.handle('folders:unexcludePath', (_e, subPath: string) => {
+  const excluded = store.get('excludedPaths', []) as string[];
+  store.set('excludedPaths', excluded.filter((e) => e !== subPath));
+});
+
+// File count per indexed folder (fast — counts from DB)
+ipcMain.handle('folders:fileCounts', () => {
+  try {
+    const db = require('./db').getDb() as import('better-sqlite3').Database;
+    const folders = store.get('watchedFolders', []) as string[];
+    const counts: Record<string, number> = {};
+    for (const folder of folders) {
+      const row = db.prepare("SELECT COUNT(*) as c FROM files WHERE file_path LIKE ?").get(folder + '%') as any;
+      counts[folder] = row?.c ?? 0;
+    }
+    return counts;
+  } catch { return {}; }
 });
 
 // Projects

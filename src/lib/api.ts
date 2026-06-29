@@ -21,6 +21,12 @@ export interface WaviAPI {
     remove: (folderPath: string) => Promise<void>;
     discover: () => Promise<string[]>;
     addPath: (folderPath: string) => Promise<string>;
+    rescan: (folderPath: string) => Promise<{ found: number; imported: number; duplicates: number; scanned: number; durationMs: number; cancelled: boolean }>;
+    scanMeta: () => Promise<Record<string, { lastScanned: string; fileCount: number }>>;
+    fileCounts: () => Promise<Record<string, number>>;
+    excludePath: (subPath: string) => Promise<void>;
+    getExcluded: () => Promise<string[]>;
+    unexcludePath: (subPath: string) => Promise<void>;
   };
   projects: {
     getAll: () => Promise<any[]>;
@@ -115,7 +121,7 @@ const _noop = () => Promise.resolve(null as any);
 const _stub: WaviAPI = {
   auth: { getToken: _noop, setToken: _noop, clearToken: _noop },
   copilot: { toggle: _noop, getContext: _noop, chat: _noop },
-  folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop },
+  folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop, rescan: _noop, scanMeta: () => Promise.resolve({}), fileCounts: () => Promise.resolve({}), excludePath: _noop, getExcluded: () => Promise.resolve([]), unexcludePath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
   files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]), discoverAll: () => Promise.resolve({ found: 0, imported: 0, duplicates: 0, scanned: 0, permissionErrors: 0, durationMs: 0, cancelled: false, limitReached: false }), discoverCancel: _noop, defaultDiscoveryRoots: () => Promise.resolve([]) },
   sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },

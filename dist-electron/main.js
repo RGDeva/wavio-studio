@@ -875,7 +875,74 @@ electron_1.ipcMain.handle('folders:remove', (_e, folderPath) => {
     const folders = store.get('watchedFolders', []);
     const updated = folders.filter((f) => f !== folderPath);
     store.set('watchedFolders', updated);
+    // Also remove from excluded paths for this folder
+    const excluded = store.get('excludedPaths', []);
+    store.set('excludedPaths', excluded.filter((e) => !e.startsWith(folderPath)));
     watcherManager?.removeFolder(folderPath);
+});
+// Per-folder rescan: run discoverAudioFiles scoped to a single root
+electron_1.ipcMain.handle('folders:rescan', async (_e, folderPath) => {
+    if (discoveryAbortSignal)
+        discoveryAbortSignal.aborted = true;
+    const signal = { aborted: false };
+    discoveryAbortSignal = signal;
+    const excluded = store.get('excludedPaths', []);
+    const startMs = Date.now();
+    let imported = 0;
+    let duplicates = 0;
+    const { paths, result } = await (0, discovery_1.discoverAudioFiles)({ roots: [folderPath], extraRoots: [], excludePaths: excluded, maxFiles: 50000, maxDurationMs: 120000, signal }, (progress) => { mainWindow?.webContents.send('discovery:progress', progress); });
+    for (const p of paths) {
+        if (signal.aborted)
+            break;
+        if (await checkFileExists(p)) {
+            duplicates++;
+        }
+        else {
+            if (await importAudioFile(p))
+                imported++;
+        }
+    }
+    discoveryAbortSignal = null;
+    const durationMs = Date.now() - startMs;
+    // Persist last-scanned timestamp and file count for this folder
+    const scanMeta = store.get('folderScanMeta', {});
+    scanMeta[folderPath] = { lastScanned: new Date().toISOString(), fileCount: result.found };
+    store.set('folderScanMeta', scanMeta);
+    mainWindow?.webContents.send('discovery:progress', { phase: 'done', found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors });
+    return { found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors, durationMs, cancelled: signal.aborted };
+});
+// Folder scan metadata (last scanned, file count)
+electron_1.ipcMain.handle('folders:scanMeta', () => {
+    return store.get('folderScanMeta', {});
+});
+// Exclude a subfolder from future scans
+electron_1.ipcMain.handle('folders:excludePath', (_e, subPath) => {
+    const excluded = store.get('excludedPaths', []);
+    if (!excluded.includes(subPath)) {
+        excluded.push(subPath);
+        store.set('excludedPaths', excluded);
+    }
+});
+electron_1.ipcMain.handle('folders:getExcluded', () => store.get('excludedPaths', []));
+electron_1.ipcMain.handle('folders:unexcludePath', (_e, subPath) => {
+    const excluded = store.get('excludedPaths', []);
+    store.set('excludedPaths', excluded.filter((e) => e !== subPath));
+});
+// File count per indexed folder (fast — counts from DB)
+electron_1.ipcMain.handle('folders:fileCounts', () => {
+    try {
+        const db = require('./db').getDb();
+        const folders = store.get('watchedFolders', []);
+        const counts = {};
+        for (const folder of folders) {
+            const row = db.prepare("SELECT COUNT(*) as c FROM files WHERE file_path LIKE ?").get(folder + '%');
+            counts[folder] = row?.c ?? 0;
+        }
+        return counts;
+    }
+    catch {
+        return {};
+    }
 });
 // Projects
 electron_1.ipcMain.handle('projects:getAll', () => (0, db_1.getProjects)());
