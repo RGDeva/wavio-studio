@@ -133,6 +133,19 @@ let syncAgent = null;
 let tray = null;
 let _trayRebuildTimer = null;
 const isDev = process.env.NODE_ENV === 'development' || !electron_1.app.isPackaged;
+// ── Dev / prod data isolation ─────────────────────────────────────────────────
+// MUST happen before app.whenReady() — Electron resolves userData from appName
+// at first access. Changing the name here routes dev to a separate directory:
+//   production: ~/Library/Application Support/wavio-studio
+//   dev:        ~/Library/Application Support/wavio-studio-dev
+//
+// This prevents dev builds from polluting the production DB, watched folders,
+// auth tokens, and settings — and prevents prod from seeing dev test data.
+if (isDev) {
+    // app.name must be set before any call to app.getPath('userData').
+    // electron-store reads userData during construction, so this runs first.
+    electron_1.app.setName('wavio-studio-dev');
+}
 function createWindow() {
     mainWindow = new electron_1.BrowserWindow({
         width: 1280,
@@ -156,7 +169,8 @@ function createWindow() {
             callback({
                 responseHeaders: {
                     ...details.responseHeaders,
-                    'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://wavi.stream https://*.supabase.co wss://*.supabase.co; img-src 'self' data: https:; media-src 'self' https: blob:; font-src 'self' data:;"]
+                    // http://127.0.0.1:47821 = local bridge server (health checks from renderer)
+                    'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://wavi.stream https://*.supabase.co wss://*.supabase.co http://127.0.0.1:47821; img-src 'self' data: https:; media-src 'self' https: blob:; font-src 'self' data:;"]
                 }
             });
         });
@@ -830,7 +844,59 @@ electron_1.ipcMain.handle('share:createLink', async (_e, opts) => {
         }
         const data = await res.json();
         (0, db_1.logActivity)({ id: crypto_1.default.randomUUID(), type: 'share_link_created', message: `Share link: ${data.shareUrl}` });
+        if (opts.projectId) {
+            const { updateProjectShareInfo } = require('./db');
+            updateProjectShareInfo(opts.projectId, data.shareUrl, data.trackingId);
+        }
         return { shareUrl: data.shareUrl, trackingId: data.trackingId, reused: data.reused };
+    }
+    catch (e) {
+        captureException(e);
+        return { error: e?.message ?? 'Unknown error' };
+    }
+});
+electron_1.ipcMain.handle('share:revokeLink', async (_e, opts) => {
+    const storedRaw = store.get('authToken', null);
+    if (!storedRaw)
+        return { error: 'Not authenticated' };
+    let token;
+    try {
+        token = electron_1.safeStorage.isEncryptionAvailable()
+            ? electron_1.safeStorage.decryptString(Buffer.from(storedRaw, 'base64'))
+            : storedRaw;
+    }
+    catch {
+        return { error: 'Token decrypt failed' };
+    }
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        let res;
+        try {
+            res = await fetch(`${config_1.API_BASE}/desktop/index`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                    'X-Desktop-Action': 'revoke-share-link',
+                },
+                body: JSON.stringify({ trackingId: opts.trackingId }),
+                signal: controller.signal,
+            });
+        }
+        finally {
+            clearTimeout(timer);
+        }
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            return { error: body?.error ?? `HTTP ${res.status}` };
+        }
+        (0, db_1.logActivity)({ id: crypto_1.default.randomUUID(), type: 'share_link_revoked', message: `Revoked link: ${opts.trackingId}` });
+        if (opts.projectId) {
+            const { updateProjectShareInfo } = require('./db');
+            updateProjectShareInfo(opts.projectId, null, null);
+        }
+        return { success: true };
     }
     catch (e) {
         captureException(e);
@@ -839,7 +905,17 @@ electron_1.ipcMain.handle('share:createLink', async (_e, opts) => {
 });
 // Folders
 electron_1.ipcMain.handle('folders:getAll', () => {
-    return store.get('watchedFolders', []);
+    const folders = store.get('watchedFolders', []);
+    // Filter out stale paths (e.g. deleted e2e test dirs) so UI stays clean
+    const existing = folders.filter(f => { try {
+        return fs_1.default.statSync(f).isDirectory();
+    }
+    catch {
+        return false;
+    } });
+    if (existing.length !== folders.length)
+        store.set('watchedFolders', existing);
+    return existing;
 });
 electron_1.ipcMain.handle('folders:discover', () => {
     return new Promise((resolve) => {
@@ -1244,6 +1320,31 @@ electron_1.ipcMain.handle('shell:pickApp', async () => {
         defaultPath: process.platform === 'darwin' ? '/Applications' : 'C:\\Program Files',
     });
     return result.canceled ? null : result.filePaths[0];
+});
+// Diagnostics
+electron_1.ipcMain.handle('diagnostics:get', () => {
+    const { getDiagnostics } = require('./db');
+    const diag = getDiagnostics();
+    const config = store.store; // electron-store's full plain-object copy
+    // Sanitize: remove auth tokens, full paths in dawPaths (show basename only)
+    const dawPaths = config.dawPaths ?? {};
+    const sanitizedDawPaths = {};
+    for (const [k, v] of Object.entries(dawPaths)) {
+        sanitizedDawPaths[k] = typeof v === 'string' ? path_1.default.basename(v) : '';
+    }
+    return {
+        appVersion: electron_1.app.getVersion(),
+        arch: process.arch,
+        platform: process.platform,
+        environment: isDev ? 'development' : 'production',
+        userDataPath: electron_1.app.getPath('userData').replace(electron_1.app.getPath('home'), '~'),
+        ...diag,
+        dbSizeMB: (diag.dbSizeBytes / (1024 * 1024)).toFixed(2),
+        indexedRoots: (config.watchedFolders ?? []).map((f) => f.replace(electron_1.app.getPath('home'), '~')),
+        sanitizedDawPaths,
+        lastSync: config.lastSync ?? null,
+        buildDate: new Date().toISOString().slice(0, 10),
+    };
 });
 // Settings
 electron_1.ipcMain.handle('settings:get', (_e, key) => store.get(key));

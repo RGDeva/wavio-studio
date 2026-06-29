@@ -6,13 +6,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDb = getDb;
 exports.initDatabaseForTesting = initDatabaseForTesting;
 exports.initDatabase = initDatabase;
+exports.getSyncQueueCounts = getSyncQueueCounts;
 exports.upsertProject = upsertProject;
 exports.getProjects = getProjects;
 exports.getProjectById = getProjectById;
 exports.updateProjectSyncStatus = updateProjectSyncStatus;
+exports.updateProjectShareInfo = updateProjectShareInfo;
 exports.upsertStandaloneFile = upsertStandaloneFile;
 exports.upsertFile = upsertFile;
 exports.getFilesByProject = getFilesByProject;
+exports.findProjectForDirectory = findProjectForDirectory;
+exports.associateUnclaimedFilesInDirectory = associateUnclaimedFilesInDirectory;
 exports.getFileById = getFileById;
 exports.getFileByPath = getFileByPath;
 exports.getAllFiles = getAllFiles;
@@ -46,6 +50,11 @@ exports.undoAssociation = undoAssociation;
 exports.enqueueAssociation = enqueueAssociation;
 exports.getPendingAssociations = getPendingAssociations;
 exports.resolveAssociationQueue = resolveAssociationQueue;
+exports.markFileMissing = markFileMissing;
+exports.getMissingFiles = getMissingFiles;
+exports.reconcileMovedFile = reconcileMovedFile;
+exports.markFilePresent = markFilePresent;
+exports.getDiagnostics = getDiagnostics;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const path_1 = __importDefault(require("path"));
 const electron_1 = require("electron");
@@ -138,6 +147,17 @@ function _initDatabaseAtPath(dbPath) {
         db.exec('ALTER TABLE projects ADD COLUMN cloud_version_id TEXT');
     }
     catch { /* already exists */ }
+    // Rename/move reconciliation: track files that have gone missing so UI can show them
+    // and reconciliation logic can relink them if they reappear at a new path.
+    try {
+        db.exec("ALTER TABLE files ADD COLUMN local_status TEXT DEFAULT 'present'");
+    }
+    catch { /* already exists */ }
+    // Reconciliation: stores the new path after a confident rename/move match
+    try {
+        db.exec('ALTER TABLE files ADD COLUMN reconciled_from TEXT');
+    }
+    catch { /* already exists */ }
     // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
     // so they are treated as unknown and rehashed on next access rather than silently mismatching
     try {
@@ -214,6 +234,14 @@ function _initDatabaseAtPath(dbPath) {
     catch { /* already exists */ }
     try {
         db.exec('ALTER TABLE files ADD COLUMN classification_version INTEGER DEFAULT 0');
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('ALTER TABLE projects ADD COLUMN share_url TEXT');
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('ALTER TABLE projects ADD COLUMN tracking_id TEXT');
     }
     catch { /* already exists */ }
     // ── Phase 1: Association tables ─────────────────────────────────────────
@@ -358,8 +386,103 @@ function _initDatabaseAtPath(dbPath) {
         db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)');
     }
     catch { }
+    // ── Startup maintenance ───────────────────────────────────────────────────────
+    // Keeps the WAL small so cold-start recovery stays fast.
+    // Rules designed to be crash-safe:
+    //  1. Crash recovery (reset 'uploading'/'starting' → 'pending') runs FIRST so no
+    //     active work exists in terminal states before we prune.
+    //  2. We only delete TERMINAL rows (completed, cancelled) — never pending/uploading/
+    //     retrying/confirming rows that represent real work.
+    //  3. VACUUM only runs when the page-count drops meaningfully (>20% reduction
+    //     available), avoiding the full-file-rewrite cost on every startup.
+    //  4. A WAL checkpoint is issued instead of VACUUM when the WAL is large but the
+    //     DB itself is not bloated.
+    //
+    // Thresholds (documented):
+    //   SYNC_QUEUE_TERMINAL_KEEP  – keep this many recent completed/cancelled rows
+    //   ACTIVITY_LOG_KEEP         – keep this many recent activity entries
+    //   VACUUM_MIN_PAGES_FREED    – only VACUUM when this many pages can be reclaimed
+    const SYNC_QUEUE_TERMINAL_KEEP = 2000;
+    const ACTIVITY_LOG_KEEP = 5000;
+    const VACUUM_MIN_PAGES_FREED = 500; // ~2MB at 4KB page size
+    // Step 1: crash recovery — reset jobs stuck in transient states from a prior crash
+    try {
+        db.exec(`
+      UPDATE sync_queue
+      SET status = 'pending', started_at = NULL
+      WHERE status IN ('uploading', 'starting')
+    `);
+    }
+    catch { /* table not yet created on very first run */ }
+    // Step 2: prune only TERMINAL sync_queue rows
+    let syncPruned = 0;
+    try {
+        const terminalCount = db.prepare("SELECT COUNT(*) as c FROM sync_queue WHERE status IN ('completed','cancelled')").get().c;
+        if (terminalCount > SYNC_QUEUE_TERMINAL_KEEP) {
+            const toDelete = terminalCount - SYNC_QUEUE_TERMINAL_KEEP;
+            const result = db.prepare(`
+        DELETE FROM sync_queue
+        WHERE id IN (
+          SELECT id FROM sync_queue
+          WHERE status IN ('completed','cancelled')
+          ORDER BY created_at ASC
+          LIMIT ?
+        )
+      `).run(toDelete);
+            syncPruned = result.changes;
+        }
+    }
+    catch { /* table may not exist on first migration */ }
+    // Step 3: prune old activity_log rows (all are terminal by definition)
+    let actPruned = 0;
+    try {
+        const alCount = db.prepare('SELECT COUNT(*) as c FROM activity_log').get().c;
+        if (alCount > ACTIVITY_LOG_KEEP) {
+            const toDelete = alCount - ACTIVITY_LOG_KEEP;
+            const result = db.prepare(`
+        DELETE FROM activity_log
+        WHERE id IN (
+          SELECT id FROM activity_log
+          ORDER BY created_at ASC
+          LIMIT ?
+        )
+      `).run(toDelete);
+            actPruned = result.changes;
+        }
+    }
+    catch { }
+    // Step 4: WAL checkpoint (non-blocking PASSIVE mode) — returns WAL pages to the DB file
+    // This is cheap and should run whenever we've done any writes above.
+    if (syncPruned > 0 || actPruned > 0) {
+        try {
+            db.pragma('wal_checkpoint(PASSIVE)');
+        }
+        catch { }
+    }
+    // Step 5: VACUUM only when meaningful space can be reclaimed
+    // Check freelist_count (pages already freed inside the DB file) to decide.
+    try {
+        const freelistPages = db.pragma('freelist_count')[0]?.freelist_count ?? 0;
+        if (freelistPages >= VACUUM_MIN_PAGES_FREED) {
+            db.exec('VACUUM');
+        }
+    }
+    catch { }
+    // Log maintenance results (visible in main.log for support)
+    if (syncPruned > 0 || actPruned > 0) {
+        console.info(`[db] startup maintenance: pruned ${syncPruned} terminal sync_queue rows,` +
+            ` ${actPruned} activity_log rows`);
+    }
     db = instance;
     return instance;
+}
+/** Returns queue counts by status — used by diagnostics page and maintenance tests. */
+function getSyncQueueCounts() {
+    const rows = db.prepare('SELECT status, COUNT(*) as c FROM sync_queue GROUP BY status').all();
+    const result = {};
+    for (const r of rows)
+        result[r.status] = r.c;
+    return result;
 }
 // ── Projects ──────────────────────────────────────────────────────────────────
 function upsertProject(project) {
@@ -384,6 +507,9 @@ function updateProjectSyncStatus(id, status, cloudId, cloudVersionId) {
     db.prepare(`
     UPDATE projects SET sync_status = ?, cloud_id = ?, cloud_version_id = ?, last_synced_at = ? WHERE id = ?
   `).run(status, cloudId ?? null, cloudVersionId ?? null, new Date().toISOString(), id);
+}
+function updateProjectShareInfo(id, shareUrl, trackingId) {
+    db.prepare('UPDATE projects SET share_url = ?, tracking_id = ? WHERE id = ?').run(shareUrl, trackingId, id);
 }
 // ── Files ─────────────────────────────────────────────────────────────────────
 function upsertStandaloneFile(file) {
@@ -411,6 +537,7 @@ function upsertFile(file) {
     INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at)
     VALUES (@id, @project_id, @file_path, @file_name, @file_type, @file_size, @checksum, @bpm, @key_note, @duration, @role, @created_at, @modified_at)
     ON CONFLICT(file_path) DO UPDATE SET
+      project_id = COALESCE(files.project_id, excluded.project_id),
       file_size = excluded.file_size,
       checksum = excluded.checksum,
       bpm = COALESCE(excluded.bpm, files.bpm),
@@ -423,6 +550,35 @@ function upsertFile(file) {
 }
 function getFilesByProject(projectId) {
     return db.prepare('SELECT * FROM files WHERE project_id = ? ORDER BY file_type, file_name').all(projectId);
+}
+/**
+ * Find the project whose file lives directly inside `dir` (not in a subdirectory of it).
+ * Used by the watcher to look up projects from the DB when projectMap misses.
+ */
+function findProjectForDirectory(dir) {
+    const rows = db.prepare('SELECT id, file_path FROM projects').all();
+    return rows.find(r => path_1.default.dirname(r.file_path) === dir);
+}
+/**
+ * Associate every file currently in `dir` (or its subdirectories) that has no
+ * project_id with the given project.  Never touches files already claimed by
+ * another project.  Returns the number of rows updated.
+ */
+function associateUnclaimedFilesInDirectory(projectId, dir) {
+    const prefix = dir + path_1.default.sep;
+    const rows = db.prepare("SELECT id, file_path FROM files WHERE project_id IS NULL AND (file_path = ? OR file_path LIKE ?)").all(dir, prefix + '%');
+    if (rows.length === 0)
+        return 0;
+    const update = db.prepare("UPDATE files SET project_id = ? WHERE id = ? AND project_id IS NULL");
+    const tx = db.transaction(() => {
+        let count = 0;
+        for (const row of rows) {
+            const info = update.run(projectId, row.id);
+            count += info.changes;
+        }
+        return count;
+    });
+    return tx();
 }
 function getFileById(id) {
     return db.prepare('SELECT * FROM files WHERE id = ?').get(id);
@@ -705,4 +861,44 @@ function resolveAssociationQueue(id, status) {
     SET status = ?, resolved_at = unixepoch()
     WHERE id = ?
   `).run(status, id);
+}
+// ── Rename / move reconciliation ──────────────────────────────────────────────
+/** Mark a file as missing when it disappears from the filesystem. */
+function markFileMissing(filePath) {
+    db.prepare("UPDATE files SET local_status='missing', modified_at=? WHERE file_path=?")
+        .run(new Date().toISOString(), filePath);
+}
+/** Return all missing-status files — used by reconciliation to find rename/move candidates. */
+function getMissingFiles() {
+    return db.prepare("SELECT id, file_path, file_name, checksum, file_size, project_id, cloud_asset_id FROM files WHERE local_status='missing'").all();
+}
+/**
+ * Reconcile a rename/move: repoint an existing file record to its new path.
+ * Preserves the original id, project_id, cloud_asset_id, tags, and analysis.
+ * Does NOT enqueue an upload — cloud already has the content by checksum.
+ */
+function reconcileMovedFile(opts) {
+    db.prepare(`
+    UPDATE files
+    SET file_path=?, file_name=?, file_size=?, modified_at=?,
+        local_status='present', reconciled_from=file_path,
+        sync_status=CASE WHEN sync_status='missing' THEN 'synced' ELSE sync_status END
+    WHERE id=?
+  `).run(opts.newPath, require('path').basename(opts.newPath), opts.newSize, opts.newMtime, opts.id);
+}
+/** Mark a previously-missing file as present again (e.g. restored from backup). */
+function markFilePresent(filePath) {
+    db.prepare("UPDATE files SET local_status='present' WHERE file_path=?")
+        .run(filePath);
+}
+/** Returns DB diagnostics for the diagnostics page. */
+function getDiagnostics() {
+    const fileCount = db.prepare('SELECT COUNT(*) as c FROM files').get().c;
+    const projectCount = db.prepare('SELECT COUNT(*) as c FROM projects').get().c;
+    const pageCount = db.pragma('page_count')[0]?.page_count ?? 0;
+    const pageSize = db.pragma('page_size')[0]?.page_size ?? 4096;
+    const dbSizeBytes = pageCount * pageSize;
+    const missingFileCount = db.prepare("SELECT COUNT(*) as c FROM files WHERE local_status='missing'").get().c;
+    const activityLogCount = db.prepare('SELECT COUNT(*) as c FROM activity_log').get().c;
+    return { fileCount, projectCount, dbSizeBytes, queueCounts: getSyncQueueCounts(), missingFileCount, activityLogCount };
 }

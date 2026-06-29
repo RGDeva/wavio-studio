@@ -75,6 +75,8 @@ class WatcherManager {
         this.stabilizationMap = new Map();
         // Debounced association engine: run at most once per 30 s after new files arrive
         this._assocEngineTimer = null;
+        // Reconciliation: recently-unlinked paths awaiting possible add event at new path
+        this.pendingReconciliation = new Map();
         this._stopped = false;
         this.db = db;
         this._rawOnEvent = onEvent;
@@ -357,20 +359,56 @@ class WatcherManager {
                 priority: 8,
                 created_at: now,
             });
+            // Retroactively claim any audio files already indexed in the same directory
+            // (handles the "WAV arrives before DAW project" ordering)
+            const dir = path_1.default.dirname(filePath);
+            const claimed = (0, db_1.associateUnclaimedFilesInDirectory)(projectId, dir);
+            if (claimed > 0) {
+                console.log(`[assoc] Retroactively associated ${claimed} unclaimed file(s) with project ${projectId}`);
+                (0, db_1.logActivity)({
+                    id: generateId(),
+                    type: 'files_associated',
+                    message: `Associated ${claimed} file(s) with project: ${getProjectName(filePath)}`,
+                    project_id: projectId,
+                    metadata: { dir, claimed },
+                });
+            }
         }
         // Scan dependencies after a short delay
         setTimeout(() => this.scanDependencies(filePath, projectId), 2000);
     }
-    handleDependencyFile(event, filePath) {
-        if (event === 'unlink')
+    async handleDependencyFile(event, filePath) {
+        if (event === 'unlink') {
+            // Mark missing immediately; reconciliation runs on the next 'add' event
+            // (chokidar fires unlink then add for renames within watched folders)
+            (0, db_1.markFileMissing)(filePath);
+            // Schedule reconciliation attempt: give chokidar 500ms to fire the 'add' event
+            // for the new path before we give up and leave it as 'missing'
+            this.scheduleReconciliation(filePath);
             return;
-        // Find which project this file belongs to
+        }
+        // Find which project this file belongs to.
+        // Strategy: check in-memory projectMap first (fast), then fall back to the DB.
+        // The DB fallback handles two cases:
+        //   (a) project was detected in a previous session (not in projectMap after restart)
+        //   (b) project file was processed first in this session but the dir-prefix check missed
         let projectId;
-        // Walk up directory tree to find a project file
+        const fileDir = path_1.default.dirname(filePath);
+        // 1. In-memory map: O(projects) but typically tiny
         for (const [projectFilePath, pid] of this.projectMap.entries()) {
-            if (filePath.startsWith(path_1.default.dirname(projectFilePath))) {
+            const projDir = path_1.default.dirname(projectFilePath);
+            if (fileDir === projDir || fileDir.startsWith(projDir + path_1.default.sep)) {
                 projectId = pid;
                 break;
+            }
+        }
+        // 2. DB fallback: query projects table for a project in the same directory
+        if (!projectId) {
+            const dbProject = (0, db_1.findProjectForDirectory)(fileDir);
+            if (dbProject) {
+                projectId = dbProject.id;
+                // Cache in projectMap so subsequent files in this session don't hit the DB
+                this.projectMap.set(dbProject.file_path, dbProject.id);
             }
         }
         let stats;
@@ -385,6 +423,13 @@ class WatcherManager {
         const fileName = path_1.default.basename(filePath);
         const ext = path_1.default.extname(filePath).toLowerCase();
         const role = (0, classifier_1.classifyFile)(fileName);
+        // Reconciliation: check if this new file matches a recently-unlinked missing file
+        // If a confident match is found, repoint the existing record and skip the normal upsert.
+        if (event === 'add') {
+            const reconciled = await this.tryReconcile(filePath, stats);
+            if (reconciled)
+                return;
+        }
         // Async analysis pipeline — does not block watcher or upload queue
         fileChecksum(filePath).then(async (checksum) => {
             // Pre-enqueue hash guard: if the file content is unchanged and already uploaded,
@@ -562,6 +607,94 @@ class WatcherManager {
         else {
             this.onEvent({ type: 'dependency_found', filePath, projectId, timestamp: now });
         }
+    }
+    /**
+     * Rename/move reconciliation.
+     *
+     * When a file disappears (unlink), we mark it 'missing' and schedule a
+     * 600ms window. If an 'add' event fires for a new path within that window,
+     * handleDependencyFile calls tryReconcile() which checks whether the new
+     * file matches the missing candidate by checksum+size. On high-confidence
+     * match the record is repointed to the new path (preserving id, cloud_asset_id,
+     * project_id). No new upload is enqueued — the cloud already has the content.
+     *
+     * Confidence rules:
+     *  HIGH  (reconcile): same checksum (SHA-256)
+     *  MED   (reconcile): same size + same name (no checksum yet — async)
+     *  LOW   (leave missing): only same name, or no match at all
+     *  AMBIGUOUS: multiple candidates with same checksum → leave missing, log
+     */
+    scheduleReconciliation(unlinkedPath) {
+        // Cancel any existing timer for this path
+        const existing = this.pendingReconciliation.get(unlinkedPath);
+        if (existing)
+            clearTimeout(existing);
+        // After 600ms with no matching 'add', accept the file as truly missing
+        const timer = setTimeout(() => {
+            this.pendingReconciliation.delete(unlinkedPath);
+            // Leave as 'missing' — watcher already called markFileMissing
+        }, 600);
+        this.pendingReconciliation.set(unlinkedPath, timer);
+    }
+    /**
+     * Called from handleDependencyFile on 'add' events for supported file types.
+     * Checks whether the new file matches any missing candidate and reconciles.
+     * Returns true if reconciliation happened (caller should skip normal upsert).
+     */
+    async tryReconcile(newPath, stats) {
+        const missing = (0, db_1.getMissingFiles)();
+        if (missing.length === 0)
+            return false;
+        const newName = path_1.default.basename(newPath);
+        // Fast path: match by checksum (most reliable — requires reading file)
+        let newChecksum = null;
+        try {
+            newChecksum = await fileChecksum(newPath);
+        }
+        catch { /* unreadable */ }
+        if (newChecksum) {
+            const byChecksum = missing.filter(m => m.checksum === newChecksum);
+            if (byChecksum.length === 1) {
+                // Unique checksum match — high confidence
+                const candidate = byChecksum[0];
+                (0, db_1.reconcileMovedFile)({ id: candidate.id, newPath, newSize: stats.size, newMtime: stats.mtime.toISOString() });
+                // Cancel the reconciliation timer so we don't emit a stale warning
+                const timer = this.pendingReconciliation.get(candidate.file_path);
+                if (timer) {
+                    clearTimeout(timer);
+                    this.pendingReconciliation.delete(candidate.file_path);
+                }
+                (0, db_1.logActivity)({ id: generateId(), type: 'file_reconciled', message: `Moved/renamed: ${path_1.default.basename(candidate.file_path)} → ${newName}`, metadata: { from: candidate.file_path, to: newPath, confidence: 'high' } });
+                (0, db_1.markFilePresent)(newPath);
+                return true;
+            }
+            else if (byChecksum.length > 1) {
+                // Ambiguous — leave missing, log for review
+                console.warn('[watcher] Ambiguous reconciliation: multiple missing files share checksum', newChecksum);
+                return false;
+            }
+        }
+        // Medium path: match by filename + size (no checksum yet)
+        // Safety rule: if the candidate has a cloud_asset_id, skip medium-confidence
+        // reconciliation — checksum confirmation is required before touching any cloud
+        // mapping. The file will remain 'missing' until a high-confidence match arrives.
+        const byNameSize = missing.filter(m => path_1.default.basename(m.file_path) === newName &&
+            m.file_size === stats.size &&
+            !m.cloud_asset_id // never remap cloud-linked files without checksum proof
+        );
+        if (byNameSize.length === 1) {
+            const candidate = byNameSize[0];
+            (0, db_1.reconcileMovedFile)({ id: candidate.id, newPath, newSize: stats.size, newMtime: stats.mtime.toISOString() });
+            const timer = this.pendingReconciliation.get(candidate.file_path);
+            if (timer) {
+                clearTimeout(timer);
+                this.pendingReconciliation.delete(candidate.file_path);
+            }
+            (0, db_1.logActivity)({ id: generateId(), type: 'file_reconciled', message: `Moved/renamed (name+size): ${path_1.default.basename(candidate.file_path)} → ${newName}`, metadata: { from: candidate.file_path, to: newPath, confidence: 'medium' } });
+            (0, db_1.markFilePresent)(newPath);
+            return true;
+        }
+        return false;
     }
     scanDependencies(projectFilePath, projectId) {
         const dir = path_1.default.dirname(projectFilePath);

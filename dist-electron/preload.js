@@ -65,6 +65,7 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
     // Share links
     share: {
         createLink: (opts) => electron_1.ipcRenderer.invoke('share:createLink', opts),
+        revokeLink: (opts) => electron_1.ipcRenderer.invoke('share:revokeLink', opts),
     },
     // App
     app: {
@@ -120,6 +121,10 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
         reject: (queueId) => electron_1.ipcRenderer.invoke('association:reject', queueId),
         undo: (associationId) => electron_1.ipcRenderer.invoke('association:undo', associationId),
         classifyFile: (filePath) => electron_1.ipcRenderer.invoke('association:classifyFile', filePath),
+    },
+    // Diagnostics
+    diagnostics: {
+        get: () => electron_1.ipcRenderer.invoke('diagnostics:get'),
     },
     // Settings (restricted to safe keys)
     settings: {
