@@ -365,8 +365,14 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
-  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(project.share_url ?? null);
+  const [trackingId, setTrackingId] = useState<string | null>(project.tracking_id ?? null);
+  useEffect(() => {
+    if (project.share_url && !shareUrl) setShareUrl(project.share_url);
+    if (project.tracking_id && !trackingId) setTrackingId(project.tracking_id);
+  }, [project.share_url, project.tracking_id]);
   const [shareLoading, setShareLoading] = useState(false);
+  const [revokeLoading, setRevokeLoading] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
@@ -401,17 +407,36 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
         return;
       }
 
-      const result = await api.share.createLink({ assetId, allowDownload: true });
+      const result = await api.share.createLink({ assetId, projectId: project.id, allowDownload: true });
       if (result.error) {
         setShareError(result.error);
       } else if (result.shareUrl) {
         setShareUrl(result.shareUrl);
+        if (result.trackingId) setTrackingId(result.trackingId);
         navigator.clipboard.writeText(result.shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
       }
     } catch (e: any) {
       setShareError(e?.message ?? 'Failed to create link');
     }
     setShareLoading(false);
+  };
+
+  const revokeShareLink = async () => {
+    if (!trackingId || revokeLoading) return;
+    setRevokeLoading(true);
+    setShareError(null);
+    try {
+      const result = await api.share.revokeLink({ trackingId, projectId: project.id });
+      if (result.error) {
+        setShareError(result.error);
+      } else {
+        setShareUrl(null);
+        setTrackingId(null);
+      }
+    } catch (e: any) {
+      setShareError(e?.message ?? 'Failed to revoke link');
+    }
+    setRevokeLoading(false);
   };
 
   const toggleVersions = async () => {
@@ -495,6 +520,15 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
                 >
                   Open ↗
                 </a>
+              )}
+              {trackingId && (
+                <button
+                  onClick={revokeShareLink}
+                  disabled={revokeLoading}
+                  className="text-[9px] text-red-400/50 hover:text-red-400 transition-colors"
+                >
+                  {revokeLoading ? 'Revoking…' : 'Revoke'}
+                </button>
               )}
             </div>
           )}

@@ -135,7 +135,8 @@ function createWindow() {
       callback({
         responseHeaders: {
           ...details.responseHeaders,
-          'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://wavi.stream https://*.supabase.co wss://*.supabase.co; img-src 'self' data: https:; media-src 'self' https: blob:; font-src 'self' data:;"]
+          // http://127.0.0.1:47821 = local bridge server (health checks from renderer)
+          'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://wavi.stream https://*.supabase.co wss://*.supabase.co http://127.0.0.1:47821; img-src 'self' data: https:; media-src 'self' https: blob:; font-src 'self' data:;"]
         }
       });
     });
@@ -761,6 +762,7 @@ ipcMain.handle('auth:clearToken', () => {
 // Share links — create or retrieve a share link for a synced asset
 ipcMain.handle('share:createLink', async (_e, opts: {
   assetId: string;
+  projectId?: string;
   allowDownload?: boolean;
   password?: string;
   expiresAt?: string;
@@ -803,7 +805,54 @@ ipcMain.handle('share:createLink', async (_e, opts: {
     }
     const data = await res.json() as { shareUrl: string; trackingId: string; reused: boolean };
     logActivity({ id: crypto.randomUUID(), type: 'share_link_created', message: `Share link: ${data.shareUrl}` });
+    if (opts.projectId) {
+      const { updateProjectShareInfo } = require('./db');
+      updateProjectShareInfo(opts.projectId, data.shareUrl, data.trackingId);
+    }
     return { shareUrl: data.shareUrl, trackingId: data.trackingId, reused: data.reused };
+  } catch (e: any) {
+    captureException(e);
+    return { error: e?.message ?? 'Unknown error' };
+  }
+});
+
+ipcMain.handle('share:revokeLink', async (_e, opts: { trackingId: string; projectId?: string }) => {
+  const storedRaw = store.get('authToken', null) as string | null;
+  if (!storedRaw) return { error: 'Not authenticated' };
+  let token: string;
+  try {
+    token = safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(Buffer.from(storedRaw, 'base64'))
+      : storedRaw;
+  } catch { return { error: 'Token decrypt failed' }; }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 15_000);
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/desktop/index`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          'X-Desktop-Action': 'revoke-share-link',
+        },
+        body: JSON.stringify({ trackingId: opts.trackingId }),
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({})) as any;
+      return { error: body?.error ?? `HTTP ${res.status}` };
+    }
+    logActivity({ id: crypto.randomUUID(), type: 'share_link_revoked', message: `Revoked link: ${opts.trackingId}` });
+    if (opts.projectId) {
+      const { updateProjectShareInfo } = require('./db');
+      updateProjectShareInfo(opts.projectId, null, null);
+    }
+    return { success: true };
   } catch (e: any) {
     captureException(e);
     return { error: e?.message ?? 'Unknown error' };

@@ -120,6 +120,8 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('ALTER TABLE files ADD COLUMN name_tokens TEXT'); } catch { /* already exists */ }
   try { db.exec('ALTER TABLE files ADD COLUMN audio_fingerprint TEXT'); } catch { /* already exists */ }
   try { db.exec('ALTER TABLE files ADD COLUMN classification_version INTEGER DEFAULT 0'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE projects ADD COLUMN share_url TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE projects ADD COLUMN tracking_id TEXT'); } catch { /* already exists */ }
 
   // ── Phase 1: Association tables ─────────────────────────────────────────
   db.exec(`
@@ -387,6 +389,10 @@ export function updateProjectSyncStatus(
   db.prepare(`
     UPDATE projects SET sync_status = ?, cloud_id = ?, cloud_version_id = ?, last_synced_at = ? WHERE id = ?
   `).run(status, cloudId ?? null, cloudVersionId ?? null, new Date().toISOString(), id);
+}
+
+export function updateProjectShareInfo(id: string, shareUrl: string | null, trackingId: string | null) {
+  db.prepare('UPDATE projects SET share_url = ?, tracking_id = ? WHERE id = ?').run(shareUrl, trackingId, id);
 }
 
 // ── Files ─────────────────────────────────────────────────────────────────────

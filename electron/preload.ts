@@ -75,10 +75,13 @@ contextBridge.exposeInMainWorld('waviAPI', {
   share: {
     createLink: (opts: {
       assetId: string;
+      projectId?: string;
       allowDownload?: boolean;
       password?: string;
       expiresAt?: string;
     }) => ipcRenderer.invoke('share:createLink', opts),
+    revokeLink: (opts: { trackingId: string; projectId?: string }) =>
+      ipcRenderer.invoke('share:revokeLink', opts),
   },
 
   // App

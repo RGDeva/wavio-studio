@@ -64,10 +64,13 @@ export interface WaviAPI {
   share: {
     createLink: (opts: {
       assetId: string;
+      projectId?: string;
       allowDownload?: boolean;
       password?: string;
       expiresAt?: string;
     }) => Promise<{ shareUrl?: string; trackingId?: string; reused?: boolean; error?: string }>;
+    revokeLink: (opts: { trackingId: string; projectId?: string }) =>
+      Promise<{ success?: boolean; error?: string }>;
   };
   app: {
     relaunch: () => Promise<void>;
@@ -147,7 +150,7 @@ const _stub: WaviAPI = {
   sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
-  share: { createLink: _noop },
+  share: { createLink: _noop, revokeLink: _noop },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },

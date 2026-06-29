@@ -7,6 +7,9 @@ export interface Project {
   version_count: number;
   sync_status: 'pending' | 'uploading' | 'synced' | 'failed' | 'missing';
   cloud_id: string | null;
+  cloud_version_id?: string | null;
+  share_url?: string | null;
+  tracking_id?: string | null;
   created_at: string;
   modified_at: string;
   last_synced_at: string | null;
