@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import Database from 'better-sqlite3';
-import { upsertProject, upsertFile, upsertStandaloneFile, enqueueSyncItem, enqueueSyncItemIdempotent, logActivity, createVersion, addBounceCandidate, getBounceCandidateByPath, versionExistsByChecksum, versionExistsByPath, updateFileClassificationByPath, markFileMissing, getMissingFiles, reconcileMovedFile, markFilePresent } from './db';
+import { upsertProject, upsertFile, upsertStandaloneFile, enqueueSyncItem, enqueueSyncItemIdempotent, logActivity, createVersion, addBounceCandidate, getBounceCandidateByPath, versionExistsByChecksum, versionExistsByPath, updateFileClassificationByPath, markFileMissing, getMissingFiles, reconcileMovedFile, markFilePresent, findProjectForDirectory, associateUnclaimedFilesInDirectory } from './db';
 import { detectBpm } from './bpmDetector';
 import { analyzeAudio } from './audioAnalyzer';
 import { classifyFile as classifyFileLegacy } from './classifier';
@@ -377,13 +377,28 @@ export class WatcherManager {
         priority: 8,
         created_at: now,
       });
+
+      // Retroactively claim any audio files already indexed in the same directory
+      // (handles the "WAV arrives before DAW project" ordering)
+      const dir = path.dirname(filePath);
+      const claimed = associateUnclaimedFilesInDirectory(projectId, dir);
+      if (claimed > 0) {
+        console.log(`[assoc] Retroactively associated ${claimed} unclaimed file(s) with project ${projectId}`);
+        logActivity({
+          id: generateId(),
+          type: 'files_associated',
+          message: `Associated ${claimed} file(s) with project: ${getProjectName(filePath)}`,
+          project_id: projectId,
+          metadata: { dir, claimed },
+        });
+      }
     }
 
     // Scan dependencies after a short delay
     setTimeout(() => this.scanDependencies(filePath, projectId), 2000);
   }
 
-  private handleDependencyFile(event: 'add' | 'change' | 'unlink', filePath: string) {
+  private async handleDependencyFile(event: 'add' | 'change' | 'unlink', filePath: string) {
     if (event === 'unlink') {
       // Mark missing immediately; reconciliation runs on the next 'add' event
       // (chokidar fires unlink then add for renames within watched folders)
@@ -394,14 +409,31 @@ export class WatcherManager {
       return;
     }
 
-    // Find which project this file belongs to
+    // Find which project this file belongs to.
+    // Strategy: check in-memory projectMap first (fast), then fall back to the DB.
+    // The DB fallback handles two cases:
+    //   (a) project was detected in a previous session (not in projectMap after restart)
+    //   (b) project file was processed first in this session but the dir-prefix check missed
     let projectId: string | undefined;
 
-    // Walk up directory tree to find a project file
+    const fileDir = path.dirname(filePath);
+
+    // 1. In-memory map: O(projects) but typically tiny
     for (const [projectFilePath, pid] of this.projectMap.entries()) {
-      if (filePath.startsWith(path.dirname(projectFilePath))) {
+      const projDir = path.dirname(projectFilePath);
+      if (fileDir === projDir || fileDir.startsWith(projDir + path.sep)) {
         projectId = pid;
         break;
+      }
+    }
+
+    // 2. DB fallback: query projects table for a project in the same directory
+    if (!projectId) {
+      const dbProject = findProjectForDirectory(fileDir);
+      if (dbProject) {
+        projectId = dbProject.id;
+        // Cache in projectMap so subsequent files in this session don't hit the DB
+        this.projectMap.set(dbProject.file_path, dbProject.id);
       }
     }
 

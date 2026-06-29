@@ -460,6 +460,7 @@ export function upsertFile(file: {
     INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at)
     VALUES (@id, @project_id, @file_path, @file_name, @file_type, @file_size, @checksum, @bpm, @key_note, @duration, @role, @created_at, @modified_at)
     ON CONFLICT(file_path) DO UPDATE SET
+      project_id = COALESCE(files.project_id, excluded.project_id),
       file_size = excluded.file_size,
       checksum = excluded.checksum,
       bpm = COALESCE(excluded.bpm, files.bpm),
@@ -473,6 +474,42 @@ export function upsertFile(file: {
 
 export function getFilesByProject(projectId: string) {
   return db.prepare('SELECT * FROM files WHERE project_id = ? ORDER BY file_type, file_name').all(projectId);
+}
+
+/**
+ * Find the project whose file lives directly inside `dir` (not in a subdirectory of it).
+ * Used by the watcher to look up projects from the DB when projectMap misses.
+ */
+export function findProjectForDirectory(dir: string): { id: string; file_path: string } | undefined {
+  const rows = db.prepare('SELECT id, file_path FROM projects').all() as { id: string; file_path: string }[];
+  return rows.find(r => path.dirname(r.file_path) === dir);
+}
+
+/**
+ * Associate every file currently in `dir` (or its subdirectories) that has no
+ * project_id with the given project.  Never touches files already claimed by
+ * another project.  Returns the number of rows updated.
+ */
+export function associateUnclaimedFilesInDirectory(projectId: string, dir: string): number {
+  const prefix = dir + path.sep;
+  const rows = db.prepare(
+    "SELECT id, file_path FROM files WHERE project_id IS NULL AND (file_path = ? OR file_path LIKE ?)"
+  ).all(dir, prefix + '%') as { id: string; file_path: string }[];
+
+  if (rows.length === 0) return 0;
+
+  const update = db.prepare(
+    "UPDATE files SET project_id = ? WHERE id = ? AND project_id IS NULL"
+  );
+  const tx = db.transaction(() => {
+    let count = 0;
+    for (const row of rows) {
+      const info = update.run(projectId, row.id);
+      count += info.changes;
+    }
+    return count;
+  });
+  return tx() as number;
 }
 
 export function getFileById(id: string) {

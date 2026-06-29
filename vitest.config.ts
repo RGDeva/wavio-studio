@@ -15,6 +15,7 @@ export default defineConfig({
       'electron/security.test.ts',
       'electron/db.maintenance.test.ts',
       'electron/fs.benchmark.test.ts',
+      'electron/association.test.ts',
     ],
     environment: 'node',
   },
