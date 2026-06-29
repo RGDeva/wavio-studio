@@ -97,6 +97,20 @@ let _trayRebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
+// ── Dev / prod data isolation ─────────────────────────────────────────────────
+// MUST happen before app.whenReady() — Electron resolves userData from appName
+// at first access. Changing the name here routes dev to a separate directory:
+//   production: ~/Library/Application Support/wavio-studio
+//   dev:        ~/Library/Application Support/wavio-studio-dev
+//
+// This prevents dev builds from polluting the production DB, watched folders,
+// auth tokens, and settings — and prevents prod from seeing dev test data.
+if (isDev) {
+  // app.name must be set before any call to app.getPath('userData').
+  // electron-store reads userData during construction, so this runs first.
+  app.setName('wavio-studio-dev');
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -1247,6 +1261,32 @@ ipcMain.handle('shell:pickApp', async () => {
     defaultPath: process.platform === 'darwin' ? '/Applications' : 'C:\\Program Files',
   });
   return result.canceled ? null : result.filePaths[0];
+});
+
+// Diagnostics
+ipcMain.handle('diagnostics:get', () => {
+  const { getDiagnostics } = require('./db');
+  const diag = getDiagnostics();
+  const config = store.store; // electron-store's full plain-object copy
+  // Sanitize: remove auth tokens, full paths in dawPaths (show basename only)
+  const dawPaths = (config.dawPaths as Record<string, string> | undefined) ?? {};
+  const sanitizedDawPaths: Record<string, string> = {};
+  for (const [k, v] of Object.entries(dawPaths)) {
+    sanitizedDawPaths[k] = typeof v === 'string' ? path.basename(v as string) : '';
+  }
+  return {
+    appVersion: app.getVersion(),
+    arch: process.arch,
+    platform: process.platform,
+    environment: isDev ? 'development' : 'production',
+    userDataPath: app.getPath('userData').replace(app.getPath('home'), '~'),
+    ...diag,
+    dbSizeMB: (diag.dbSizeBytes / (1024 * 1024)).toFixed(2),
+    indexedRoots: (config.watchedFolders as string[] | undefined ?? []).map((f: string) => f.replace(app.getPath('home'), '~')),
+    sanitizedDawPaths,
+    lastSync: config.lastSync ?? null,
+    buildDate: new Date().toISOString().slice(0, 10),
+  };
 });
 
 // Settings

@@ -146,6 +146,11 @@ contextBridge.exposeInMainWorld('waviAPI', {
     classifyFile: (filePath: string)                   => ipcRenderer.invoke('association:classifyFile', filePath),
   },
 
+  // Diagnostics
+  diagnostics: {
+    get: () => ipcRenderer.invoke('diagnostics:get'),
+  },
+
   // Settings (restricted to safe keys)
   settings: {
     get: (key: string) => {

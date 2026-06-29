@@ -12,6 +12,7 @@ import { FileReviewPage } from './pages/FileReviewPage';
 import { SearchPage } from './pages/SearchPage';
 import { CopilotPage } from './pages/CopilotPage';
 import { AbletonPage } from './pages/AbletonPage';
+import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { api } from './lib/api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { BounceConfirmModal } from './components/BounceConfirmModal';
@@ -134,6 +135,7 @@ export default function App() {
           <div className={page === 'search' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Search error"><SearchPage visible={page === 'search'} /></ErrorBoundary></div>
           <div className={page === 'copilot' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Copilot error"><CopilotPage visible={page === 'copilot'} /></ErrorBoundary></div>
           <div className={page === 'ableton' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="DAW Sync error"><AbletonPage visible={page === 'ableton'} /></ErrorBoundary></div>
+          <div className={page === 'diagnostics' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Diagnostics error"><DiagnosticsPage visible={page === 'diagnostics'} /></ErrorBoundary></div>
         </main>
       </div>
     </div>

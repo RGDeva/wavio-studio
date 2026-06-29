@@ -57,6 +57,11 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('ALTER TABLE files ADD COLUMN cloud_asset_id TEXT'); } catch { /* already exists */ }
   // Store cloud project_version ID returned by daw-sync so share links can reference versions
   try { db.exec('ALTER TABLE projects ADD COLUMN cloud_version_id TEXT'); } catch { /* already exists */ }
+  // Rename/move reconciliation: track files that have gone missing so UI can show them
+  // and reconciliation logic can relink them if they reappear at a new path.
+  try { db.exec("ALTER TABLE files ADD COLUMN local_status TEXT DEFAULT 'present'"); } catch { /* already exists */ }
+  // Reconciliation: stores the new path after a confident rename/move match
+  try { db.exec('ALTER TABLE files ADD COLUMN reconciled_from TEXT'); } catch { /* already exists */ }
   // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
   // so they are treated as unknown and rehashed on next access rather than silently mismatching
   try {
@@ -235,35 +240,111 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)'); } catch {}
 
-  // Trim runaway tables that cause slow WAL recovery (observed: 100k+ sync_queue rows → 25s startup)
-  // Keep only recent records to bound DB size. Uses DELETE with rowid ordering (fast).
+  // ── Startup maintenance ───────────────────────────────────────────────────────
+  // Keeps the WAL small so cold-start recovery stays fast.
+  // Rules designed to be crash-safe:
+  //  1. Crash recovery (reset 'uploading'/'starting' → 'pending') runs FIRST so no
+  //     active work exists in terminal states before we prune.
+  //  2. We only delete TERMINAL rows (completed, cancelled) — never pending/uploading/
+  //     retrying/confirming rows that represent real work.
+  //  3. VACUUM only runs when the page-count drops meaningfully (>20% reduction
+  //     available), avoiding the full-file-rewrite cost on every startup.
+  //  4. A WAL checkpoint is issued instead of VACUUM when the WAL is large but the
+  //     DB itself is not bloated.
+  //
+  // Thresholds (documented):
+  //   SYNC_QUEUE_TERMINAL_KEEP  – keep this many recent completed/cancelled rows
+  //   ACTIVITY_LOG_KEEP         – keep this many recent activity entries
+  //   VACUUM_MIN_PAGES_FREED    – only VACUUM when this many pages can be reclaimed
+
+  const SYNC_QUEUE_TERMINAL_KEEP = 2_000;
+  const ACTIVITY_LOG_KEEP        = 5_000;
+  const VACUUM_MIN_PAGES_FREED   = 500; // ~2MB at 4KB page size
+
+  // Step 1: crash recovery — reset jobs stuck in transient states from a prior crash
   try {
-    const MAX_SYNC_QUEUE = 5_000;
-    const sqCount = (db.prepare('SELECT COUNT(*) as c FROM sync_queue').get() as { c: number }).c;
-    if (sqCount > MAX_SYNC_QUEUE) {
-      db.exec(`
-        DELETE FROM sync_queue WHERE id IN (
-          SELECT id FROM sync_queue ORDER BY created_at ASC LIMIT ${sqCount - MAX_SYNC_QUEUE}
+    db.exec(`
+      UPDATE sync_queue
+      SET status = 'pending', started_at = NULL
+      WHERE status IN ('uploading', 'starting')
+    `);
+  } catch { /* table not yet created on very first run */ }
+
+  // Step 2: prune only TERMINAL sync_queue rows
+  let syncPruned = 0;
+  try {
+    const terminalCount = (db.prepare(
+      "SELECT COUNT(*) as c FROM sync_queue WHERE status IN ('completed','cancelled')"
+    ).get() as { c: number }).c;
+
+    if (terminalCount > SYNC_QUEUE_TERMINAL_KEEP) {
+      const toDelete = terminalCount - SYNC_QUEUE_TERMINAL_KEEP;
+      const result = db.prepare(`
+        DELETE FROM sync_queue
+        WHERE id IN (
+          SELECT id FROM sync_queue
+          WHERE status IN ('completed','cancelled')
+          ORDER BY created_at ASC
+          LIMIT ?
         )
-      `);
-      db.exec('VACUUM');
+      `).run(toDelete);
+      syncPruned = result.changes;
     }
   } catch { /* table may not exist on first migration */ }
 
+  // Step 3: prune old activity_log rows (all are terminal by definition)
+  let actPruned = 0;
   try {
-    const MAX_ACTIVITY_LOG = 10_000;
     const alCount = (db.prepare('SELECT COUNT(*) as c FROM activity_log').get() as { c: number }).c;
-    if (alCount > MAX_ACTIVITY_LOG) {
-      db.exec(`
-        DELETE FROM activity_log WHERE id IN (
-          SELECT id FROM activity_log ORDER BY created_at ASC LIMIT ${alCount - MAX_ACTIVITY_LOG}
+    if (alCount > ACTIVITY_LOG_KEEP) {
+      const toDelete = alCount - ACTIVITY_LOG_KEEP;
+      const result = db.prepare(`
+        DELETE FROM activity_log
+        WHERE id IN (
+          SELECT id FROM activity_log
+          ORDER BY created_at ASC
+          LIMIT ?
         )
-      `);
+      `).run(toDelete);
+      actPruned = result.changes;
     }
   } catch {}
 
+  // Step 4: WAL checkpoint (non-blocking PASSIVE mode) — returns WAL pages to the DB file
+  // This is cheap and should run whenever we've done any writes above.
+  if (syncPruned > 0 || actPruned > 0) {
+    try { db.pragma('wal_checkpoint(PASSIVE)'); } catch {}
+  }
+
+  // Step 5: VACUUM only when meaningful space can be reclaimed
+  // Check freelist_count (pages already freed inside the DB file) to decide.
+  try {
+    const freelistPages = (db.pragma('freelist_count') as Array<{ freelist_count: number }>)[0]?.freelist_count ?? 0;
+    if (freelistPages >= VACUUM_MIN_PAGES_FREED) {
+      db.exec('VACUUM');
+    }
+  } catch {}
+
+  // Log maintenance results (visible in main.log for support)
+  if (syncPruned > 0 || actPruned > 0) {
+    console.info(
+      `[db] startup maintenance: pruned ${syncPruned} terminal sync_queue rows,` +
+      ` ${actPruned} activity_log rows`
+    );
+  }
+
   db = instance;
   return instance;
+}
+
+/** Returns queue counts by status — used by diagnostics page and maintenance tests. */
+export function getSyncQueueCounts(): Record<string, number> {
+  const rows = db.prepare(
+    'SELECT status, COUNT(*) as c FROM sync_queue GROUP BY status'
+  ).all() as Array<{ status: string; c: number }>;
+  const result: Record<string, number> = {};
+  for (const r of rows) result[r.status] = r.c;
+  return result;
 }
 
 // ── Projects ──────────────────────────────────────────────────────────────────
@@ -813,4 +894,62 @@ export function resolveAssociationQueue(id: string, status: QueueStatus) {
     SET status = ?, resolved_at = unixepoch()
     WHERE id = ?
   `).run(status, id);
+}
+
+// ── Rename / move reconciliation ──────────────────────────────────────────────
+
+/** Mark a file as missing when it disappears from the filesystem. */
+export function markFileMissing(filePath: string): void {
+  db.prepare("UPDATE files SET local_status='missing', modified_at=? WHERE file_path=?")
+    .run(new Date().toISOString(), filePath);
+}
+
+/** Return all missing-status files — used by reconciliation to find rename/move candidates. */
+export function getMissingFiles(): Array<{ id: string; file_path: string; file_name: string; checksum: string | null; file_size: number; project_id: string | null; cloud_asset_id: string | null }> {
+  return db.prepare("SELECT id, file_path, file_name, checksum, file_size, project_id, cloud_asset_id FROM files WHERE local_status='missing'").all() as any[];
+}
+
+/**
+ * Reconcile a rename/move: repoint an existing file record to its new path.
+ * Preserves the original id, project_id, cloud_asset_id, tags, and analysis.
+ * Does NOT enqueue an upload — cloud already has the content by checksum.
+ */
+export function reconcileMovedFile(opts: {
+  id: string;
+  newPath: string;
+  newSize: number;
+  newMtime: string;
+}): void {
+  db.prepare(`
+    UPDATE files
+    SET file_path=?, file_name=?, file_size=?, modified_at=?,
+        local_status='present', reconciled_from=file_path,
+        sync_status=CASE WHEN sync_status='missing' THEN 'synced' ELSE sync_status END
+    WHERE id=?
+  `).run(opts.newPath, require('path').basename(opts.newPath), opts.newSize, opts.newMtime, opts.id);
+}
+
+/** Mark a previously-missing file as present again (e.g. restored from backup). */
+export function markFilePresent(filePath: string): void {
+  db.prepare("UPDATE files SET local_status='present' WHERE file_path=?")
+    .run(filePath);
+}
+
+/** Returns DB diagnostics for the diagnostics page. */
+export function getDiagnostics(): {
+  fileCount: number;
+  projectCount: number;
+  dbSizeBytes: number;
+  queueCounts: Record<string, number>;
+  missingFileCount: number;
+  activityLogCount: number;
+} {
+  const fileCount = (db.prepare('SELECT COUNT(*) as c FROM files').get() as any).c;
+  const projectCount = (db.prepare('SELECT COUNT(*) as c FROM projects').get() as any).c;
+  const pageCount = (db.pragma('page_count') as any)[0]?.page_count ?? 0;
+  const pageSize = (db.pragma('page_size') as any)[0]?.page_size ?? 4096;
+  const dbSizeBytes = pageCount * pageSize;
+  const missingFileCount = (db.prepare("SELECT COUNT(*) as c FROM files WHERE local_status='missing'").get() as any).c;
+  const activityLogCount = (db.prepare('SELECT COUNT(*) as c FROM activity_log').get() as any).c;
+  return { fileCount, projectCount, dbSizeBytes, queueCounts: getSyncQueueCounts(), missingFileCount, activityLogCount };
 }

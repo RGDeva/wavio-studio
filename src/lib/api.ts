@@ -113,6 +113,26 @@ export interface WaviAPI {
   config: {
     apiBase: string;
   };
+  diagnostics: {
+    get: () => Promise<{
+      appVersion: string;
+      arch: string;
+      platform: string;
+      environment: 'production' | 'development';
+      userDataPath: string;
+      fileCount: number;
+      projectCount: number;
+      dbSizeBytes: number;
+      dbSizeMB: string;
+      queueCounts: Record<string, number>;
+      missingFileCount: number;
+      activityLogCount: number;
+      indexedRoots: string[];
+      sanitizedDawPaths: Record<string, string>;
+      lastSync: string | null;
+      buildDate: string;
+    }>;
+  };
   on: (channel: string, listener: (...args: unknown[]) => void) => void;
   off: (channel: string, listener: (...args: unknown[]) => void) => void;
 }
@@ -151,6 +171,7 @@ const _stub: WaviAPI = {
     syncToCloud:   _noop,
   },
   config: { apiBase: 'https://wavi.stream/api' },
+  diagnostics: { get: _noop },
   on: () => {},
   off: () => {},
 };
