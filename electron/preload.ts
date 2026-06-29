@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
+
 const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent']);
 
@@ -54,6 +56,9 @@ contextBridge.exposeInMainWorld('waviAPI', {
   shell: {
     openPath: (p: string) => ipcRenderer.invoke('shell:openPath', p),
     openExternal: (url: string) => ipcRenderer.invoke('shell:openExternal', url),
+    revealInFinder: (p: string) => ipcRenderer.invoke('shell:revealInFinder', p),
+    openWithApp: (filePath: string, appPath: string) => ipcRenderer.invoke('shell:openWithApp', filePath, appPath),
+    pickApp: () => ipcRenderer.invoke('shell:pickApp'),
   },
 
   // Share links
@@ -101,6 +106,11 @@ contextBridge.exposeInMainWorld('waviAPI', {
     get:    (key: string)                                   => ipcRenderer.invoke('memory:get', key),
     set:    (key: string, value: string, category?: string) => ipcRenderer.invoke('memory:set', key, value, category),
     delete: (key: string)                                   => ipcRenderer.invoke('memory:delete', key),
+  },
+
+  // Config exposed to renderer (safe, non-secret values only)
+  config: {
+    apiBase: API_BASE_PRELOAD,
   },
 
   // Bridge status

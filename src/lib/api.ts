@@ -47,6 +47,9 @@ export interface WaviAPI {
   shell: {
     openPath: (p: string) => Promise<void>;
     openExternal: (url: string) => Promise<void>;
+    revealInFinder: (p: string) => Promise<void>;
+    openWithApp: (filePath: string, appPath: string) => Promise<void>;
+    pickApp: () => Promise<string | null>;
   };
   share: {
     createLink: (opts: {
@@ -97,6 +100,9 @@ export interface WaviAPI {
     selectFolder:  ()                                        => Promise<{ canceled: boolean; folderPath?: string; snapshot?: any }>;
     syncToCloud:   (snapshot: any, authToken: string)        => Promise<{ success?: boolean; cloudProjectId?: string; error?: string }>;
   };
+  config: {
+    apiBase: string;
+  };
   on: (channel: string, listener: (...args: unknown[]) => void) => void;
   off: (channel: string, listener: (...args: unknown[]) => void) => void;
 }
@@ -110,7 +116,7 @@ const _stub: WaviAPI = {
   files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]) },
   sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },
   activity: { getAll: () => Promise.resolve([]) },
-  shell: { openPath: _noop, openExternal: _noop },
+  shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
@@ -134,6 +140,7 @@ const _stub: WaviAPI = {
     selectFolder:  () => Promise.resolve({ canceled: true }),
     syncToCloud:   _noop,
   },
+  config: { apiBase: 'https://wavi.stream/api' },
   on: () => {},
   off: () => {},
 };

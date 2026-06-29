@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { LogOut, ExternalLink, Shield, Cpu, HardDrive, Zap, BarChart2 } from 'lucide-react';
+import { LogOut, ExternalLink, Shield, Cpu, HardDrive, Zap, BarChart2, Music2, FolderOpen } from 'lucide-react';
 import { api } from '../lib/api';
 import { BridgeStatusPanel } from '../components/BridgeStatusPanel';
 
@@ -26,6 +26,7 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
   const [chunkSizeMB, setChunkSizeMB] = useState(5);
   const [maxConcurrent, setMaxConcurrent] = useState(2);
   const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
+  const [dawPaths, setDawPaths] = useState<Record<string, string>>({});
 
   useEffect(() => {
     Promise.all([
@@ -33,18 +34,20 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
       api.settings.get('syncOnSave'),
       api.settings.get('chunkSizeMB'),
       api.settings.get('maxConcurrent'),
-    ]).then(([a, s, c, m]) => {
+      api.settings.get('dawPaths'),
+    ]).then(([a, s, c, m, d]) => {
       if (a !== undefined) setAutoStart(a);
       if (s !== undefined) setSyncOnSave(s);
       if (c !== undefined) setChunkSizeMB(c);
       if (m !== undefined) setMaxConcurrent(m);
+      if (d !== undefined) setDawPaths(d ?? {});
     });
 
     // Fetch plan + usage
     api.auth.getToken().then(async (token) => {
       if (!token) return;
       try {
-        const res = await fetch('https://wavi.stream/api/desktop/index', {
+        const res = await fetch(`${window.waviAPI.config.apiBase}/desktop/index`, {
           headers: { Authorization: `Bearer ${token}`, 'X-Desktop-Action': 'plan' },
         });
         if (res.ok) setPlanInfo(await res.json());
@@ -214,6 +217,55 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
             )}
           </div>
         </div>
+
+        {/* DAW Configuration */}
+        <Section title="DAW Applications" icon={<Music2 className="w-4 h-4 text-pink-400" />}>
+          <p className="text-xs text-white/40 mb-3">
+            Configure which DAW to use when opening a file. Click a slot to browse for the app.
+          </p>
+          <div className="space-y-2">
+            {(['FL Studio', 'Ableton Live', 'Pro Tools', 'Logic Pro'] as const).map((name) => {
+              const key = name.toLowerCase().replace(/\s+/g, '_');
+              const saved = dawPaths[key];
+              return (
+                <div key={name} className="flex items-center gap-3 rounded-lg border border-white/8 bg-white/[0.03] px-3 py-2.5">
+                  <Music2 className="w-3.5 h-3.5 text-white/30 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-white/80">{name}</p>
+                    {saved
+                      ? <p className="text-[10px] text-cyan-400/70 truncate">{saved}</p>
+                      : <p className="text-[10px] text-white/25">Not configured</p>
+                    }
+                  </div>
+                  <button
+                    onClick={async () => {
+                      const picked = await api.shell.pickApp();
+                      if (!picked) return;
+                      const next = { ...dawPaths, [key]: picked };
+                      setDawPaths(next);
+                      api.settings.set('dawPaths', next);
+                    }}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-white/5 hover:bg-white/10 text-[10px] text-white/50 hover:text-white transition-colors"
+                  >
+                    <FolderOpen className="w-3 h-3" />
+                    {saved ? 'Change' : 'Browse'}
+                  </button>
+                  {saved && (
+                    <button
+                      onClick={() => {
+                        const next = { ...dawPaths };
+                        delete next[key];
+                        setDawPaths(next);
+                        api.settings.set('dawPaths', next);
+                      }}
+                      className="text-[10px] text-white/25 hover:text-red-400 transition-colors"
+                    >✕</button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Section>
 
         {/* Local Bridge */}
         <BridgeStatusPanel />

@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, nativeImage } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { execFile } from 'child_process';
 import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
@@ -969,6 +970,52 @@ ipcMain.handle('shell:openPath', (_e, p: string) => {
   const resolved = path.resolve(p);
   if (!safePrefixes.some(prefix => resolved.startsWith(prefix))) return;
   return shell.openPath(resolved);
+});
+
+// Reveal a file in Finder/Explorer without opening it
+ipcMain.handle('shell:revealInFinder', (_e, p: string) => {
+  const safePrefixes = [app.getPath('home'), app.getPath('music'), app.getPath('documents')];
+  const resolved = path.resolve(p);
+  if (!safePrefixes.some(prefix => resolved.startsWith(prefix))) return;
+  shell.showItemInFolder(resolved);
+});
+
+// Open a file with a specific application (e.g. FL Studio, Pro Tools, Ableton)
+// appPath is the .app bundle or .exe; filePath is the audio/project file
+ipcMain.handle('shell:openWithApp', (_e, filePath: string, appPath: string) => {
+  const safeFilePrefixes = [app.getPath('home'), app.getPath('music'), app.getPath('documents'), app.getPath('desktop')];
+  const resolved = path.resolve(filePath);
+  if (!safeFilePrefixes.some(prefix => resolved.startsWith(prefix))) {
+    throw new Error('File path not in safe location');
+  }
+  // On macOS: `open -a /Applications/FL Studio.app file.flp`
+  // On Windows: execFile with the .exe directly
+  if (process.platform === 'darwin') {
+    return new Promise<void>((resolve, reject) => {
+      execFile('open', ['-a', appPath, resolved], (err) => {
+        if (err) reject(err); else resolve();
+      });
+    });
+  } else {
+    return new Promise<void>((resolve, reject) => {
+      execFile(appPath, [resolved], (err) => {
+        if (err) reject(err); else resolve();
+      });
+    });
+  }
+});
+
+// Pick a DAW application via file dialog and return its path
+ipcMain.handle('shell:pickApp', async () => {
+  const result = await dialog.showOpenDialog({
+    title: 'Select DAW Application',
+    properties: ['openFile'],
+    filters: process.platform === 'darwin'
+      ? [{ name: 'Applications', extensions: ['app'] }]
+      : [{ name: 'Executables', extensions: ['exe'] }],
+    defaultPath: process.platform === 'darwin' ? '/Applications' : 'C:\\Program Files',
+  });
+  return result.canceled ? null : result.filePaths[0];
 });
 
 // Settings
