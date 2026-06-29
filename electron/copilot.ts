@@ -7,6 +7,7 @@ import type { ProjectContext } from './copilotTypes';
 
 let overlayWindow: BrowserWindow | null = null;
 let _store: any = null;
+let _ipcRegistered = false;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
@@ -204,6 +205,8 @@ async function buildProjectContext(): Promise<ProjectContext> {
 // ── IPC Handlers ──────────────────────────────────────────────────────────────
 
 function registerIpcHandlers() {
+  if (_ipcRegistered) return;
+  _ipcRegistered = true;
   ipcMain.handle('copilot:close', () => {
     overlayWindow?.hide();
   });

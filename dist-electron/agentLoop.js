@@ -4,6 +4,8 @@ exports.TOOL_REGISTRY = void 0;
 exports.getToolByName = getToolByName;
 exports.runAgentChat = runAgentChat;
 const midiTools_1 = require("./midiTools");
+const db_1 = require("./db");
+const electron_1 = require("electron");
 exports.TOOL_REGISTRY = [
     {
         name: 'generate_midi_melody',
@@ -90,6 +92,84 @@ exports.TOOL_REGISTRY = [
             })),
         }),
     },
+    {
+        name: 'search_local_files',
+        description: 'Search local music files by name, project, BPM, key, date, or role. Use this when the user asks to find a specific track or set of files.',
+        parameters: {
+            query: { type: 'string', description: 'Search term — file name, project name, or keywords' },
+            bpm: { type: 'number', description: 'Filter by BPM (optional)', required: false },
+            key: { type: 'string', description: 'Filter by musical key e.g. Am, G#, Cmaj (optional)', required: false },
+        },
+        confirmationRequired: false,
+        handler: async (params, _ctx) => {
+            const query = params.query ?? '';
+            const rows = (0, db_1.searchFiles)(query, 20).filter(f => {
+                if (params.bpm && Math.abs((f.bpm ?? 0) - params.bpm) > 3)
+                    return false;
+                if (params.key && !(f.key_note ?? '').toLowerCase().includes(params.key.toLowerCase()))
+                    return false;
+                return true;
+            });
+            if (rows.length === 0) {
+                return { status: 'done', message: `No local files found matching "${query}". Try a different name or add the file to your library.` };
+            }
+            const list = rows.slice(0, 5).map(f => `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}`).join('\n');
+            return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''}:\n${list}`, data: rows };
+        },
+    },
+    {
+        name: 'open_local_file',
+        description: 'Open a local audio or project file using its file path. Use this when the user says "open" or "play" a specific file.',
+        parameters: {
+            query: { type: 'string', description: 'File name or description to look up' },
+        },
+        confirmationRequired: false,
+        handler: async (params, _ctx) => {
+            const query = params.query ?? '';
+            const rows = (0, db_1.searchFiles)(query, 1);
+            if (!rows.length) {
+                return { status: 'error', error: `Could not find "${query}" in your library. Try adding the file first.` };
+            }
+            const file = rows[0];
+            electron_1.shell.openPath(file.file_path);
+            return { status: 'done', message: `Opening "${file.file_name}" in your default app.`, filePath: file.file_path };
+        },
+    },
+    {
+        name: 'reveal_local_file',
+        description: 'Reveal a local file in Finder/Explorer. Use when user says "show me", "find in folder", or "reveal".',
+        parameters: {
+            query: { type: 'string', description: 'File name or description to look up' },
+        },
+        confirmationRequired: false,
+        handler: async (params, _ctx) => {
+            const query = params.query ?? '';
+            const rows = (0, db_1.searchFiles)(query, 1);
+            if (!rows.length) {
+                return { status: 'error', error: `Could not find "${query}" in your library.` };
+            }
+            const file = rows[0];
+            electron_1.shell.showItemInFolder(file.file_path);
+            return { status: 'done', message: `Revealing "${file.file_name}" in Finder.`, filePath: file.file_path };
+        },
+    },
+    {
+        name: 'list_recent_files',
+        description: 'List the most recently modified local music files. Use when user asks "what have I been working on?" or "show my recent tracks".',
+        parameters: {
+            limit: { type: 'number', description: 'Max number of files to return (default 8)' },
+        },
+        confirmationRequired: false,
+        handler: async (params, _ctx) => {
+            const limit = Math.min(params.limit ?? 8, 20);
+            const rows = (0, db_1.getAllFiles)(limit, 0);
+            if (!rows.length) {
+                return { status: 'done', message: 'No files in your library yet. Drop some audio files into the Library tab to get started.' };
+            }
+            const list = rows.map(f => `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}`).join('\n');
+            return { status: 'done', message: `Your ${rows.length} most recent files:\n${list}` };
+        },
+    },
 ];
 function getToolByName(name) {
     return exports.TOOL_REGISTRY.find((t) => t.name === name);
@@ -97,10 +177,26 @@ function getToolByName(name) {
 // ── LLM Agent Loop ────────────────────────────────────────────────────────────
 const API_BASE = 'https://wavi.stream/api';
 async function runAgentChat(messages, context, authToken) {
-    // Try cloud LLM first
+    // Local intent detection first — handles find/open/reveal without LLM round-trip
+    const localResult = await tryLocalIntent(messages, context);
+    if (localResult !== null)
+        return localResult;
+    // Try cloud LLM
     if (authToken) {
         try {
             const systemPrompt = buildSystemPrompt(context);
+            const tools = exports.TOOL_REGISTRY.map(t => ({
+                type: 'function',
+                function: {
+                    name: t.name,
+                    description: t.description,
+                    parameters: {
+                        type: 'object',
+                        properties: Object.fromEntries(Object.entries(t.parameters).map(([k, v]) => [k, { type: v.type, description: v.description }])),
+                        required: Object.entries(t.parameters).filter(([, v]) => v.required !== false).map(([k]) => k),
+                    },
+                },
+            }));
             const response = await fetch(`${API_BASE}/assistant/chat`, {
                 method: 'POST',
                 headers: {
@@ -110,13 +206,30 @@ async function runAgentChat(messages, context, authToken) {
                 body: JSON.stringify({
                     messages: [{ role: 'system', content: systemPrompt }, ...messages],
                     model: 'gpt-4o-mini',
-                    max_tokens: 600,
+                    max_tokens: 800,
+                    tools,
+                    tool_choice: 'auto',
                 }),
                 signal: AbortSignal.timeout(15000),
             });
             if (response.ok) {
                 const data = await response.json();
-                return data.content ?? data.choices?.[0]?.message?.content ?? fallbackResponse(messages, context);
+                const choice = data.choices?.[0];
+                // Handle tool call from LLM
+                if (choice?.finish_reason === 'tool_calls' && choice?.message?.tool_calls?.length) {
+                    const tc = choice.message.tool_calls[0];
+                    const tool = getToolByName(tc.function.name);
+                    if (tool) {
+                        let params = {};
+                        try {
+                            params = JSON.parse(tc.function.arguments ?? '{}');
+                        }
+                        catch { }
+                        const result = await tool.handler(params, context);
+                        return result.message ?? result.error ?? 'Done.';
+                    }
+                }
+                return data.content ?? choice?.message?.content ?? fallbackResponse(messages, context);
             }
         }
         catch {
@@ -125,18 +238,56 @@ async function runAgentChat(messages, context, authToken) {
     }
     return fallbackResponse(messages, context);
 }
+async function tryLocalIntent(messages, context) {
+    const last = messages.filter(m => m.role === 'user').pop()?.content ?? '';
+    const low = last.toLowerCase();
+    // "open [track name]" or "play [track name]"
+    const openMatch = low.match(/^(?:open|play|load)\s+(.+)/);
+    if (openMatch) {
+        const query = openMatch[1].trim();
+        const tool = getToolByName('open_local_file');
+        const result = await tool.handler({ query }, context);
+        return result.message ?? result.error ?? null;
+    }
+    // "show me / reveal / find in folder [track name]"
+    const revealMatch = low.match(/^(?:show|reveal|find in folder|show me|find)\s+(.+)/);
+    if (revealMatch) {
+        const query = revealMatch[1].trim();
+        const tool = getToolByName('reveal_local_file');
+        const result = await tool.handler({ query }, context);
+        return result.message ?? result.error ?? null;
+    }
+    // "what have i been working on" / "recent tracks"
+    if (low.match(/recent|what.*work|last session|been working/)) {
+        const tool = getToolByName('list_recent_files');
+        const result = await tool.handler({ limit: 8 }, context);
+        return result.message ?? null;
+    }
+    // "find tracks" / "search for" / "any tracks with"
+    const findMatch = low.match(/(?:find|search for|do i have|any tracks?|look for)\s+(.+)/);
+    if (findMatch) {
+        const query = findMatch[1].trim();
+        const tool = getToolByName('search_local_files');
+        const result = await tool.handler({ query }, context);
+        return result.message ?? null;
+    }
+    return null;
+}
 function buildSystemPrompt(context) {
     const lines = [
         'You are Wavi Copilot, an AI assistant for music producers.',
-        'You help with DAW workflows, MIDI generation, mix decisions, and project organization.',
+        'You help with: finding/opening local tracks, DAW workflows, MIDI generation, mix decisions, and project organization.',
+        'When the user asks to find, open, play, or show a file — use search_local_files, open_local_file, or reveal_local_file tools.',
+        'When the user asks what they worked on recently — use list_recent_files.',
         'Keep responses concise and actionable. Speak like a knowledgeable producer, not a corporate assistant.',
+        `Today's date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,
     ];
     if (context?.projectName) {
         lines.push(`\nActive project: ${context.projectName}`);
         if (context.dawType)
             lines.push(`DAW: ${context.dawType}`);
         lines.push(`Versions: ${context.versionCount}`);
-        lines.push(`Files: ${context.files?.length ?? 0}`);
+        lines.push(`Files in project: ${context.files?.length ?? 0}`);
         if (context.lastSyncedAt)
             lines.push(`Last synced: ${context.lastSyncedAt}`);
     }

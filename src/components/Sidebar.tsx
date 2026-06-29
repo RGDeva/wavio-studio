@@ -1,4 +1,4 @@
-import { LayoutDashboard, Music, FolderOpen, Activity, Settings, Zap, SlidersHorizontal, Wand2 } from 'lucide-react';
+import { LayoutDashboard, Music, FolderOpen, Activity, Settings, Zap, SlidersHorizontal, Wand2, Search, Music2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { api } from '../lib/api';
 import type { Page } from '../types';
@@ -11,7 +11,9 @@ interface SidebarProps {
 
 const NAV_ITEMS: { id: Page; label: string; icon: React.FC<{ className?: string }> }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'search', label: 'Search', icon: Search },
   { id: 'studio', label: 'Studio Sync', icon: SlidersHorizontal },
+  { id: 'ableton', label: 'DAW Sync', icon: Music2 },
   { id: 'library', label: 'Library', icon: Music },
   { id: 'folders', label: 'Folders', icon: FolderOpen },
   { id: 'review', label: 'File Review', icon: Wand2 },

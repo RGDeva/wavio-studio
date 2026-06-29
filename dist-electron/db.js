@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDb = getDb;
+exports.initDatabaseForTesting = initDatabaseForTesting;
 exports.initDatabase = initDatabase;
 exports.upsertProject = upsertProject;
 exports.getProjects = getProjects;
@@ -17,7 +18,9 @@ exports.getAllFiles = getAllFiles;
 exports.searchFiles = searchFiles;
 exports.getFileStats = getFileStats;
 exports.updateFileSyncStatus = updateFileSyncStatus;
+exports.enqueueSyncItemIdempotent = enqueueSyncItemIdempotent;
 exports.enqueueSyncItem = enqueueSyncItem;
+exports.repairStalledQueue = repairStalledQueue;
 exports.getPendingSyncItems = getPendingSyncItems;
 exports.updateSyncItem = updateSyncItem;
 exports.getSyncQueue = getSyncQueue;
@@ -45,14 +48,24 @@ exports.resolveAssociationQueue = resolveAssociationQueue;
 const better_sqlite3_1 = __importDefault(require("better-sqlite3"));
 const path_1 = __importDefault(require("path"));
 const electron_1 = require("electron");
+const crypto_1 = __importDefault(require("crypto"));
 let db;
 function getDb() {
     return db;
 }
-function initDatabase() {
+/** Testing entry point — takes an explicit path (use ':memory:' in tests). */
+function initDatabaseForTesting(dbPath) {
+    return _initDatabaseAtPath(dbPath);
+}
+function initDatabase(opts = {}) {
     const userDataPath = electron_1.app.getPath('userData');
-    const dbPath = path_1.default.join(userDataPath, 'wavio-studio.db');
-    db = new better_sqlite3_1.default(dbPath);
+    const dbName = opts.dbName ?? 'wavio-studio.db';
+    const dbPath = path_1.default.join(userDataPath, dbName);
+    return _initDatabaseAtPath(dbPath);
+}
+function _initDatabaseAtPath(dbPath) {
+    const instance = new better_sqlite3_1.default(dbPath);
+    db = instance;
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
     // Schema migrations — safe to run on existing DBs (better-sqlite3 is sync)
@@ -109,6 +122,31 @@ function initDatabase() {
         db.exec('ALTER TABLE bounce_candidates ADD COLUMN checksum TEXT');
     }
     catch { /* already exists */ }
+    // Retry time gate: prevents immediate re-processing of 'retrying' rows after restart
+    try {
+        db.exec('ALTER TABLE sync_queue ADD COLUMN next_retry_at TEXT');
+    }
+    catch { /* already exists */ }
+    // Store cloud asset ID returned by register-asset so share link creation can use it
+    try {
+        db.exec('ALTER TABLE files ADD COLUMN cloud_asset_id TEXT');
+    }
+    catch { /* already exists */ }
+    // Store cloud project_version ID returned by daw-sync so share links can reference versions
+    try {
+        db.exec('ALTER TABLE projects ADD COLUMN cloud_version_id TEXT');
+    }
+    catch { /* already exists */ }
+    // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
+    // so they are treated as unknown and rehashed on next access rather than silently mismatching
+    try {
+        db.exec(`
+      UPDATE files    SET checksum = NULL WHERE checksum IS NOT NULL AND length(checksum) = 16 AND checksum GLOB '[0-9a-f]*';
+      UPDATE versions SET checksum = NULL WHERE checksum IS NOT NULL AND length(checksum) = 16 AND checksum GLOB '[0-9a-f]*';
+      UPDATE bounce_candidates SET checksum = NULL WHERE checksum IS NOT NULL AND length(checksum) = 16 AND checksum GLOB '[0-9a-f]*';
+    `);
+    }
+    catch { /* tables may not exist in edge-case fresh DBs */ }
     // Unique constraint on file_path so the same file can't produce duplicate candidates
     try {
         db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bounce_candidates_path ON bounce_candidates(file_path)');
@@ -155,30 +193,7 @@ function initDatabase() {
     `);
         db.pragma('foreign_keys = ON');
     }
-    try {
-        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(file_path)');
-    }
-    catch { /* already exists */ }
-    try {
-        db.exec('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id)');
-    }
-    catch { }
-    try {
-        db.exec('CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_at DESC)');
-    }
-    catch { }
-    try {
-        db.exec('CREATE INDEX IF NOT EXISTS idx_files_sync ON files(sync_status)');
-    }
-    catch { }
-    try {
-        db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)');
-    }
-    catch { }
-    try {
-        db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)');
-    }
-    catch { }
+    // Indexes are created after CREATE TABLE (moved below) so they work on fresh DBs too
     // ── Phase 1: Project Association Engine columns ──────────────────────────
     try {
         db.exec("ALTER TABLE files ADD COLUMN classifier_role TEXT DEFAULT 'misc'");
@@ -253,6 +268,7 @@ function initDatabase() {
       version_count INTEGER DEFAULT 1,
       sync_status TEXT DEFAULT 'pending',
       cloud_id TEXT,
+      cloud_version_id TEXT,
       created_at TEXT NOT NULL,
       modified_at TEXT NOT NULL,
       last_synced_at TEXT
@@ -267,6 +283,7 @@ function initDatabase() {
       file_size INTEGER DEFAULT 0,
       sync_status TEXT DEFAULT 'pending',
       cloud_url TEXT,
+      cloud_asset_id TEXT,
       checksum TEXT,
       bpm INTEGER,
       key_note TEXT,
@@ -280,6 +297,7 @@ function initDatabase() {
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
       file_id TEXT,
+      file_name TEXT,
       type TEXT NOT NULL,
       status TEXT DEFAULT 'pending',
       priority INTEGER DEFAULT 5,
@@ -290,7 +308,8 @@ function initDatabase() {
       upload_url TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT,
-      completed_at TEXT
+      completed_at TEXT,
+      next_retry_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS activity_log (
@@ -313,7 +332,33 @@ function initDatabase() {
       created_at TEXT NOT NULL
     );
   `);
-    return db;
+    // Indexes — run after CREATE TABLE so fresh DBs and existing DBs both get them
+    try {
+        db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(file_path)');
+    }
+    catch { /* already exists */ }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_files_modified ON files(modified_at DESC)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_files_sync ON files(sync_status)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_sync_queue_status ON sync_queue(status)');
+    }
+    catch { }
+    try {
+        db.exec('CREATE INDEX IF NOT EXISTS idx_activity_created ON activity_log(created_at DESC)');
+    }
+    catch { }
+    db = instance;
+    return instance;
 }
 // ── Projects ──────────────────────────────────────────────────────────────────
 function upsertProject(project) {
@@ -334,10 +379,10 @@ function getProjects() {
 function getProjectById(id) {
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
 }
-function updateProjectSyncStatus(id, status, cloudId) {
+function updateProjectSyncStatus(id, status, cloudId, cloudVersionId) {
     db.prepare(`
-    UPDATE projects SET sync_status = ?, cloud_id = ?, last_synced_at = ? WHERE id = ?
-  `).run(status, cloudId ?? null, new Date().toISOString(), id);
+    UPDATE projects SET sync_status = ?, cloud_id = ?, cloud_version_id = ?, last_synced_at = ? WHERE id = ?
+  `).run(status, cloudId ?? null, cloudVersionId ?? null, new Date().toISOString(), id);
 }
 // ── Files ─────────────────────────────────────────────────────────────────────
 function upsertStandaloneFile(file) {
@@ -415,24 +460,75 @@ function getFileStats() {
         byRole,
     };
 }
-function updateFileSyncStatus(id, status, cloudUrl) {
-    db.prepare('UPDATE files SET sync_status = ?, cloud_url = ? WHERE id = ?')
-        .run(status, cloudUrl ?? null, id);
+function updateFileSyncStatus(id, status, cloudUrl, cloudAssetId) {
+    db.prepare('UPDATE files SET sync_status = ?, cloud_url = ?, cloud_asset_id = ? WHERE id = ?')
+        .run(status, cloudUrl ?? null, cloudAssetId ?? null, id);
 }
 // ── Sync Queue ────────────────────────────────────────────────────────────────
-function enqueueSyncItem(item) {
+function enqueueSyncItemIdempotent(item) {
+    const existing = db.prepare(`
+    SELECT id FROM sync_queue
+    WHERE type = ? AND project_id = ? AND COALESCE(file_id, '') = COALESCE(?, '')
+      AND status IN ('pending', 'uploading', 'retrying')
+    LIMIT 1
+  `).get(item.type, item.project_id, item.file_id ?? null);
+    if (existing) {
+        return { inserted: false, existingId: existing.id };
+    }
     db.prepare(`
     INSERT OR IGNORE INTO sync_queue (id, project_id, file_id, file_name, type, priority, created_at)
     VALUES (@id, @project_id, @file_id, @file_name, @type, @priority, @created_at)
   `).run({ priority: 5, file_id: null, file_name: null, ...item });
+    return { inserted: true, id: item.id };
+}
+function enqueueSyncItem(item) {
+    enqueueSyncItemIdempotent(item);
+}
+function repairStalledQueue() {
+    // 1. Reset uploading → pending (crash recovery)
+    const resetResult = db.prepare(`
+    UPDATE sync_queue SET status = 'pending', started_at = NULL
+    WHERE status = 'uploading'
+  `).run();
+    const recovered = resetResult.changes;
+    // 2. Collapse duplicate active rows — keep newest by created_at, delete rest
+    const duplicates = db.prepare(`
+    SELECT id FROM sync_queue
+    WHERE status IN ('pending', 'retrying')
+      AND id NOT IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (
+            PARTITION BY type, project_id, COALESCE(file_id, '')
+            ORDER BY created_at DESC
+          ) AS rn FROM sync_queue
+          WHERE status IN ('pending', 'retrying')
+        ) WHERE rn = 1
+      )
+  `).all();
+    let deduped = 0;
+    if (duplicates.length > 0) {
+        const ids = duplicates.map(r => r.id);
+        const placeholders = ids.map(() => '?').join(',');
+        db.prepare(`DELETE FROM sync_queue WHERE id IN (${placeholders})`).run(...ids);
+        deduped = ids.length;
+    }
+    if (recovered > 0 || deduped > 0) {
+        db.prepare(`
+      INSERT INTO activity_log (id, type, message, created_at)
+      VALUES (?, 'queue_repair', ?, ?)
+    `).run(crypto_1.default.randomUUID(), `Queue repair: recovered ${recovered} stalled, deduped ${deduped} duplicates`, new Date().toISOString());
+    }
+    return { recovered, deduped };
 }
 function getPendingSyncItems(limit = 10) {
+    const now = new Date().toISOString();
     return db.prepare(`
     SELECT * FROM sync_queue
     WHERE status IN ('pending', 'retrying')
+      AND (next_retry_at IS NULL OR next_retry_at <= ?)
     ORDER BY priority DESC, created_at ASC
     LIMIT ?
-  `).all(limit);
+  `).all(now, limit);
 }
 function updateSyncItem(id, updates) {
     const keys = Object.keys(updates);

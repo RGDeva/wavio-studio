@@ -32,11 +32,11 @@ async function fileChecksum(filePath) {
             const hash = crypto_1.default.createHash('sha256');
             const stream = fs_1.default.createReadStream(filePath, { highWaterMark: 64 * 1024 });
             stream.on('data', (chunk) => hash.update(chunk));
-            stream.on('end', () => resolve(hash.digest('hex').slice(0, 16)));
-            stream.on('error', () => resolve(generateId().slice(0, 16)));
+            stream.on('end', () => resolve(hash.digest('hex')));
+            stream.on('error', () => resolve(crypto_1.default.randomUUID()));
         }
         catch {
-            resolve(generateId().slice(0, 16));
+            resolve(crypto_1.default.randomUUID());
         }
     });
 }
@@ -213,19 +213,25 @@ class WatcherManager {
      * Runs after chokidar 'ready' so the native fsevents watcher is fully initialised
      * and won't race with cleanup.  Files are fed through handleFileEvent('add', …)
      * in small batches with yielding so the main thread stays responsive.
+     *
+     * CRITICAL: Uses async fs.promises.readdir to avoid blocking the main thread
+     * (synchronous fs.readdirSync causes 10+ second hangs on APFS with large folders)
      */
     async scanExisting(folderPath) {
         const SCAN_EXTENSIONS = new Set([...DAW_EXTENSIONS, ...DEPENDENCY_EXTENSIONS]);
         const MAX_DEPTH = 3;
         const BATCH_SIZE = 50;
+        const MAX_FILES = 2000; // hard cap per folder — prevents OOM on large libraries
         const ignoreRe = /(^|[/\\])(\.|(node_modules|__MACOSX|Backup|Autosave|\.trash))/;
         const queue = [{ dir: folderPath, depth: 0 }];
         let batch = 0;
-        while (queue.length > 0 && !this._stopped) {
+        let totalFiles = 0;
+        while (queue.length > 0 && !this._stopped && totalFiles < MAX_FILES) {
             const { dir, depth } = queue.shift();
             let entries;
+            // Use async readdir to prevent main thread blocking (fs.readdirSync hangs on APFS)
             try {
-                entries = fs_1.default.readdirSync(dir, { withFileTypes: true });
+                entries = await fs_1.default.promises.readdir(dir, { withFileTypes: true });
             }
             catch {
                 continue;
@@ -251,10 +257,15 @@ class WatcherManager {
                         else {
                             this.handleFileEvent('add', abs);
                         }
+                        totalFiles++;
                         batch++;
                         if (batch >= BATCH_SIZE) {
                             batch = 0;
                             await new Promise(r => setTimeout(r, 50));
+                        }
+                        if (totalFiles >= MAX_FILES) {
+                            console.warn(`[watcher] scanExisting hit ${MAX_FILES} file cap for ${folderPath} — stopping scan`);
+                            return;
                         }
                     }
                 }
@@ -327,7 +338,7 @@ class WatcherManager {
                     checksum: newChecksum,
                     created_at: new Date().toISOString(),
                 });
-                (0, db_1.enqueueSyncItem)({
+                (0, db_1.enqueueSyncItemIdempotent)({
                     id: generateId(),
                     project_id: projectId,
                     file_name: path_1.default.basename(filePath),
@@ -338,7 +349,7 @@ class WatcherManager {
             }, 10000));
         }
         else if (event === 'add') {
-            (0, db_1.enqueueSyncItem)({
+            (0, db_1.enqueueSyncItemIdempotent)({
                 id: generateId(),
                 project_id: projectId,
                 file_name: path_1.default.basename(filePath),
@@ -376,6 +387,14 @@ class WatcherManager {
         const role = (0, classifier_1.classifyFile)(fileName);
         // Async analysis pipeline — does not block watcher or upload queue
         fileChecksum(filePath).then(async (checksum) => {
+            // Pre-enqueue hash guard: if the file content is unchanged and already uploaded,
+            // skip all processing. Mtime-only touches produce zero network activity.
+            const existingRow = this.db
+                .prepare('SELECT checksum, sync_status, cloud_asset_id FROM files WHERE file_path = ?')
+                .get(filePath);
+            if (existingRow?.cloud_asset_id && existingRow.checksum === checksum) {
+                return; // same content, already registered — nothing to do
+            }
             let bpm = null;
             let key_note = null;
             let duration = null;
@@ -467,7 +486,7 @@ class WatcherManager {
                 });
             }
             // Enqueue for sync AFTER DB row exists (avoids race condition)
-            (0, db_1.enqueueSyncItem)({
+            (0, db_1.enqueueSyncItemIdempotent)({
                 id: generateId(),
                 project_id: projectId ?? '__standalone__',
                 file_id: fileId,

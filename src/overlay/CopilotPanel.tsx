@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { X, Send, Zap, MessageSquare, ChevronDown, Loader2 } from 'lucide-react';
+import { X, Send, Zap, MessageSquare, ChevronDown, Loader2, Wand2, Brain } from 'lucide-react';
 import type { ChatMessage as ChatMsg, ProjectContext, CopilotMode, ToolOutput } from './types';
 import { ChatMessage } from './ChatMessage';
 import { ProjectContext as ProjectContextPanel } from './ProjectContext';
@@ -30,14 +30,24 @@ function genId() {
   return Math.random().toString(36).slice(2);
 }
 
+const ACT_TOOLS = [
+  { label: 'Melody', prompt: 'Generate a dark melody in C minor at 140 BPM' },
+  { label: 'Chords', prompt: 'Generate a chord progression in A minor at 120 BPM' },
+  { label: 'Drums', prompt: 'Make a trap drum pattern at 140 BPM' },
+  { label: 'Open Folder', prompt: 'Reveal project folder' },
+  { label: 'Summarize', prompt: 'Summarize this project' },
+  { label: 'FL Import', prompt: 'How do I import this MIDI into FL Studio?' },
+];
+
 export function CopilotPanel() {
   const [messages, setMessages] = useState<ChatMsg[]>([]);
   const [input, setInput] = useState('');
-  const [mode] = useState<CopilotMode>('ask');
+  const [mode, setMode] = useState<CopilotMode>('ask');
   const [context, setContext] = useState<ProjectContext | null>(null);
   const [contextLoading, setContextLoading] = useState(true);
   const [showContext, setShowContext] = useState(true);
   const [sending, setSending] = useState(false);
+  const [memoryCount, setMemoryCount] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const copilot = (window as any).waviCopilot as typeof window.waviCopilot | undefined;
@@ -75,6 +85,13 @@ export function CopilotPanel() {
     copilot.on('context:updated', refresh);
     return () => copilot.off('context:updated', refresh);
   }, [copilot]);
+
+  // Load memory count for badge
+  useEffect(() => {
+    const waviAPI = (window as any).waviAPI;
+    if (!waviAPI?.memory?.list) return;
+    waviAPI.memory.list().then((list: any[]) => setMemoryCount(list.length)).catch(() => {});
+  }, []);
 
   // Auto-scroll
   useEffect(() => {
@@ -197,14 +214,31 @@ export function CopilotPanel() {
           <Zap className="w-3 h-3 text-cyan-400" />
         </div>
         <span className="text-sm font-semibold text-white/80">Wavi Copilot</span>
-        <div className="flex items-center gap-1 ml-auto">
-          <div className="flex items-center gap-1 bg-white/5 rounded-full px-2 py-0.5">
-            <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-            <span className="text-[10px] text-white/40">{mode}</span>
-          </div>
+        <div className="flex items-center gap-1.5 ml-auto">
+          {/* Memory badge */}
+          {memoryCount > 0 && (
+            <div className="flex items-center gap-1 bg-violet-500/15 border border-violet-500/20 rounded-full px-1.5 py-0.5" title={`${memoryCount} memories stored`}>
+              <Brain className="w-2.5 h-2.5 text-violet-400" />
+              <span className="text-[9px] text-violet-300">{memoryCount}</span>
+            </div>
+          )}
+          {/* Ask / Act toggle */}
+          <button
+            onClick={() => setMode(m => m === 'ask' ? 'act' : 'ask')}
+            className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] transition-all border ${
+              mode === 'act'
+                ? 'bg-cyan-500/20 border-cyan-500/30 text-cyan-300'
+                : 'bg-white/5 border-white/10 text-white/35 hover:text-white/60'
+            }`}
+            title={mode === 'act' ? 'Switch to Ask mode' : 'Switch to Act mode (quick tools)'}
+          >
+            {mode === 'act' ? <Wand2 className="w-2.5 h-2.5" /> : <MessageSquare className="w-2.5 h-2.5" />}
+            {mode}
+          </button>
+          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
           <button
             onClick={() => (window as any).waviCopilot?.close()}
-            className="w-6 h-6 rounded-full flex items-center justify-center text-white/30 hover:text-white/70 hover:bg-white/8 transition-all ml-1"
+            className="w-6 h-6 rounded-full flex items-center justify-center text-white/30 hover:text-white/70 hover:bg-white/8 transition-all"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -257,6 +291,21 @@ export function CopilotPanel() {
           <ChatMessage key={msg.id} message={msg} />
         ))}
       </div>
+
+      {/* Act mode quick tools */}
+      {mode === 'act' && (
+        <div className="flex-shrink-0 border-t border-white/6 px-3 py-2">
+          <p className="text-[9px] text-white/20 uppercase tracking-wider mb-1.5">Quick Actions</p>
+          <div className="flex flex-wrap gap-1">
+            {ACT_TOOLS.map(t => (
+              <button key={t.label} onClick={() => send(t.prompt)} disabled={sending}
+                className="px-2.5 py-1 rounded-lg text-[11px] bg-white/5 hover:bg-cyan-500/15 border border-white/8 hover:border-cyan-500/25 text-white/50 hover:text-cyan-300 transition-all disabled:opacity-40">
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Input */}
       <div className="flex-shrink-0 border-t border-white/8 px-3 py-3">

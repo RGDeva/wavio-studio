@@ -1,8 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error']);
-const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent']);
+const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready']);
+const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths']);
 electron_1.contextBridge.exposeInMainWorld('waviAPI', {
     // Auth
     auth: {
@@ -32,6 +33,7 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
         stats: () => electron_1.ipcRenderer.invoke('files:stats'),
         import: (filePaths) => electron_1.ipcRenderer.invoke('files:import', filePaths),
         addViaDialog: () => electron_1.ipcRenderer.invoke('files:addViaDialog'),
+        discoverAll: () => electron_1.ipcRenderer.invoke('files:discoverAll'),
     },
     // Sync
     sync: {
@@ -48,6 +50,13 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
     shell: {
         openPath: (p) => electron_1.ipcRenderer.invoke('shell:openPath', p),
         openExternal: (url) => electron_1.ipcRenderer.invoke('shell:openExternal', url),
+        revealInFinder: (p) => electron_1.ipcRenderer.invoke('shell:revealInFinder', p),
+        openWithApp: (filePath, appPath) => electron_1.ipcRenderer.invoke('shell:openWithApp', filePath, appPath),
+        pickApp: () => electron_1.ipcRenderer.invoke('shell:pickApp'),
+    },
+    // Share links
+    share: {
+        createLink: (opts) => electron_1.ipcRenderer.invoke('share:createLink', opts),
     },
     // App
     app: {
@@ -65,6 +74,24 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
     // Copilot
     copilot: {
         toggle: () => electron_1.ipcRenderer.invoke('copilot:toggle'),
+        getContext: () => electron_1.ipcRenderer.invoke('copilot:getContext'),
+        chat: (messages, context) => electron_1.ipcRenderer.invoke('copilot:chat', messages, context),
+    },
+    // Ableton DAW Companion
+    ableton: {
+        selectFolder: () => electron_1.ipcRenderer.invoke('ableton:select-folder'),
+        syncToCloud: (snapshot, authToken) => electron_1.ipcRenderer.invoke('ableton:sync-to-cloud', snapshot, authToken),
+    },
+    // Memory (Copilot persistent context)
+    memory: {
+        list: () => electron_1.ipcRenderer.invoke('memory:list'),
+        get: (key) => electron_1.ipcRenderer.invoke('memory:get', key),
+        set: (key, value, category) => electron_1.ipcRenderer.invoke('memory:set', key, value, category),
+        delete: (key) => electron_1.ipcRenderer.invoke('memory:delete', key),
+    },
+    // Config exposed to renderer (safe, non-secret values only)
+    config: {
+        apiBase: API_BASE_PRELOAD,
     },
     // Bridge status
     bridge: {

@@ -1,0 +1,17 @@
+{
+  "name": "musehub-sdk",
+  "version": "1.5.1",
+  "description": "MuseHub SDK native bindings for Electron",
+  "main": "index.js",
+  "scripts": {
+    "install": "electron-rebuild",
+    "rebuild": "electron-rebuild"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "node-gyp": "^10.1.0"
+  },
+  "targets": {
+    "electron": "31.3.1"
+  }
+}

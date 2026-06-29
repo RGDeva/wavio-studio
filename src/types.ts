@@ -94,7 +94,16 @@ export interface FileStats {
   byRole: { role: string; count: number }[];
 }
 
-export type Page = 'dashboard' | 'library' | 'folders' | 'activity' | 'studio' | 'settings' | 'review';
+export type Page = 'dashboard' | 'library' | 'folders' | 'activity' | 'studio' | 'settings' | 'review' | 'search' | 'copilot' | 'ableton';
+
+export interface MemoryEntry {
+  id: string;
+  key: string;
+  value: string;
+  category: 'project' | 'preference' | 'note' | 'context';
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface AssociationQueueItem {
   id: string;

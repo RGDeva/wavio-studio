@@ -425,7 +425,7 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
       // Fallback: try cloud if token available
       const token = await api.auth.getToken();
       if (token && project.cloud_id) {
-        const res = await fetch(`https://wavi.stream/api/desktop/versions?projectId=${encodeURIComponent(project.cloud_id)}`, {
+        const res = await fetch(`${window.waviAPI.config.apiBase}/desktop/versions?projectId=${encodeURIComponent(project.cloud_id)}`, {
           headers: { Authorization: `Bearer ${token}` },
         });
         if (res.ok) setVersions(await res.json());

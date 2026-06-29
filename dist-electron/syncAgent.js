@@ -7,11 +7,47 @@ exports.SyncAgent = void 0;
 const fs_1 = __importDefault(require("fs"));
 const path_1 = __importDefault(require("path"));
 const db_1 = require("./db");
+const watcher_1 = require("./watcher");
 const crypto_1 = __importDefault(require("crypto"));
-const API_BASE = 'https://wavi.stream/api';
+const config_1 = require("./config");
+function formatSyncError(err) {
+    const msg = err?.message ?? 'Unknown error';
+    // Node native fetch AbortError: cause is DOMException with name 'AbortError'
+    if (msg === 'fetch failed' && err?.cause) {
+        const cause = err.cause;
+        const causeCode = cause?.code ?? cause?.name ?? '';
+        const causeMsg = cause?.message ?? '';
+        return `fetch failed [${causeCode || causeMsg || 'no cause'}]`;
+    }
+    return msg;
+}
 const POLL_INTERVAL_MS = 5000;
 const MAX_CONCURRENT = 2;
 const RETRY_DELAYS_MS = [5000, 30000, 120000, 300000]; // 5s, 30s, 2m, 5m
+const FETCH_TIMEOUT_MS = 60000; // 60s for Vercel Hobby cold-starts
+const UPLOAD_TIMEOUT_MS = 300000; // 5 minute timeout for file uploads
+// Fetch with timeout to prevent hanging
+async function fetchWithTimeout(url, options = {}) {
+    const { timeout = FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+        const response = await fetch(url, {
+            ...fetchOptions,
+            signal: controller.signal,
+        });
+        return response;
+    }
+    catch (error) {
+        if (error.name === 'AbortError') {
+            throw new Error(`Request timeout after ${timeout}ms: ${url}`);
+        }
+        throw error;
+    }
+    finally {
+        clearTimeout(id);
+    }
+}
 function generateId() {
     return crypto_1.default.randomUUID();
 }
@@ -34,6 +70,9 @@ class SyncAgent {
         if (this.running)
             return;
         this.running = true;
+        // Crash recovery: reset zombie 'uploading' rows and collapse duplicates
+        const r = (0, db_1.repairStalledQueue)();
+        console.log(`[sync] startup repair: recovered=${r.recovered} deduped=${r.deduped}`);
         this.pollTimer = setInterval(() => this._tick(), POLL_INTERVAL_MS);
         this._tick();
     }
@@ -135,29 +174,32 @@ class SyncAgent {
                 this.onProgress({ itemId: item.id, projectId: item.project_id, type: item.type, status: 'paused:limit' });
                 return;
             }
+            const delay = failed ? 0 : RETRY_DELAYS_MS[Math.min(retries - 1, RETRY_DELAYS_MS.length - 1)]
+                + Math.floor(Math.random() * 1000);
+            const nextRetryAt = failed ? null : new Date(Date.now() + delay).toISOString();
+            const errMsg = formatSyncError(err);
             (0, db_1.updateSyncItem)(item.id, {
                 status: failed ? 'failed' : 'retrying',
                 retries,
-                error_message: err?.message ?? 'Unknown error',
+                error_message: errMsg,
+                next_retry_at: nextRetryAt,
             });
             this.onProgress({
                 itemId: item.id,
                 projectId: item.project_id,
                 type: item.type,
                 status: failed ? 'failed' : 'retrying',
-                error: err?.message,
+                error: errMsg,
             });
             (0, db_1.logActivity)({
                 id: generateId(),
                 type: 'sync_error',
-                message: `Sync failed: ${err?.message ?? 'Unknown error'}`,
+                message: `Sync failed: ${errMsg}`,
                 project_id: item.project_id,
                 metadata: { itemId: item.id, retries },
             });
-            // Exponential backoff before next retry
+            // Schedule in-memory retry tick (belt-and-suspenders alongside next_retry_at DB gate)
             if (!failed) {
-                const delay = RETRY_DELAYS_MS[Math.min(retries - 1, RETRY_DELAYS_MS.length - 1)]
-                    + Math.floor(Math.random() * 1000);
                 setTimeout(() => this.tick(), delay);
             }
         }
@@ -166,8 +208,16 @@ class SyncAgent {
         const project = (0, db_1.getProjectById)(item.project_id);
         if (!project)
             throw new Error('Project not found');
+        // Compute SHA-256 of the project file for deduplication before syncing
+        let projectChecksum = null;
+        if (fs_1.default.existsSync(project.file_path)) {
+            try {
+                projectChecksum = await (0, watcher_1.fileChecksum)(project.file_path);
+            }
+            catch { /* non-fatal */ }
+        }
         // Step 1: POST project metadata to API (daw-sync)
-        const res = await fetch(`${API_BASE}/desktop/index`, {
+        const res = await fetchWithTimeout(`${config_1.API_BASE}/desktop/index`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -176,11 +226,12 @@ class SyncAgent {
             },
             body: JSON.stringify({
                 projectName: project.project_name,
-                sessionPath: project.file_path,
+                fileName: path_1.default.basename(project.file_path), // basename only — no local absolute path
+                localProjectId: project.id, // stable local UUID for server-side dedup
                 daw: project.daw_type,
                 fileSize: project.file_size,
                 lastModified: project.modified_at,
-                sha256: project.sha256 ?? null,
+                sha256: projectChecksum,
             }),
         });
         if (!res.ok) {
@@ -189,13 +240,14 @@ class SyncAgent {
         }
         const data = await res.json();
         const cloudProjectId = data.projectId ?? data.id;
-        (0, db_1.updateProjectSyncStatus)(project.id, 'synced', cloudProjectId);
+        const cloudVersionId = data.projectVersionId ?? null;
+        (0, db_1.updateProjectSyncStatus)(project.id, 'synced', cloudProjectId, cloudVersionId);
         // Step 2: Upload the actual project file via presign → PUT → register-asset
         if (fs_1.default.existsSync(project.file_path)) {
             const stats = fs_1.default.statSync(project.file_path);
             const fileName = path_1.default.basename(project.file_path);
             // Get pre-signed upload URL
-            const presignRes = await fetch(`${API_BASE}/storage/presign`, {
+            const presignRes = await fetchWithTimeout(`${config_1.API_BASE}/storage/presign`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -217,10 +269,11 @@ class SyncAgent {
                         status: 'uploading', bytesUploaded: 0, bytesTotal: stats.size, percentage: 0,
                     });
                     const fileStream = fs_1.default.createReadStream(project.file_path);
-                    const uploadRes = await fetch(presignData.uploadUrl, {
+                    const uploadRes = await fetchWithTimeout(presignData.uploadUrl, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(stats.size) },
                         body: fileStream,
+                        timeout: UPLOAD_TIMEOUT_MS,
                         // @ts-ignore — duplex required in Node 18+
                         duplex: 'half',
                     });
@@ -279,7 +332,7 @@ class SyncAgent {
         }
         const stats = fs_1.default.statSync(file.file_path);
         // Step 1: Get pre-signed upload URL (handles dedup check server-side)
-        const presignRes = await fetch(`${API_BASE}/storage/presign`, {
+        const presignRes = await fetchWithTimeout(`${config_1.API_BASE}/storage/presign`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -289,7 +342,6 @@ class SyncAgent {
                 fileName: file.file_name,
                 fileSize: stats.size,
                 sha256: file.checksum ?? null,
-                projectId: item.project_id,
             }),
         });
         if (!presignRes.ok) {
@@ -305,10 +357,11 @@ class SyncAgent {
                 status: 'uploading', bytesUploaded: 0, bytesTotal: fileSize2, percentage: 0,
             });
             const fileStream = fs_1.default.createReadStream(file.file_path);
-            const uploadRes = await fetch(presignData.uploadUrl, {
+            const uploadRes = await fetchWithTimeout(presignData.uploadUrl, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(fileSize2) },
                 body: fileStream,
+                timeout: UPLOAD_TIMEOUT_MS,
                 // @ts-ignore — duplex required in Node 18+
                 duplex: 'half',
             });
@@ -319,22 +372,82 @@ class SyncAgent {
                 itemId: item.id, projectId: item.project_id, type: 'file',
                 status: 'uploading', bytesUploaded: fileSize2, bytesTotal: fileSize2, percentage: 99,
             });
+            // Confirm the upload with the server so future presigns can dedup correctly
+            try {
+                await fetchWithTimeout(`${config_1.API_BASE}/storage/confirm`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${this.authToken}`,
+                    },
+                    body: JSON.stringify({
+                        sha256: file.checksum ?? null,
+                        storageKey: presignData.storageKey,
+                    }),
+                });
+            }
+            catch {
+                // Non-fatal: confirm failure means next presign re-uploads instead of dedup
+                // The asset registration still proceeds
+            }
         }
-        // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase
-        // Resolve project info for daw + projectName
+        // Step 3: ALWAYS register asset (even on dedup) so user gets an asset row in Supabase.
+        // Resolve cloud project ID — local IDs do not exist in Supabase, use cloud_id.
         let daw = null;
         let projectName = null;
+        let cloudProjectId = null;
+        let cloudVersionId = null;
         if (item.project_id && item.project_id !== '__standalone__') {
             try {
                 const project = (0, db_1.getProjectById)(item.project_id);
                 if (project) {
                     daw = project.daw_type ?? null;
                     projectName = project.project_name ?? null;
+                    cloudProjectId = project.cloud_id ?? null; // use cloud UUID, not local UUID
+                    cloudVersionId = project.cloud_version_id ?? null;
                 }
             }
             catch { }
         }
-        const registerRes = await fetch(`${API_BASE}/desktop/index`, {
+        // Immutable version bump: if this WAV file was previously registered (has cloud_asset_id)
+        // and its content changed (new checksum), create a new project_version so each
+        // bounce revision gets its own immutable snapshot.
+        if (file.cloud_asset_id && cloudProjectId && cloudVersionId) {
+            try {
+                const bumpRes = await fetchWithTimeout(`${config_1.API_BASE}/desktop/index`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${this.authToken}`,
+                        'X-Desktop-Action': 'daw-sync',
+                    },
+                    body: JSON.stringify({
+                        projectName: projectName ?? path_1.default.basename(file.file_path, path_1.default.extname(file.file_path)),
+                        fileName: file.file_name,
+                        localProjectId: item.project_id !== '__standalone__' ? item.project_id : undefined,
+                        daw: daw ?? null,
+                        fileSize: stats.size,
+                        lastModified: new Date().toISOString(),
+                        // Prefix distinguishes WAV-triggered versions from DAW-file versions.
+                        // sha256 dedup in daw-sync ensures identical bounces don't create duplicate versions.
+                        sha256: `bounce:${file.checksum ?? presignData.storageKey}`,
+                    }),
+                });
+                if (bumpRes.ok) {
+                    const bumpData = await bumpRes.json();
+                    const newVersionId = bumpData.projectVersionId ?? null;
+                    if (newVersionId && newVersionId !== cloudVersionId) {
+                        cloudVersionId = newVersionId;
+                        (0, db_1.updateProjectSyncStatus)(item.project_id, 'synced', cloudProjectId, newVersionId);
+                        console.log(`[syncAgent] WAV revision → new project version: ${newVersionId}`);
+                    }
+                }
+            }
+            catch (bumpErr) {
+                console.warn('[syncAgent] WAV version bump failed (non-fatal):', bumpErr?.message);
+            }
+        }
+        const registerRes = await fetchWithTimeout(`${config_1.API_BASE}/desktop/index`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -346,7 +459,8 @@ class SyncAgent {
                 storageKey: presignData.storageKey ?? presignData.fileUrl,
                 fileSize: stats.size,
                 sha256: file.checksum ?? null,
-                projectId: item.project_id !== '__standalone__' ? item.project_id : null,
+                projectId: cloudProjectId, // cloud UUID or null — not the local ID
+                projectVersionId: cloudVersionId, // current project version for history tracking
                 bpm: file.bpm ?? null,
                 keyNote: file.key_note ?? null,
                 duration: file.duration ?? null,
@@ -355,8 +469,13 @@ class SyncAgent {
                 projectName,
             }),
         });
+        if (!registerRes.ok) {
+            const errBody = await registerRes.json().catch(() => ({}));
+            throw new Error(`Asset registration failed: HTTP ${registerRes.status} — ${errBody?.error ?? 'unknown'}`);
+        }
         const regData = await registerRes.json().catch(() => ({}));
-        (0, db_1.updateFileSyncStatus)(file.id, 'synced', regData.fileUrl ?? presignData.storageKey);
+        // Store cloud asset ID so share link creation can use it without a round-trip
+        (0, db_1.updateFileSyncStatus)(file.id, 'synced', regData.fileUrl ?? presignData.storageKey, regData.assetId ?? undefined);
         this.onProgress({
             itemId: item.id,
             projectId: item.project_id,

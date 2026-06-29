@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const path_1 = __importDefault(require("path"));
 const fs_1 = __importDefault(require("fs"));
+const child_process_1 = require("child_process");
 const db_1 = require("./db");
 const fileClassifier_1 = require("./projectAssociation/fileClassifier");
 const projectAssociationEngine_1 = require("./projectAssociation/projectAssociationEngine");
@@ -49,25 +50,82 @@ const crypto_1 = __importDefault(require("crypto"));
 const watcher_1 = require("./watcher");
 const syncAgent_1 = require("./syncAgent");
 const copilot_1 = require("./copilot");
+const ableton_1 = require("./ableton");
 const bridgeServer_1 = require("./bridgeServer");
 const musehub_1 = require("./musehub");
 const electron_store_1 = __importDefault(require("electron-store"));
-const Sentry = __importStar(require("@sentry/electron/main"));
-Sentry.init({ dsn: process.env.SENTRY_DSN });
+const config_1 = require("./config");
+// Sentry is loaded dynamically to avoid crash during module import
+// (Sentry's normalize.js calls electron.app.getAppPath() on module load)
+let SentryInstance = null;
+async function initSentry() {
+    try {
+        if (process.env.SENTRY_DSN) {
+            SentryInstance = await Promise.resolve().then(() => __importStar(require('@sentry/electron/main')));
+            SentryInstance.init({ dsn: process.env.SENTRY_DSN });
+        }
+    }
+    catch {
+        // Sentry init failed - continue without error tracking
+        SentryInstance = null;
+    }
+}
+// Safe error capture helper
+function captureException(err) {
+    try {
+        if (SentryInstance) {
+            SentryInstance.captureException(err);
+        }
+    }
+    catch {
+        // Ignore Sentry errors
+    }
+}
+// Main-process diagnostic log file - lazily initialized to avoid calling app.getPath()
+// at module load time (app may not be ready yet during certain launch contexts)
+let MAIN_LOG = null;
+function getMainLogPath() {
+    if (!MAIN_LOG) {
+        MAIN_LOG = path_1.default.join(electron_1.app.getPath('home'), '.wavi', 'main.log');
+    }
+    return MAIN_LOG;
+}
+// Log rotation: max 5MB per file, keep 1 backup
+const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
+function mainLog(msg) {
+    try {
+        const logPath = getMainLogPath();
+        fs_1.default.mkdirSync(path_1.default.dirname(logPath), { recursive: true });
+        // Check log size and rotate if needed
+        try {
+            const stats = fs_1.default.statSync(logPath);
+            if (stats.size > MAX_LOG_SIZE) {
+                // Rotate: move current to backup, start fresh
+                const backupPath = logPath + '.old';
+                try {
+                    fs_1.default.renameSync(logPath, backupPath);
+                }
+                catch { /* ignore */ }
+            }
+        }
+        catch { /* file doesn't exist yet */ }
+        fs_1.default.appendFileSync(logPath, `[${new Date().toISOString()}] ${msg}\n`);
+    }
+    catch { }
+}
 // Prevent any unhandled rejection or exception from crashing the main process
 process.on('uncaughtException', (err) => {
     console.error('[main] uncaughtException:', err?.message ?? err);
-    Sentry.captureException(err);
+    mainLog(`uncaughtException: ${err?.stack ?? err?.message ?? err}`);
+    captureException(err);
 });
 process.on('unhandledRejection', (reason) => {
     console.error('[main] unhandledRejection:', reason);
-    Sentry.captureException(reason);
+    mainLog(`unhandledRejection: ${reason?.stack ?? reason?.message ?? reason}`);
+    captureException(reason);
 });
-// Register wavi:// deep-link protocol
-if (!electron_1.app.isDefaultProtocolClient('wavi')) {
-    electron_1.app.setAsDefaultProtocolClient('wavi');
-}
-const store = new electron_store_1.default();
+// These will be initialized inside app.whenReady()
+let store;
 let mainWindow = null;
 let watcherManager = null;
 let syncAgent = null;
@@ -90,12 +148,17 @@ function createWindow() {
         },
         icon: path_1.default.join(__dirname, '../public/icon.png'),
     });
-    if (isDev) {
-        mainWindow.loadURL('http://localhost:5173');
-        mainWindow.webContents.openDevTools();
-    }
-    else {
-        mainWindow.loadFile(path_1.default.join(__dirname, '../dist/index.html'));
+    // Content Security Policy for security — production only.
+    // In dev, Vite needs ws:// for HMR and 'unsafe-eval' for module loading, so we skip CSP.
+    if (!isDev) {
+        mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+            callback({
+                responseHeaders: {
+                    ...details.responseHeaders,
+                    'Content-Security-Policy': ["default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://wavi.stream https://*.supabase.co wss://*.supabase.co; img-src 'self' data: https:; media-src 'self' https: blob:; font-src 'self' data:;"]
+                }
+            });
+        });
     }
     // Debug: write renderer logs to file for diagnostics
     const logFile = path_1.default.join(electron_1.app.getPath('userData'), 'renderer.log');
@@ -113,27 +176,111 @@ function createWindow() {
     });
     mainWindow.webContents.on('render-process-gone', (_e, details) => {
         appendLog(`[renderer] CRASHED: ${details.reason} code=${details.exitCode}`);
+        mainLog(`render-process-gone: ${details.reason} code=${details.exitCode}`);
     });
     mainWindow.webContents.on('unresponsive', () => {
         appendLog('[renderer] UNRESPONSIVE');
+        mainLog('renderer unresponsive');
     });
-    mainWindow.webContents.on('did-fail-load', (_e, code, desc) => {
-        appendLog(`[renderer] FAIL LOAD: ${code} ${desc}`);
+    mainWindow.webContents.on('did-start-loading', () => appendLog('[renderer] did-start-loading'));
+    mainWindow.webContents.on('did-finish-load', () => appendLog('[renderer] did-finish-load'));
+    mainWindow.webContents.on('dom-ready', () => appendLog('[renderer] dom-ready'));
+    const loadRenderer = (attempt = 0) => {
+        if (!mainWindow || mainWindow.isDestroyed())
+            return;
+        if (isDev) {
+            mainWindow.loadURL('http://localhost:5173').catch((e) => {
+                appendLog(`[renderer] loadURL error: ${e?.message ?? e}`);
+            });
+        }
+        else {
+            mainWindow.loadFile(path_1.default.join(__dirname, '../dist/index.html')).catch((e) => {
+                appendLog(`[renderer] loadFile error: ${e?.message ?? e}`);
+            });
+        }
+    };
+    mainWindow.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+        appendLog(`[renderer] FAIL LOAD: ${code} ${desc} url=${url} mainFrame=${isMainFrame}`);
+        // -3 = ABORTED (benign, navigation superseded). Retry real failures on the main frame.
+        if (isMainFrame && code !== -3) {
+            setTimeout(() => loadRenderer(), 1000);
+        }
     });
+    // Show the window explicitly once content is ready (defensive against blank windows)
+    mainWindow.once('ready-to-show', () => {
+        appendLog('[renderer] ready-to-show');
+        mainWindow?.show();
+    });
+    loadRenderer();
+    if (isDev && process.env.WAVI_DEVTOOLS === '1') {
+        setTimeout(() => { try {
+            mainWindow?.webContents.openDevTools();
+        }
+        catch { } }, 1500);
+    }
     mainWindow.on('closed', () => {
         mainWindow = null;
     });
 }
+// Fix recurring "Network service crashed, restarting service" on macOS.
+// Must be called before app.whenReady() but after Electron has initialized internals.
+// We wrap in a try-catch in case app is not ready yet.
+try {
+    electron_1.app.commandLine.appendSwitch('disable-features', 'NetworkServiceSandbox');
+    if (process.env.WAVI_NO_SANDBOX === '1') {
+        electron_1.app.commandLine.appendSwitch('no-sandbox');
+        electron_1.app.commandLine.appendSwitch('disable-gpu-sandbox');
+    }
+    if (process.env.WAVI_DEBUG_PORT) {
+        electron_1.app.commandLine.appendSwitch('remote-debugging-port', process.env.WAVI_DEBUG_PORT);
+    }
+}
+catch {
+    // commandLine may not be available in all contexts - continue without
+}
 electron_1.app.whenReady().then(async () => {
-    // Init database
-    const db = (0, db_1.initDatabase)();
-    // Init watcher manager
+    mainLog('--- main process started ---');
+    (0, config_1.logApiEnvironment)();
+    // Initialize store now that app is ready
+    store = new electron_store_1.default();
+    // Register wavi:// deep-link protocol
+    if (!electron_1.app.isDefaultProtocolClient('wavi')) {
+        electron_1.app.setAsDefaultProtocolClient('wavi');
+    }
+    // Initialize Sentry error tracking (async to avoid blocking)
+    initSentry().catch(() => { });
+    // E2E isolation mode
+    if (process.env.WAVI_E2E === '1') {
+        console.warn('[E2E] Isolated test mode: DB=wavio-studio-e2e.db, watching only E2E folder');
+    }
+    // Step 1-3: Initialize DB + run all schema migrations synchronously.
+    // better-sqlite3 is fast (<100ms on existing DBs) so we do this before showing
+    // the window — that way any IPC calls the renderer fires at mount time are safe.
+    mainLog('Initializing database...');
+    const t0 = Date.now();
+    const db = (0, db_1.initDatabase)({ dbName: process.env.WAVI_E2E === '1' ? 'wavio-studio-e2e.db' : 'wavio-studio.db' });
+    mainLog(`Database initialized in ${Date.now() - t0}ms`);
+    // Step 4: Initialize watcher manager with safe IPC sender
     watcherManager = new watcher_1.WatcherManager(db, (event) => {
-        mainWindow?.webContents.send('watcher:event', event);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+                mainWindow.webContents.send('watcher:event', event);
+            }
+            catch (e) {
+                // Window may be closing, ignore
+            }
+        }
     });
-    // Init sync agent
+    // Init sync agent with safe IPC sender
     syncAgent = new syncAgent_1.SyncAgent(db, (progress) => {
-        mainWindow?.webContents.send('sync:progress', progress);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            try {
+                mainWindow.webContents.send('sync:progress', progress);
+            }
+            catch (e) {
+                // Window may be closing, ignore
+            }
+        }
         // Throttle tray rebuilds — at most once per 3s to avoid SIGABRT from rapid native menu recreation
         if (!_trayRebuildTimer) {
             _trayRebuildTimer = setTimeout(() => {
@@ -149,19 +296,35 @@ electron_1.app.whenReady().then(async () => {
     const storedToken = store.get('authToken', null);
     if (storedToken) {
         try {
-            const token = electron_1.safeStorage.isEncryptionAvailable()
-                ? electron_1.safeStorage.decryptString(Buffer.from(storedToken, 'base64'))
-                : storedToken;
-            syncAgent.setAuthToken(token);
+            if (electron_1.safeStorage.isEncryptionAvailable()) {
+                const token = electron_1.safeStorage.decryptString(Buffer.from(storedToken, 'base64'));
+                syncAgent.setAuthToken(token);
+            }
+            else {
+                // In dev without encryption, still allow token
+                syncAgent.setAuthToken(storedToken);
+            }
         }
-        catch { /* token corrupt — user will re-auth */ }
+        catch (e) {
+            console.error('[main] Token restore failed:', e);
+            // Token corrupt — user will re-auth
+        }
     }
-    // Show the window immediately — all folder scanning deferred below
+    // Step 4 (cont): Start services — all folder scanning deferred below
     syncAgent.start();
+    (0, copilot_1.initCopilot)(store);
+    (0, ableton_1.registerAbletonHandlers)();
+    (0, bridgeServer_1.startBridgeServer)();
+    // Steps 6-7: Create window after DB + services are ready — eliminates IPC race
+    // where renderer fires projects:getAll before initDatabase() completed.
     createTray();
     createWindow();
-    (0, copilot_1.initCopilot)(store);
-    (0, bridgeServer_1.startBridgeServer)();
+    // Notify renderer once the page finishes loading (DB is already initialized above)
+    mainWindow?.webContents.once('did-finish-load', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            mainWindow.webContents.send('main:ready');
+        }
+    });
     // MuseHub SDK — initialize if launched from MuseHub
     if ((0, musehub_1.initMuseSdk)()) {
         (0, musehub_1.startMuseHubSession)(store).then((result) => {
@@ -177,49 +340,24 @@ electron_1.app.whenReady().then(async () => {
     }
     // Defer folder watching + scanning so the window opens without blocking on APFS disk I/O
     setTimeout(() => {
+        // E2E isolation: override watched folders so tests don't touch the user's real library
+        if (process.env.WAVI_E2E === '1') {
+            const e2eFolder = process.env.WAVI_E2E_FOLDER ?? '/tmp/wavi-e2e';
+            watcherManager.addFolder(e2eFolder);
+            return;
+        }
         // Restore watched folders from store
         const folders = store.get('watchedFolders', []);
         for (const folder of folders) {
             watcherManager.addFolder(folder);
         }
-        // Auto-discover DAW + audio folders on very first launch
+        // Auto-discover specific DAW project subfolders on first launch.
+        // NOTE: ~/Music, ~/Desktop, ~/Downloads are NOT added as root watch paths —
+        // scanning those entire trees on machines with large libraries causes OOM → SIGKILL.
         if (!store.get('didAutoDiscover', false)) {
             store.set('didAutoDiscover', true);
             const discovered = discoverDawFolders();
-            const audioFolders = [
-                electron_1.app.getPath('music'),
-                electron_1.app.getPath('desktop'),
-                path_1.default.join(electron_1.app.getPath('home'), 'Downloads'),
-            ].filter(p => { try {
-                return fs_1.default.statSync(p).isDirectory();
-            }
-            catch {
-                return false;
-            } });
-            const allFolders = [...new Set([...discovered, ...audioFolders])];
-            for (const folder of allFolders) {
-                const current = store.get('watchedFolders', []);
-                if (!current.includes(folder)) {
-                    current.push(folder);
-                    store.set('watchedFolders', current);
-                    watcherManager.addFolder(folder);
-                }
-            }
-        }
-        // Ensure common audio folders are watched (for existing users)
-        if (!store.get('didAudioFolderScan', false)) {
-            store.set('didAudioFolderScan', true);
-            const audioFolders = [
-                electron_1.app.getPath('music'),
-                electron_1.app.getPath('desktop'),
-                path_1.default.join(electron_1.app.getPath('home'), 'Downloads'),
-            ].filter(p => { try {
-                return fs_1.default.statSync(p).isDirectory();
-            }
-            catch {
-                return false;
-            } });
-            for (const folder of audioFolders) {
+            for (const folder of discovered) {
                 const current = store.get('watchedFolders', []);
                 if (!current.includes(folder)) {
                     current.push(folder);
@@ -252,8 +390,13 @@ electron_1.app.on('before-quit', async (e) => {
 });
 electron_1.app.on('window-all-closed', async () => {
     if (process.platform !== 'darwin') {
-        syncAgent?.stop();
-        await watcherManager?.stopAll();
+        try {
+            syncAgent?.stop();
+            await watcherManager?.stopAll();
+        }
+        catch (e) {
+            console.error('[main] Error during shutdown:', e);
+        }
         electron_1.app.quit();
     }
 });
@@ -330,13 +473,13 @@ function rebuildTrayMenu() {
 // Deep-link: wavi://auth?token=wv_...
 // macOS: open-url fires when app is already running
 electron_1.app.on('open-url', (_event, url) => {
-    handleDeepLink(url);
+    void handleDeepLink(url);
 });
 // Windows/Linux: second-instance fires with argv containing the URL
 electron_1.app.on('second-instance', (_event, argv) => {
     const url = argv.find(arg => arg.startsWith('wavi://'));
     if (url)
-        handleDeepLink(url);
+        void handleDeepLink(url);
     // Focus existing window
     if (mainWindow) {
         if (mainWindow.isMinimized())
@@ -344,24 +487,85 @@ electron_1.app.on('second-instance', (_event, argv) => {
         mainWindow.focus();
     }
 });
-function handleDeepLink(url) {
+// Exchange a short-lived Privy JWT for a persistent wv_ desktop token.
+// Returns the wv_ token on success, null on failure.
+async function exchangePrivyJwt(privyJwt) {
     try {
-        const parsed = new URL(url);
-        if (parsed.hostname === 'auth') {
-            const token = parsed.searchParams.get('token');
-            if (token && token.length > 10) {
-                const toStore = electron_1.safeStorage.isEncryptionAvailable()
-                    ? electron_1.safeStorage.encryptString(token).toString('base64')
-                    : token;
-                store.set('authToken', toStore);
-                syncAgent?.setAuthToken(token);
-                mainWindow?.webContents.send('auth:token-received', token);
-                rebuildTrayMenu();
-            }
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        let res;
+        try {
+            res = await fetch(`${config_1.API_BASE}/desktop/index`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${privyJwt}`,
+                    'X-Desktop-Action': 'create-desktop-token',
+                },
+                body: JSON.stringify({ deviceLabel: `Wavi Studio — ${require('os').hostname()}` }),
+                signal: controller.signal,
+            });
         }
+        finally {
+            clearTimeout(timer);
+        }
+        if (!res.ok) {
+            mainLog(`[auth] Token exchange HTTP ${res.status}`);
+            return null;
+        }
+        const data = await res.json();
+        if (!data?.token?.startsWith('wv_')) {
+            mainLog('[auth] Token exchange: unexpected response shape');
+            return null;
+        }
+        return data.token;
     }
     catch (e) {
-        Sentry.captureException(e);
+        mainLog(`[auth] Token exchange error: ${e?.message ?? e}`);
+        captureException(e);
+        return null;
+    }
+}
+async function handleDeepLink(url) {
+    try {
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'wavi:')
+            return;
+        if (parsed.hostname !== 'auth')
+            return;
+        const rawToken = parsed.searchParams.get('token');
+        if (!rawToken || rawToken.length < 10)
+            return;
+        let finalToken;
+        if (rawToken.startsWith('wv_')) {
+            // Already a desktop token (future-proof for direct wv_ deep links)
+            finalToken = rawToken;
+        }
+        else {
+            // Privy JWT — exchange for a persistent 30-day desktop token.
+            // The raw JWT is never stored; if exchange fails we do not fall back.
+            mainWindow?.webContents.send('auth:exchanging');
+            const exchanged = await exchangePrivyJwt(rawToken);
+            if (!exchanged) {
+                mainWindow?.webContents.send('auth:error', 'exchange-failed');
+                return;
+            }
+            finalToken = exchanged;
+        }
+        // Store encrypted — never log the token value
+        const toStore = electron_1.safeStorage.isEncryptionAvailable()
+            ? electron_1.safeStorage.encryptString(finalToken).toString('base64')
+            : finalToken;
+        store.set('authToken', toStore);
+        syncAgent?.setAuthToken(finalToken);
+        // Signal renderer that auth succeeded; send token so renderer can set authed=true.
+        // The renderer does NOT store the token on disk — that is main process responsibility.
+        mainWindow?.webContents.send('auth:token-received', finalToken);
+        rebuildTrayMenu();
+    }
+    catch (e) {
+        captureException(e);
+        mainLog(`[auth] handleDeepLink error: ${e?.message ?? e}`);
     }
 }
 const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac']);
@@ -510,8 +714,9 @@ function discoverDawFolders() {
         // Reason
         path_1.default.join(docs, 'Reason'),
         path_1.default.join(music, 'Reason'),
-        // General music folders
-        music,
+        // NOTE: `music` (~/Music root) is intentionally excluded — adding the entire
+        // ~/Music tree as a watch path OOM-kills the process on large libraries.
+        // Users can add specific folders via the folder picker in Settings.
     ];
     const found = candidates.filter(p => {
         try {
@@ -574,6 +779,58 @@ electron_1.ipcMain.handle('auth:setToken', (_e, token) => {
 electron_1.ipcMain.handle('auth:clearToken', () => {
     store.delete('authToken');
     syncAgent?.setAuthToken(null);
+});
+// Share links — create or retrieve a share link for a synced asset
+electron_1.ipcMain.handle('share:createLink', async (_e, opts) => {
+    // Read the decrypted token from the secure store (same as startup restoration)
+    const storedRaw = store.get('authToken', null);
+    if (!storedRaw)
+        return { error: 'Not authenticated' };
+    let token;
+    try {
+        token = electron_1.safeStorage.isEncryptionAvailable()
+            ? electron_1.safeStorage.decryptString(Buffer.from(storedRaw, 'base64'))
+            : storedRaw;
+    }
+    catch {
+        return { error: 'Token decrypt failed' };
+    }
+    try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 15000);
+        let res;
+        try {
+            res = await fetch(`${config_1.API_BASE}/desktop/index`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${token}`,
+                    'X-Desktop-Action': 'create-share-link',
+                },
+                body: JSON.stringify({
+                    assetId: opts.assetId,
+                    allowDownload: opts.allowDownload ?? true,
+                    password: opts.password ?? null,
+                    expiresAt: opts.expiresAt ?? null,
+                }),
+                signal: controller.signal,
+            });
+        }
+        finally {
+            clearTimeout(timer);
+        }
+        if (!res.ok) {
+            const body = await res.json().catch(() => ({}));
+            return { error: body?.error ?? `HTTP ${res.status}` };
+        }
+        const data = await res.json();
+        (0, db_1.logActivity)({ id: crypto_1.default.randomUUID(), type: 'share_link_created', message: `Share link: ${data.shareUrl}` });
+        return { shareUrl: data.shareUrl, trackingId: data.trackingId, reused: data.reused };
+    }
+    catch (e) {
+        captureException(e);
+        return { error: e?.message ?? 'Unknown error' };
+    }
 });
 // Folders
 electron_1.ipcMain.handle('folders:getAll', () => {
@@ -707,6 +964,54 @@ electron_1.ipcMain.handle('files:addViaDialog', async () => {
     mainWindow?.webContents.send('watcher:event', { type: 'files_imported', count: imported.length });
     return imported;
 });
+// Auto-discover all audio files in home/music/documents/desktop
+electron_1.ipcMain.handle('files:discoverAll', async () => {
+    const { readdirSync, statSync } = require('fs');
+    const AUDIO_EXTS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac', '.flp', '.als', '.ptx', '.ptf', '.rpp']);
+    const MAX_DEPTH = 6;
+    const roots = [electron_1.app.getPath('music'), electron_1.app.getPath('documents'), electron_1.app.getPath('desktop')];
+    const foundPaths = [];
+    function walk(dir, depth) {
+        if (depth > MAX_DEPTH)
+            return;
+        let entries;
+        try {
+            entries = readdirSync(dir, { withFileTypes: true });
+        }
+        catch {
+            return;
+        }
+        for (const entry of entries) {
+            if (entry.name.startsWith('.'))
+                continue;
+            const full = path_1.default.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                walk(full, depth + 1);
+            }
+            else if (entry.isFile()) {
+                const ext = path_1.default.extname(entry.name).toLowerCase();
+                if (AUDIO_EXTS.has(ext))
+                    foundPaths.push(full);
+            }
+        }
+    }
+    for (const root of roots) {
+        try {
+            statSync(root);
+            walk(root, 0);
+        }
+        catch { /* skip missing roots */ }
+    }
+    // Import each found file (idempotent — existing files are skipped)
+    let imported = 0;
+    for (const p of foundPaths) {
+        const id = await importAudioFile(p);
+        if (id)
+            imported++;
+    }
+    mainWindow?.webContents.send('watcher:event', { type: 'files_imported', count: imported });
+    return { found: foundPaths.length, imported };
+});
 // Sync
 electron_1.ipcMain.handle('sync:getQueue', () => syncAgent?.getQueue() ?? []);
 electron_1.ipcMain.handle('sync:retryAll', () => syncAgent?.retryFailed());
@@ -714,12 +1019,13 @@ electron_1.ipcMain.handle('sync:getStatus', () => syncAgent?.getStatus() ?? 'idl
 electron_1.ipcMain.handle('sync:now', () => { syncAgent?.retryFailed(); syncAgent?.tick?.(); });
 // Activity
 electron_1.ipcMain.handle('activity:getAll', () => (0, db_1.getActivityLog)(100));
-// Shell — open external URL (restricted to wavi.stream)
+// Shell — open external URL (restricted to known hosts)
 electron_1.ipcMain.handle('shell:openExternal', (_e, url) => {
     try {
         const parsed = new URL(url);
-        const allowed = ['wavi.stream', 'github.com', 'privy.io'];
-        if (parsed.protocol !== 'https:' || !allowed.some(h => parsed.hostname.endsWith(h)))
+        const webBaseHost = new URL(config_1.WEB_BASE).hostname;
+        const allowed = ['wavi.stream', 'github.com', 'privy.io', webBaseHost];
+        if (parsed.protocol !== 'https:' || !allowed.some(h => parsed.hostname === h || parsed.hostname.endsWith(`.${h}`)))
             return;
         electron_1.shell.openExternal(url);
     }
@@ -732,6 +1038,57 @@ electron_1.ipcMain.handle('shell:openPath', (_e, p) => {
     if (!safePrefixes.some(prefix => resolved.startsWith(prefix)))
         return;
     return electron_1.shell.openPath(resolved);
+});
+// Reveal a file in Finder/Explorer without opening it
+electron_1.ipcMain.handle('shell:revealInFinder', (_e, p) => {
+    const safePrefixes = [electron_1.app.getPath('home'), electron_1.app.getPath('music'), electron_1.app.getPath('documents')];
+    const resolved = path_1.default.resolve(p);
+    if (!safePrefixes.some(prefix => resolved.startsWith(prefix)))
+        return;
+    electron_1.shell.showItemInFolder(resolved);
+});
+// Open a file with a specific application (e.g. FL Studio, Pro Tools, Ableton)
+// appPath is the .app bundle or .exe; filePath is the audio/project file
+electron_1.ipcMain.handle('shell:openWithApp', (_e, filePath, appPath) => {
+    const safeFilePrefixes = [electron_1.app.getPath('home'), electron_1.app.getPath('music'), electron_1.app.getPath('documents'), electron_1.app.getPath('desktop')];
+    const resolved = path_1.default.resolve(filePath);
+    if (!safeFilePrefixes.some(prefix => resolved.startsWith(prefix))) {
+        throw new Error('File path not in safe location');
+    }
+    // On macOS: `open -a /Applications/FL Studio.app file.flp`
+    // On Windows: execFile with the .exe directly
+    if (process.platform === 'darwin') {
+        return new Promise((resolve, reject) => {
+            (0, child_process_1.execFile)('open', ['-a', appPath, resolved], (err) => {
+                if (err)
+                    reject(err);
+                else
+                    resolve();
+            });
+        });
+    }
+    else {
+        return new Promise((resolve, reject) => {
+            (0, child_process_1.execFile)(appPath, [resolved], (err) => {
+                if (err)
+                    reject(err);
+                else
+                    resolve();
+            });
+        });
+    }
+});
+// Pick a DAW application via file dialog and return its path
+electron_1.ipcMain.handle('shell:pickApp', async () => {
+    const result = await electron_1.dialog.showOpenDialog({
+        title: 'Select DAW Application',
+        properties: ['openFile'],
+        filters: process.platform === 'darwin'
+            ? [{ name: 'Applications', extensions: ['app'] }]
+            : [{ name: 'Executables', extensions: ['exe'] }],
+        defaultPath: process.platform === 'darwin' ? '/Applications' : 'C:\\Program Files',
+    });
+    return result.canceled ? null : result.filePaths[0];
 });
 // Settings
 electron_1.ipcMain.handle('settings:get', (_e, key) => store.get(key));
@@ -921,6 +1278,38 @@ electron_1.ipcMain.handle('musehub:checkUsage', async () => {
 electron_1.ipcMain.handle('musehub:refreshSession', async () => {
     const result = await (0, musehub_1.startMuseHubSession)(store);
     return result;
+});
+// Memory — lightweight key-value store for Copilot context/preferences
+electron_1.ipcMain.handle('memory:list', () => {
+    const entries = store.get('memory', {});
+    return Object.entries(entries).map(([key, v]) => ({
+        key,
+        value: typeof v === 'object' ? v.value : v,
+        category: typeof v === 'object' ? (v.category ?? 'note') : 'note',
+        createdAt: typeof v === 'object' ? (v.createdAt ?? new Date().toISOString()) : new Date().toISOString(),
+        updatedAt: typeof v === 'object' ? (v.updatedAt ?? new Date().toISOString()) : new Date().toISOString(),
+    }));
+});
+electron_1.ipcMain.handle('memory:get', (_e, key) => {
+    const entries = store.get('memory', {});
+    const v = entries[key];
+    return v ? (typeof v === 'object' ? v.value : v) : null;
+});
+electron_1.ipcMain.handle('memory:set', (_e, key, value, category = 'note') => {
+    const entries = store.get('memory', {});
+    const existing = entries[key];
+    entries[key] = {
+        value,
+        category,
+        createdAt: existing?.createdAt ?? new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+    };
+    store.set('memory', entries);
+});
+electron_1.ipcMain.handle('memory:delete', (_e, key) => {
+    const entries = store.get('memory', {});
+    delete entries[key];
+    store.set('memory', entries);
 });
 // App
 electron_1.ipcMain.handle('app:relaunch', () => {

@@ -10,6 +10,8 @@ export interface ToolResult {
   description?: string;
   importGuide?: string;
   error?: string;
+  message?: string;
+  data?: unknown;
   metadata?: Record<string, unknown>;
 }
 

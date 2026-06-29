@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Search, Music, FileAudio, ArrowUpDown, Cloud,
   FolderOpen, ChevronDown, RefreshCw, X,
-  Upload, Plus, Loader2, Sparkles, UploadCloud, CheckCircle2, AlertCircle,
+  Upload, Plus, Loader2, Sparkles, UploadCloud, Music2,
 } from 'lucide-react';
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
@@ -46,6 +46,8 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [dawPaths, setDawPaths] = useState<Record<string, string>>({});
+  const [openDawMenu, setOpenDawMenu] = useState<string | null>(null);
   // Sync progress
   const [syncQueue, setSyncQueue] = useState<SyncQueueItem[]>([]);
   const [syncProgresses, setSyncProgresses] = useState<Record<string, SyncProgress>>({});
@@ -53,6 +55,10 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
 
   const mountedRef = useRef(true);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
+
+  useEffect(() => {
+    api.settings.get('dawPaths').then((d) => { if (d) setDawPaths(d); });
+  }, []);
 
   // Expensive: load files + stats — only on mount or real file changes
   const refreshFiles = useCallback(async () => {
@@ -454,9 +460,9 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             )}
           </div>
         ) : (
-          <div className="bg-[#111] border border-[#1a1a1a] rounded-xl overflow-hidden">
+          <div className="bg-[#111] border border-[#1a1a1a] rounded-xl overflow-hidden" onClick={() => setOpenDawMenu(null)}>
             {/* Table header */}
-            <div className="grid grid-cols-[1fr_80px_70px_60px_70px_70px_80px_60px] gap-2 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0d0d0d]">
+            <div className="grid grid-cols-[1fr_80px_70px_60px_70px_70px_80px_60px_72px] gap-2 px-4 py-2.5 border-b border-[#1a1a1a] bg-[#0d0d0d]">
               <SortHeader field="file_name" label="Name" />
               <SortHeader field="role" label="Role" />
               <SortHeader field="bpm" label="BPM" />
@@ -465,6 +471,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               <SortHeader field="file_size" label="Size" />
               <SortHeader field="modified_at" label="Modified" />
               <span className="text-[10px] uppercase tracking-wider text-white/30 font-medium">Sync</span>
+              <span className="text-[10px] uppercase tracking-wider text-white/30 font-medium">Open</span>
             </div>
 
             {/* Rows */}
@@ -472,7 +479,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               {displayFiles.map((file) => (
                 <div
                   key={file.id}
-                  className="grid grid-cols-[1fr_80px_70px_60px_70px_70px_80px_60px] gap-2 px-4 py-2.5 hover:bg-white/[0.02] transition-colors group cursor-default"
+                  className="grid grid-cols-[1fr_80px_70px_60px_70px_70px_80px_60px_72px] gap-2 px-4 py-2.5 hover:bg-white/[0.02] transition-colors group cursor-default"
                   title={file.file_path}
                 >
                   {/* Name + project */}
@@ -531,6 +538,44 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
                   {/* Sync status */}
                   <div className="flex items-center">
                     <SyncStatusBadge status={file.sync_status} />
+                  </div>
+
+                  {/* Open actions */}
+                  <div className="flex items-center gap-1 relative">
+                    <button
+                      title="Reveal in Finder"
+                      onClick={(e) => { e.stopPropagation(); api.shell.revealInFinder(file.file_path); }}
+                      className="p-1 rounded text-white/20 hover:text-white/60 hover:bg-white/5 transition-colors"
+                    >
+                      <FolderOpen className="w-3.5 h-3.5" />
+                    </button>
+                    {Object.values(dawPaths).some(Boolean) && (
+                      <div className="relative">
+                        <button
+                          title="Open in DAW"
+                          onClick={(e) => { e.stopPropagation(); setOpenDawMenu(openDawMenu === file.id ? null : file.id); }}
+                          className="p-1 rounded text-white/20 hover:text-pink-400 hover:bg-white/5 transition-colors"
+                        >
+                          <Music2 className="w-3.5 h-3.5" />
+                        </button>
+                        {openDawMenu === file.id && (
+                          <div
+                            className="absolute right-0 bottom-7 z-50 min-w-[140px] rounded-xl border border-white/10 bg-[#111] shadow-2xl py-1"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {Object.entries(dawPaths).filter(([, v]) => !!v).map(([key, appPath]) => (
+                              <button
+                                key={key}
+                                onClick={() => { api.shell.openWithApp(file.file_path, appPath); setOpenDawMenu(null); }}
+                                className="w-full px-3 py-2 text-left text-xs text-white/70 hover:bg-white/5 hover:text-white transition-colors"
+                              >
+                                {key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               ))}

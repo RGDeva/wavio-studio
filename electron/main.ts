@@ -944,6 +944,46 @@ ipcMain.handle('files:addViaDialog', async () => {
   return imported;
 });
 
+// Auto-discover all audio files in home/music/documents/desktop
+ipcMain.handle('files:discoverAll', async () => {
+  const { readdirSync, statSync } = require('fs') as typeof import('fs');
+  const AUDIO_EXTS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac', '.flp', '.als', '.ptx', '.ptf', '.rpp']);
+  const MAX_DEPTH = 6;
+  const roots = [app.getPath('music'), app.getPath('documents'), app.getPath('desktop')];
+
+  const foundPaths: string[] = [];
+
+  function walk(dir: string, depth: number) {
+    if (depth > MAX_DEPTH) return;
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(full, depth + 1);
+      } else if (entry.isFile()) {
+        const ext = path.extname(entry.name).toLowerCase();
+        if (AUDIO_EXTS.has(ext)) foundPaths.push(full);
+      }
+    }
+  }
+
+  for (const root of roots) {
+    try { statSync(root); walk(root, 0); } catch { /* skip missing roots */ }
+  }
+
+  // Import each found file (idempotent — existing files are skipped)
+  let imported = 0;
+  for (const p of foundPaths) {
+    const id = await importAudioFile(p);
+    if (id) imported++;
+  }
+
+  mainWindow?.webContents.send('watcher:event', { type: 'files_imported', count: imported });
+  return { found: foundPaths.length, imported };
+});
+
 // Sync
 ipcMain.handle('sync:getQueue', () => syncAgent?.getQueue() ?? []);
 ipcMain.handle('sync:retryAll', () => syncAgent?.retryFailed());

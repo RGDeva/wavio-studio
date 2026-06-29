@@ -1,17 +1,19 @@
 {
   "name": "wavio-studio",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Wavi Studio — Desktop DAW sync agent",
   "main": "dist-electron/main.js",
   "scripts": {
-    "dev": "concurrently \"vite\" \"wait-on tcp:5173 && electron .\"",
+    "dev": "tsc -p tsconfig.electron.json; concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist-electron/main.js && electron .\"",
+    "build:electron": "tsc -p tsconfig.electron.json",
     "build": "vite build && tsc -p tsconfig.electron.json",
     "build:all": "npm run build && electron-builder",
     "build:mac": "npm run build && electron-builder --mac",
     "build:win": "npm run build && electron-builder --win",
     "build:linux": "npm run build && electron-builder --linux",
     "lint": "eslint . --ext ts,tsx",
-    "test": "vitest run"
+    "test": "vitest run",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",
@@ -38,6 +40,7 @@
     "tus-js-client": "^4.1.0"
   },
   "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
     "@types/better-sqlite3": "^7.6.8",
     "@types/node": "^20.11.20",
     "@types/react": "^18.3.1",
@@ -65,19 +68,38 @@
       "dist/**/*",
       "dist-electron/**/*"
     ],
-    "extraResources": [
+    "publish": [
       {
-        "from": "build/app-update.yml",
-        "to": "app-update.yml"
+        "provider": "generic",
+        "url": "https://wavi.stream/releases"
       }
     ],
     "mac": {
       "category": "public.app-category.music",
       "icon": "public/icon.icns",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
       "target": [
-        "dmg",
-        "zip"
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
       ]
+    },
+    "dmg": {
+      "sign": false
     },
     "win": {
       "icon": "public/icon.ico",

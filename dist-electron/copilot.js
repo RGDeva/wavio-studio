@@ -13,6 +13,7 @@ const db_1 = require("./db");
 const agentLoop_1 = require("./agentLoop");
 let overlayWindow = null;
 let _store = null;
+let _ipcRegistered = false;
 const isDev = process.env.NODE_ENV === 'development' || !electron_1.app.isPackaged;
 // ── Window management ─────────────────────────────────────────────────────────
 function initCopilot(store) {
@@ -195,6 +196,9 @@ async function buildProjectContext() {
 }
 // ── IPC Handlers ──────────────────────────────────────────────────────────────
 function registerIpcHandlers() {
+    if (_ipcRegistered)
+        return;
+    _ipcRegistered = true;
     electron_1.ipcMain.handle('copilot:close', () => {
         overlayWindow?.hide();
     });
