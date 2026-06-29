@@ -126,12 +126,20 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
         return true;
       });
       if (rows.length === 0) {
-        return { status: 'done', message: `No local files found matching "${query}". Try a different name or add the file to your library.` };
+        return { status: 'done', message: `No local files found matching "${query}". Fields searched: filename, project name, role. Try a different name or run Discover to scan for new files.` };
       }
-      const list = rows.slice(0, 5).map(f =>
-        `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}`
-      ).join('\n');
-      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''}:\n${list}`, data: rows };
+      const qLow = query.toLowerCase();
+      const list = rows.slice(0, 5).map(f => {
+        const matchReasons: string[] = [];
+        if ((f.file_name ?? '').toLowerCase().includes(qLow)) matchReasons.push('name');
+        if ((f.project_name ?? '').toLowerCase().includes(qLow)) matchReasons.push('project');
+        if ((f.role ?? '').toLowerCase().includes(qLow)) matchReasons.push('role');
+        if (params.bpm) matchReasons.push('BPM');
+        if (params.key) matchReasons.push('key');
+        const why = matchReasons.length ? ` [matched: ${matchReasons.join(', ')}]` : '';
+        return `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}${why}`;
+      }).join('\n');
+      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} (fields searched: filename, project, role):\n${list}`, data: rows };
     },
   },
   {
@@ -143,13 +151,18 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
       const query = (params.query as string) ?? '';
-      const rows = searchFiles(query, 1) as any[];
+      const rows = searchFiles(query, 3) as any[];
       if (!rows.length) {
-        return { status: 'error', error: `Could not find "${query}" in your library. Try adding the file first.` };
+        return { status: 'error', error: `Could not find "${query}" in your library. Try adding the file via the Library tab first.` };
       }
       const file = rows[0];
+      // Validate file still exists on disk
+      try { require('fs').statSync(file.file_path); } catch {
+        return { status: 'error', error: `File "${file.file_name}" was moved or deleted. Path: ${file.file_path}` };
+      }
+      // Only open files that are actually in the indexed library (already confirmed via DB lookup)
       shell.openPath(file.file_path);
-      return { status: 'done', message: `Opening "${file.file_name}" in your default app.`, filePath: file.file_path };
+      return { status: 'done', message: `Opening "${file.file_name}" in your default app.\n(Matched by: name search for "${query}")`, filePath: file.file_path };
     },
   },
   {
@@ -161,13 +174,16 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
       const query = (params.query as string) ?? '';
-      const rows = searchFiles(query, 1) as any[];
+      const rows = searchFiles(query, 3) as any[];
       if (!rows.length) {
         return { status: 'error', error: `Could not find "${query}" in your library.` };
       }
       const file = rows[0];
+      try { require('fs').statSync(file.file_path); } catch {
+        return { status: 'error', error: `File "${file.file_name}" was moved or deleted. Re-run Discover to update your library.` };
+      }
       shell.showItemInFolder(file.file_path);
-      return { status: 'done', message: `Revealing "${file.file_name}" in Finder.`, filePath: file.file_path };
+      return { status: 'done', message: `Revealing "${file.file_name}" in Finder.\n(Matched by: name search for "${query}")`, filePath: file.file_path };
     },
   },
   {

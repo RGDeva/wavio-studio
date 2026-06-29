@@ -14,6 +14,7 @@ exports.upsertStandaloneFile = upsertStandaloneFile;
 exports.upsertFile = upsertFile;
 exports.getFilesByProject = getFilesByProject;
 exports.getFileById = getFileById;
+exports.getFileByPath = getFileByPath;
 exports.getAllFiles = getAllFiles;
 exports.searchFiles = searchFiles;
 exports.getFileStats = getFileStats;
@@ -425,6 +426,9 @@ function getFilesByProject(projectId) {
 }
 function getFileById(id) {
     return db.prepare('SELECT * FROM files WHERE id = ?').get(id);
+}
+function getFileByPath(filePath) {
+    return db.prepare('SELECT id FROM files WHERE file_path = ?').get(filePath);
 }
 function getAllFiles(limit = 500, offset = 0) {
     return db.prepare(`

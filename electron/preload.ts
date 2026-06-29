@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
 
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready']);
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths']);
 
 contextBridge.exposeInMainWorld('waviAPI', {
@@ -37,7 +37,10 @@ contextBridge.exposeInMainWorld('waviAPI', {
     stats: () => ipcRenderer.invoke('files:stats'),
     import: (filePaths: string[]) => ipcRenderer.invoke('files:import', filePaths),
     addViaDialog: () => ipcRenderer.invoke('files:addViaDialog'),
-    discoverAll: () => ipcRenderer.invoke('files:discoverAll'),
+    discoverAll: (opts?: { roots?: string[]; extraRoots?: string[]; excludePaths?: string[]; maxFiles?: number; maxDurationMs?: number }) =>
+      ipcRenderer.invoke('files:discoverAll', opts),
+    discoverCancel: () => ipcRenderer.invoke('files:discoverCancel'),
+    defaultDiscoveryRoots: () => ipcRenderer.invoke('files:defaultDiscoveryRoots'),
   },
 
   // Sync

@@ -11,6 +11,7 @@ export default defineConfig({
       'electron/auth.test.ts',
       'electron/upload.test.ts',
       'electron/db.integration.test.ts',
+      'electron/discovery.test.ts',
     ],
     environment: 'node',
   },

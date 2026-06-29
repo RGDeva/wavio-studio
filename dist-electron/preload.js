@@ -2,7 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready']);
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths']);
 electron_1.contextBridge.exposeInMainWorld('waviAPI', {
     // Auth
@@ -33,7 +33,9 @@ electron_1.contextBridge.exposeInMainWorld('waviAPI', {
         stats: () => electron_1.ipcRenderer.invoke('files:stats'),
         import: (filePaths) => electron_1.ipcRenderer.invoke('files:import', filePaths),
         addViaDialog: () => electron_1.ipcRenderer.invoke('files:addViaDialog'),
-        discoverAll: () => electron_1.ipcRenderer.invoke('files:discoverAll'),
+        discoverAll: (opts) => electron_1.ipcRenderer.invoke('files:discoverAll', opts),
+        discoverCancel: () => electron_1.ipcRenderer.invoke('files:discoverCancel'),
+        defaultDiscoveryRoots: () => electron_1.ipcRenderer.invoke('files:defaultDiscoveryRoots'),
     },
     // Sync
     sync: {

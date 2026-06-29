@@ -365,6 +365,10 @@ export function getFileById(id: string) {
   return db.prepare('SELECT * FROM files WHERE id = ?').get(id);
 }
 
+export function getFileByPath(filePath: string): { id: string } | undefined {
+  return db.prepare('SELECT id FROM files WHERE file_path = ?').get(filePath) as { id: string } | undefined;
+}
+
 export function getAllFiles(limit = 500, offset = 0) {
   return db.prepare(`
     SELECT f.*, p.project_name, p.daw_type

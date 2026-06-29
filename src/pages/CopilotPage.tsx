@@ -1,8 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Zap, Trash2, BookOpen, Plus, ScanSearch, Loader2 } from 'lucide-react';
+import { Send, Zap, Trash2, BookOpen, Plus, ScanSearch, Loader2, X } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Msg { id: string; role: 'user'|'assistant'; content: string; ts: string; }
+
+interface DiscoveryProgress {
+  phase: 'scanning' | 'importing' | 'done' | 'cancelled' | 'limit_reached';
+  scanned?: number;
+  found?: number;
+  imported?: number;
+  duplicates?: number;
+  permissionErrors?: number;
+  currentDir?: string;
+}
 
 const PROMPTS = [
   'What have I been working on recently?',
@@ -13,6 +23,9 @@ const PROMPTS = [
   'Generate a trap chord progression in Am',
 ];
 
+// Human-readable search capability disclaimer shown in empty state
+const SEARCH_NOTE = 'Searches filename, project name, role, BPM, and key — not audio content.';
+
 export function CopilotPage({ visible }: { visible?: boolean }) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState('');
@@ -20,6 +33,7 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
   const [memories, setMemories] = useState<any[]>([]);
   const [showMemory, setShowMemory] = useState(false);
   const [discovering, setDiscovering] = useState(false);
+  const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null);
   const [newKey, setNewKey] = useState('');
   const [newVal, setNewVal] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -27,6 +41,15 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
 
   useEffect(() => { if (visible) { inputRef.current?.focus(); loadMemories(); } }, [visible]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+
+  // Listen for discovery progress events from main process
+  useEffect(() => {
+    const handler = (progress: unknown) => {
+      setDiscoveryProgress(progress as DiscoveryProgress);
+    };
+    api.on('discovery:progress', handler);
+    return () => api.off('discovery:progress', handler);
+  }, []);
 
   const loadMemories = useCallback(async () => {
     try { setMemories(await api.memory.list()); } catch {}
@@ -69,24 +92,44 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
 
   const handleDiscoverAll = useCallback(async () => {
     setDiscovering(true);
+    setDiscoveryProgress({ phase: 'scanning', scanned: 0, found: 0 });
     try {
       const result = await api.files.discoverAll();
+      const parts: string[] = [];
+      parts.push(`Scan complete in ${(result.durationMs / 1000).toFixed(1)}s.`);
+      parts.push(`Scanned ${result.scanned.toLocaleString()} files, found ${result.found.toLocaleString()} audio files.`);
+      if (result.imported > 0) parts.push(`Imported ${result.imported} new file${result.imported !== 1 ? 's' : ''}.`);
+      if (result.duplicates > 0) parts.push(`${result.duplicates} already in library (skipped).`);
+      if (result.permissionErrors > 0) parts.push(`${result.permissionErrors} folder${result.permissionErrors !== 1 ? 's' : ''} could not be read (permission denied).`);
+      if (result.limitReached) parts.push('File limit reached — some files may not have been scanned. You can raise the limit in Settings.');
+      if (result.cancelled) parts.push('Scan was cancelled.');
       setMessages(prev => [...prev, {
-        id: crypto.randomUUID(),
-        role: 'assistant' as const,
-        content: `Scan complete. Found ${result.found} audio files — imported ${result.imported} new ones into your library.`,
+        id: crypto.randomUUID(), role: 'assistant' as const,
+        content: parts.join(' '),
         ts: new Date().toISOString(),
       }]);
     } catch {
       setMessages(prev => [...prev, {
-        id: crypto.randomUUID(),
-        role: 'assistant' as const,
-        content: 'Scan failed. Make sure the app has disk access in System Settings → Privacy & Security.',
+        id: crypto.randomUUID(), role: 'assistant' as const,
+        content: 'Scan failed. Make sure the app has Full Disk Access in System Settings → Privacy & Security → Full Disk Access.',
         ts: new Date().toISOString(),
       }]);
     }
     setDiscovering(false);
+    setDiscoveryProgress(null);
   }, []);
+
+  const handleCancelDiscover = useCallback(async () => {
+    await api.files.discoverCancel();
+  }, []);
+
+  const progressLabel = (() => {
+    if (!discoveryProgress) return '';
+    const p = discoveryProgress;
+    if (p.phase === 'scanning') return `Scanning… ${(p.scanned ?? 0).toLocaleString()} files checked, ${(p.found ?? 0)} audio found`;
+    if (p.phase === 'importing') return `Importing ${(p.found ?? 0)} files…`;
+    return '';
+  })();
 
   return (
     <div className="h-full flex">
@@ -97,15 +140,26 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
             <h1 className="text-base font-semibold text-white">Wavi Copilot</h1>
           </div>
           <div className="flex items-center gap-2">
-            <button
-              onClick={handleDiscoverAll}
-              disabled={discovering}
-              title="Scan Mac for audio files"
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-white/10 text-white/40 hover:text-white/70 hover:border-white/20 transition-all disabled:opacity-40"
-            >
-              {discovering ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ScanSearch className="w-3.5 h-3.5" />}
-              {discovering ? 'Scanning…' : 'Discover'}
-            </button>
+            {discovering ? (
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-white/30 max-w-[200px] truncate">{progressLabel}</span>
+                <button
+                  onClick={handleCancelDiscover}
+                  className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs border border-white/10 text-red-400/70 hover:text-red-400 transition-colors"
+                >
+                  <X className="w-3 h-3" />Cancel
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={handleDiscoverAll}
+                title="Scan Mac for audio files"
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-white/10 text-white/40 hover:text-white/70 hover:border-white/20 transition-all"
+              >
+                <ScanSearch className="w-3.5 h-3.5" />
+                Discover
+              </button>
+            )}
             <button onClick={() => setShowMemory(s => !s)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border transition-all ${showMemory?'bg-cyan-500/20 text-cyan-300 border-cyan-500/30':'text-white/40 border-white/10 hover:text-white/70'}`}>
               <BookOpen className="w-3.5 h-3.5" />Memory
@@ -122,7 +176,7 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
               <div className="text-center mb-5">
                 <Zap className="w-8 h-8 text-cyan-400/40 mx-auto mb-2" />
                 <p className="text-white/30 text-sm font-medium">Wavi Copilot</p>
-                <p className="text-white/15 text-xs mt-1">Find files, open tracks, get mix advice</p>
+                <p className="text-white/15 text-xs mt-1">{SEARCH_NOTE}</p>
               </div>
               <div className="grid grid-cols-1 gap-1.5">
                 {PROMPTS.map(p => (
@@ -133,7 +187,7 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
                 ))}
               </div>
               <p className="text-center text-[10px] text-white/15 mt-4">
-                Hit <span className="font-mono">Discover</span> above to scan your Mac for audio files
+                Hit <span className="font-mono bg-white/5 px-1 rounded">Discover</span> to scan your Mac for audio files first
               </p>
             </div>
           )}
@@ -157,7 +211,7 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
         <div className="flex-shrink-0 px-6 pb-6 pt-2">
           <div className="flex gap-2 items-end bg-white/5 border border-white/10 rounded-2xl px-4 py-3 focus-within:border-cyan-500/30 transition-all">
             <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKey}
-              placeholder="Ask about your project, generate MIDI, get mix advice…"
+              placeholder="Ask about your project, find tracks, get mix advice…"
               rows={1} className="flex-1 bg-transparent text-sm text-white placeholder-white/25 resize-none focus:outline-none leading-relaxed" />
             <button onClick={() => send()} disabled={!input.trim() || loading}
               className="flex-shrink-0 w-8 h-8 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-30 rounded-xl flex items-center justify-center transition-all">

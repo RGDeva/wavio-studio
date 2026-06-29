@@ -34,7 +34,10 @@ export interface WaviAPI {
     stats: () => Promise<{ totalFiles: number; totalSize: number; syncedFiles: number; byType: any[]; byRole: any[] }>;
     import: (filePaths: string[]) => Promise<string[]>;
     addViaDialog: () => Promise<string[]>;
-    discoverAll: () => Promise<{ found: number; imported: number }>;
+    discoverAll: (opts?: { roots?: string[]; extraRoots?: string[]; excludePaths?: string[]; maxFiles?: number; maxDurationMs?: number }) =>
+      Promise<{ found: number; imported: number; duplicates: number; scanned: number; permissionErrors: number; durationMs: number; cancelled: boolean; limitReached: boolean }>;
+    discoverCancel: () => Promise<void>;
+    defaultDiscoveryRoots: () => Promise<string[]>;
   };
   sync: {
     getQueue: () => Promise<any[]>;
@@ -114,7 +117,7 @@ const _stub: WaviAPI = {
   copilot: { toggle: _noop, getContext: _noop, chat: _noop },
   folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
-  files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]), discoverAll: () => Promise.resolve({ found: 0, imported: 0 }) },
+  files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]), discoverAll: () => Promise.resolve({ found: 0, imported: 0, duplicates: 0, scanned: 0, permissionErrors: 0, durationMs: 0, cancelled: false, limitReached: false }), discoverCancel: _noop, defaultDiscoveryRoots: () => Promise.resolve([]) },
   sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },

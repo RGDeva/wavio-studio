@@ -55,6 +55,7 @@ const bridgeServer_1 = require("./bridgeServer");
 const musehub_1 = require("./musehub");
 const electron_store_1 = __importDefault(require("electron-store"));
 const config_1 = require("./config");
+const discovery_1 = require("./discovery");
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance = null;
@@ -569,6 +570,10 @@ async function handleDeepLink(url) {
     }
 }
 const AUDIO_EXTENSIONS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac']);
+/** Returns the DB id if this file_path already exists in the library, else null. */
+function checkFileExists(filePath) {
+    return (0, db_1.getFileByPath)(filePath)?.id ?? null;
+}
 /** Import a single audio file into the library (for drag-drop / manual add). */
 async function importAudioFile(filePath) {
     const ext = path_1.default.extname(filePath).toLowerCase();
@@ -964,54 +969,73 @@ electron_1.ipcMain.handle('files:addViaDialog', async () => {
     mainWindow?.webContents.send('watcher:event', { type: 'files_imported', count: imported.length });
     return imported;
 });
-// Auto-discover all audio files in home/music/documents/desktop
-electron_1.ipcMain.handle('files:discoverAll', async () => {
-    const { readdirSync, statSync } = require('fs');
-    const AUDIO_EXTS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac', '.flp', '.als', '.ptx', '.ptf', '.rpp']);
-    const MAX_DEPTH = 6;
-    const roots = [electron_1.app.getPath('music'), electron_1.app.getPath('documents'), electron_1.app.getPath('desktop')];
-    const foundPaths = [];
-    function walk(dir, depth) {
-        if (depth > MAX_DEPTH)
-            return;
-        let entries;
-        try {
-            entries = readdirSync(dir, { withFileTypes: true });
-        }
-        catch {
-            return;
-        }
-        for (const entry of entries) {
-            if (entry.name.startsWith('.'))
-                continue;
-            const full = path_1.default.join(dir, entry.name);
-            if (entry.isDirectory()) {
-                walk(full, depth + 1);
-            }
-            else if (entry.isFile()) {
-                const ext = path_1.default.extname(entry.name).toLowerCase();
-                if (AUDIO_EXTS.has(ext))
-                    foundPaths.push(full);
-            }
-        }
-    }
-    for (const root of roots) {
-        try {
-            statSync(root);
-            walk(root, 0);
-        }
-        catch { /* skip missing roots */ }
-    }
-    // Import each found file (idempotent — existing files are skipped)
+// Active discovery cancellation signal
+let discoveryAbortSignal = null;
+electron_1.ipcMain.handle('files:discoverAll', async (_e, opts) => {
+    // Cancel any in-progress scan
+    if (discoveryAbortSignal)
+        discoveryAbortSignal.aborted = true;
+    const signal = { aborted: false };
+    discoveryAbortSignal = signal;
+    const startMs = Date.now();
     let imported = 0;
-    for (const p of foundPaths) {
-        const id = await importAudioFile(p);
-        if (id)
-            imported++;
+    let duplicates = 0;
+    const { paths, result } = await (0, discovery_1.discoverAudioFiles)({
+        roots: opts?.roots ?? (0, discovery_1.defaultDiscoveryRoots)(),
+        extraRoots: opts?.extraRoots ?? [],
+        excludePaths: opts?.excludePaths ?? [],
+        maxFiles: opts?.maxFiles ?? 50000,
+        maxDurationMs: opts?.maxDurationMs ?? 120000,
+        signal,
+    }, (progress) => {
+        // Send progress to renderer (non-blocking)
+        mainWindow?.webContents.send('discovery:progress', progress);
+    });
+    if (signal.aborted) {
+        mainWindow?.webContents.send('discovery:progress', { phase: 'cancelled', found: result.found, scanned: result.scanned });
+        return { found: result.found, imported: 0, duplicates: 0, scanned: result.scanned, durationMs: Date.now() - startMs, cancelled: true };
     }
+    // Import phase — idempotent per file_path
+    mainWindow?.webContents.send('discovery:progress', { phase: 'importing', found: result.found, imported: 0 });
+    for (const p of paths) {
+        if (signal.aborted)
+            break;
+        // Check for existing record first (count as duplicate, don't re-import)
+        const existingId = await checkFileExists(p);
+        if (existingId) {
+            duplicates++;
+        }
+        else {
+            const id = await importAudioFile(p);
+            if (id)
+                imported++;
+        }
+    }
+    discoveryAbortSignal = null;
+    const durationMs = Date.now() - startMs;
+    mainWindow?.webContents.send('discovery:progress', {
+        phase: 'done', found: result.found, imported, duplicates,
+        permissionErrors: result.permissionErrors, scanned: result.scanned,
+    });
     mainWindow?.webContents.send('watcher:event', { type: 'files_imported', count: imported });
-    return { found: foundPaths.length, imported };
+    return {
+        found: result.found,
+        imported,
+        duplicates,
+        scanned: result.scanned,
+        permissionErrors: result.permissionErrors,
+        durationMs,
+        cancelled: false,
+        limitReached: result.found >= (opts?.maxFiles ?? 50000),
+    };
 });
+electron_1.ipcMain.handle('files:discoverCancel', () => {
+    if (discoveryAbortSignal) {
+        discoveryAbortSignal.aborted = true;
+        discoveryAbortSignal = null;
+    }
+});
+electron_1.ipcMain.handle('files:defaultDiscoveryRoots', () => (0, discovery_1.defaultDiscoveryRoots)());
 // Sync
 electron_1.ipcMain.handle('sync:getQueue', () => syncAgent?.getQueue() ?? []);
 electron_1.ipcMain.handle('sync:retryAll', () => syncAgent?.retryFailed());
@@ -1031,37 +1055,101 @@ electron_1.ipcMain.handle('shell:openExternal', (_e, url) => {
     }
     catch { /* invalid URL */ }
 });
-// Shell — only allow opening paths under common safe locations
-electron_1.ipcMain.handle('shell:openPath', (_e, p) => {
-    const safePrefixes = [electron_1.app.getPath('home'), electron_1.app.getPath('music'), electron_1.app.getPath('documents')];
-    const resolved = path_1.default.resolve(p);
-    if (!safePrefixes.some(prefix => resolved.startsWith(prefix)))
-        return;
-    return electron_1.shell.openPath(resolved);
-});
-// Reveal a file in Finder/Explorer without opening it
-electron_1.ipcMain.handle('shell:revealInFinder', (_e, p) => {
-    const safePrefixes = [electron_1.app.getPath('home'), electron_1.app.getPath('music'), electron_1.app.getPath('documents')];
-    const resolved = path_1.default.resolve(p);
-    if (!safePrefixes.some(prefix => resolved.startsWith(prefix)))
-        return;
-    electron_1.shell.showItemInFolder(resolved);
-});
-// Open a file with a specific application (e.g. FL Studio, Pro Tools, Ableton)
-// appPath is the .app bundle or .exe; filePath is the audio/project file
-electron_1.ipcMain.handle('shell:openWithApp', (_e, filePath, appPath) => {
-    const safeFilePrefixes = [electron_1.app.getPath('home'), electron_1.app.getPath('music'), electron_1.app.getPath('documents'), electron_1.app.getPath('desktop')];
-    const resolved = path_1.default.resolve(filePath);
-    if (!safeFilePrefixes.some(prefix => resolved.startsWith(prefix))) {
-        throw new Error('File path not in safe location');
+// ── Shell helpers ─────────────────────────────────────────────────────────────
+const USER_SAFE_PREFIXES = () => [
+    electron_1.app.getPath('home'),
+    electron_1.app.getPath('music'),
+    electron_1.app.getPath('documents'),
+    electron_1.app.getPath('desktop'),
+];
+/**
+ * Validate that a path is:
+ *  - A string (not a URL or shell command)
+ *  - Resolves within user-safe directories
+ *  - Actually exists on disk
+ *  - Is a file (not a directory) when requireFile=true
+ *  - Is indexed in the library when requireIndexed=true
+ */
+function validateSafePath(p, opts = {}) {
+    if (typeof p !== 'string' || p.trim() === '')
+        return { ok: false, error: 'Path must be a non-empty string' };
+    if (p.startsWith('http://') || p.startsWith('https://') || p.startsWith('file://')) {
+        return { ok: false, error: 'URLs are not allowed' };
     }
-    // On macOS: `open -a /Applications/FL Studio.app file.flp`
-    // On Windows: execFile with the .exe directly
+    if (p.includes(';') || p.includes('&') || p.includes('|') || p.includes('`') || p.includes('$(')) {
+        return { ok: false, error: 'Shell metacharacters are not allowed in path' };
+    }
+    const resolved = path_1.default.resolve(p);
+    const safe = USER_SAFE_PREFIXES();
+    if (!safe.some(prefix => resolved.startsWith(prefix + path_1.default.sep) || resolved === prefix)) {
+        return { ok: false, error: `Path outside safe roots: ${resolved}` };
+    }
+    let stat;
+    try {
+        stat = fs_1.default.statSync(resolved);
+    }
+    catch {
+        return { ok: false, error: `File not found or inaccessible: ${resolved}` };
+    }
+    if (opts.requireFile && stat.isDirectory()) {
+        return { ok: false, error: 'Expected a file, not a directory' };
+    }
+    if (opts.requireIndexed) {
+        const indexed = (0, db_1.getFileByPath)(resolved);
+        if (!indexed) {
+            return { ok: false, error: `File is not in the Wavi library. Add it first before opening.` };
+        }
+    }
+    return { ok: true, resolved };
+}
+// Shell — open in default OS handler (requires indexed file)
+electron_1.ipcMain.handle('shell:openPath', (_e, p) => {
+    const v = validateSafePath(p, { requireFile: true });
+    if (!v.ok) {
+        console.warn('[shell:openPath]', v.error);
+        return;
+    }
+    (0, db_1.logActivity)({ id: crypto_1.default.randomUUID(), type: 'file_opened', message: `Opened: ${path_1.default.basename(v.resolved)}`, metadata: { action: 'openPath' } });
+    return electron_1.shell.openPath(v.resolved);
+});
+// Reveal in Finder/Explorer (requires path in safe location, file or folder)
+electron_1.ipcMain.handle('shell:revealInFinder', (_e, p) => {
+    const v = validateSafePath(p);
+    if (!v.ok) {
+        console.warn('[shell:revealInFinder]', v.error);
+        return;
+    }
+    electron_1.shell.showItemInFolder(v.resolved);
+});
+// Open a file with a specific application (DAW).
+// appPath must be a .app bundle (macOS) or .exe (Windows).
+// filePath must be indexed in the library.
+electron_1.ipcMain.handle('shell:openWithApp', (_e, filePath, appPath) => {
+    const fv = validateSafePath(filePath, { requireFile: true, requireIndexed: true });
+    if (!fv.ok)
+        throw new Error(fv.error);
+    // appPath: must exist and be an .app bundle or executable — no shell injection
+    if (typeof appPath !== 'string' || appPath.trim() === '')
+        throw new Error('appPath must be a non-empty string');
+    if (appPath.includes(';') || appPath.includes('&') || appPath.includes('|') || appPath.includes('`')) {
+        throw new Error('Shell metacharacters not allowed in appPath');
+    }
+    try {
+        fs_1.default.statSync(appPath);
+    }
+    catch {
+        throw new Error(`DAW application not found: ${appPath}. Update the path in Settings → DAW Applications.`);
+    }
+    (0, db_1.logActivity)({
+        id: crypto_1.default.randomUUID(), type: 'file_opened',
+        message: `Opened in DAW: ${path_1.default.basename(fv.resolved)}`,
+        metadata: { action: 'openWithApp', daw: path_1.default.basename(appPath) },
+    });
     if (process.platform === 'darwin') {
         return new Promise((resolve, reject) => {
-            (0, child_process_1.execFile)('open', ['-a', appPath, resolved], (err) => {
+            (0, child_process_1.execFile)('open', ['-a', appPath, fv.resolved], (err) => {
                 if (err)
-                    reject(err);
+                    reject(new Error(`Failed to open in ${path_1.default.basename(appPath)}: ${err.message}`));
                 else
                     resolve();
             });
@@ -1069,18 +1157,18 @@ electron_1.ipcMain.handle('shell:openWithApp', (_e, filePath, appPath) => {
     }
     else {
         return new Promise((resolve, reject) => {
-            (0, child_process_1.execFile)(appPath, [resolved], (err) => {
+            (0, child_process_1.execFile)(appPath, [fv.resolved], (err) => {
                 if (err)
-                    reject(err);
+                    reject(new Error(`Failed to launch ${path_1.default.basename(appPath)}: ${err.message}`));
                 else
                     resolve();
             });
         });
     }
 });
-// Pick a DAW application via file dialog and return its path
+// Pick a DAW application via native file dialog
 electron_1.ipcMain.handle('shell:pickApp', async () => {
-    const result = await electron_1.dialog.showOpenDialog({
+    const result = await electron_1.dialog.showOpenDialog(mainWindow, {
         title: 'Select DAW Application',
         properties: ['openFile'],
         filters: process.platform === 'darwin'
