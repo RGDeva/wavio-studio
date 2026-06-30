@@ -360,6 +360,8 @@ export function upsertProject(project: {
   created_at: string;
   modified_at: string;
 }) {
+  // Only reset sync_status to 'pending' when file_size or modified_at changed,
+  // so fresh-launch re-discovery doesn't flip all synced projects back to pending.
   const stmt = db.prepare(`
     INSERT INTO projects (id, project_name, file_path, daw_type, file_size, created_at, modified_at)
     VALUES (@id, @project_name, @file_path, @daw_type, @file_size, @created_at, @modified_at)
@@ -367,7 +369,11 @@ export function upsertProject(project: {
       project_name = excluded.project_name,
       file_size = excluded.file_size,
       modified_at = excluded.modified_at,
-      sync_status = 'pending'
+      sync_status = CASE
+        WHEN excluded.file_size != projects.file_size OR excluded.modified_at != projects.modified_at
+        THEN 'pending'
+        ELSE projects.sync_status
+      END
   `);
   stmt.run(project);
 }
@@ -414,18 +420,25 @@ export function upsertStandaloneFile(file: {
   // Check if this exact path already exists
   const existing = db.prepare('SELECT id FROM files WHERE file_path = ?').get(file.file_path) as { id: string } | undefined;
   if (existing) {
+    // Only flip sync_status back to 'pending' when the file actually changed.
     db.prepare(`
       UPDATE files SET
         file_size = ?, checksum = ?,
         bpm = COALESCE(?, bpm), key_note = COALESCE(?, key_note),
         duration = COALESCE(?, duration), role = COALESCE(?, role),
-        modified_at = ?, sync_status = 'pending'
+        modified_at = ?,
+        sync_status = CASE
+          WHEN ? != file_size OR ? != modified_at THEN 'pending'
+          ELSE sync_status
+        END
       WHERE id = ?
     `).run(
       file.file_size, file.checksum ?? null,
       file.bpm ?? null, file.key_note ?? null,
       file.duration ?? null, file.role ?? 'unknown',
-      file.modified_at, existing.id
+      file.modified_at,
+      file.file_size, file.modified_at,
+      existing.id
     );
     return existing.id;
   }
@@ -468,7 +481,11 @@ export function upsertFile(file: {
       duration = COALESCE(excluded.duration, files.duration),
       role = COALESCE(excluded.role, files.role),
       modified_at = excluded.modified_at,
-      sync_status = 'pending'
+      sync_status = CASE
+        WHEN excluded.file_size != files.file_size OR excluded.modified_at != files.modified_at
+        THEN 'pending'
+        ELSE files.sync_status
+      END
   `).run({ bpm: null, key_note: null, duration: null, role: 'unknown', ...file });
 }
 
