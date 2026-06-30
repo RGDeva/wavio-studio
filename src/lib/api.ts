@@ -73,6 +73,7 @@ export interface WaviAPI {
       Promise<{ success?: boolean; error?: string }>;
   };
   project: {
+    publishVersion: (opts: { localProjectId: string }) => Promise<{ versionId?: string; versionNumber?: number; fileCount?: number; created?: boolean; skipped?: boolean; error?: string }>;
     createLink: (opts: {
       projectId: string;
       cloudProjectId?: string;
@@ -150,6 +151,14 @@ export interface WaviAPI {
       buildDate: string;
     }>;
   };
+  restore: {
+    resolve:         (token: string)                     => Promise<Record<string, unknown>>;
+    checkExisting:   (shareId: string)                   => Promise<Record<string, unknown> | null>;
+    pickDestination: (defaultName: string)               => Promise<string | null>;
+    start:           (opts: Record<string, unknown>)     => Promise<Record<string, unknown>>;
+    openExisting:    (restoreId: string)                 => Promise<{ ok: boolean }>;
+    onProgress:      (cb: (data: Record<string, unknown>) => void) => void;
+  };
   on: (channel: string, listener: (...args: unknown[]) => void) => void;
   off: (channel: string, listener: (...args: unknown[]) => void) => void;
 }
@@ -165,7 +174,7 @@ const _stub: WaviAPI = {
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop, revokeLink: _noop },
-  project: { createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
+  project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },
@@ -190,6 +199,14 @@ const _stub: WaviAPI = {
   },
   config: { apiBase: 'https://wavi.stream/api', channel: 'production' },
   diagnostics: { get: _noop },
+  restore: {
+    resolve: _noop,
+    checkExisting: () => Promise.resolve(null),
+    pickDestination: () => Promise.resolve(null),
+    start: _noop,
+    openExisting: _noop,
+    onProgress: () => {},
+  },
   on: () => {},
   off: () => {},
 };

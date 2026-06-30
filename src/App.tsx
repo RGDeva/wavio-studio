@@ -16,6 +16,7 @@ import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { api } from './lib/api';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { BounceConfirmModal } from './components/BounceConfirmModal';
+import RestoreWindow from './components/RestoreWindow';
 import type { Page, SyncProgress } from './types';
 
 export default function App() {
@@ -24,6 +25,7 @@ export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [syncProgresses, setSyncProgresses] = useState<Record<string, SyncProgress>>({});
   const [pendingAssociations, setPendingAssociations] = useState(0);
+  const [restoreToken, setRestoreToken] = useState<string | null>(null);
   const authChecked = useRef(false);
 
   useEffect(() => {
@@ -69,6 +71,13 @@ export default function App() {
       api.off('auth:token-received', handleToken);
       api.off('auth:error', handleAuthError);
     };
+  }, []);
+
+  // Deep-link project open: wavi://open-project?share=<token>
+  useEffect(() => {
+    api.project.onOpenLink(({ token }) => {
+      setRestoreToken(token);
+    });
   }, []);
 
   // Auto-updater: notify when update is downloaded and ready to install
@@ -125,6 +134,9 @@ export default function App() {
         <Sidebar currentPage={page} onNavigate={setPage} pendingAssociations={pendingAssociations} />
         <main className="flex-1 overflow-hidden bg-[#0A0A0A] relative">
           <BounceConfirmModal />
+          {restoreToken && (
+            <RestoreWindow token={restoreToken} onClose={() => setRestoreToken(null)} />
+          )}
           <div className={page === 'dashboard' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Dashboard error"><Dashboard syncProgresses={syncProgresses} visible={page === 'dashboard'} onNavigate={setPage} /></ErrorBoundary></div>
           <div className={page === 'library' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Library error"><LibraryPage visible={page === 'library'} /></ErrorBoundary></div>
           <div className={page === 'folders' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Folders error"><FoldersPage visible={page === 'folders'} /></ErrorBoundary></div>

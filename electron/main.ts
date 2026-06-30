@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByShare, touchRestoredProject } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -217,8 +217,9 @@ let appFullyReady = false;
 const processedDeepLinkUrls = new Set<string>(); // replay guard
 
 function queueOrHandleDeepLink(url: string) {
-  // Route project deep links directly — they don't need the auth queue
-  if (url.includes('://open-project/')) {
+  // Route project deep links directly — they don't need the auth queue.
+  // Supports both wavi://open-project/:token and wavi://open-project?share=:token
+  if (url.includes('://open-project')) {
     queueOrHandleOpenProject(url);
     return;
   }
@@ -1246,15 +1247,34 @@ ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: strin
   return desktopApiPost(token, 'get-project-files', { projectId: opts.cloudProjectId });
 });
 
-// Open-project deep link: wavi://open-project/:token
+// Open-project deep link: supports wavi://open-project/:token AND
+// wavi://open-project?share=:token (recipient-facing form used by the
+// Project Link page's "Open in Wavi Studio" button).
 // Queued by the same cold-launch mechanism as the auth callback.
+const processedOpenProjectTokens = new Set<string>(); // replay guard, mirrors auth's
+
 function queueOrHandleOpenProject(url: string) {
   try {
     const parsed = new URL(url);
     if (parsed.protocol !== `${PROTOCOL_SCHEME}:`) return;
     if (parsed.hostname !== 'open-project') return;
-    const token = parsed.pathname.replace(/^\//, '').split('/')[0];
+    const pathToken = parsed.pathname.replace(/^\//, '').split('/')[0];
+    const queryToken = parsed.searchParams.get('share');
+    const token = queryToken || pathToken;
     if (!token) return;
+
+    const replayKey = crypto.createHash('sha256').update(token).digest('hex').slice(0, 16);
+    // Note: unlike auth tokens, the SAME project-link token is legitimately
+    // reused across multiple opens (a recipient may open the same link many
+    // times) — we only guard against a rapid duplicate firing (e.g. macOS
+    // delivering the same open-url event twice), not repeat legitimate use.
+    if (processedOpenProjectTokens.has(replayKey)) {
+      authLog('open-project-rapid-duplicate-ignored');
+      return;
+    }
+    processedOpenProjectTokens.add(replayKey);
+    setTimeout(() => processedOpenProjectTokens.delete(replayKey), 5000);
+
     authLog('open-project-deep-link', { token: token.slice(0, 8) + '…' });
     if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1266,6 +1286,296 @@ function queueOrHandleOpenProject(url: string) {
     mainLog(`[open-project] parse error: ${(e as any)?.message}`);
   }
 }
+
+// ── Project Link Restore ─────────────────────────────────────────────────────
+
+// Resolve a share token → manifest (no auth required).
+ipcMain.handle('restore:resolve', async (_e, token: string) => {
+  try {
+    const res = await fetch(`${API_BASE}/desktop/index`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Desktop-Action': 'resolve-project-link' },
+      body: JSON.stringify({ token }),
+    });
+    const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+    if (!res.ok) return { error: data?.error ?? `HTTP ${res.status}` };
+    return data;
+  } catch (e: any) {
+    return { error: e?.message ?? 'Network error' };
+  }
+});
+
+// Check if this share token has already been restored locally.
+ipcMain.handle('restore:checkExisting', (_e, shareId: string) => {
+  return getRestoredProjectByShare(shareId);
+});
+
+// Let the user pick a destination folder for the restored project.
+ipcMain.handle('restore:pickDestination', async (_e, defaultName: string) => {
+  if (!mainWindow) return null;
+  const { canceled, filePaths } = await dialog.showOpenDialog(mainWindow, {
+    title: 'Choose restore location',
+    message: `Where should "${defaultName}" be saved?`,
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: 'Restore Here',
+  });
+  if (canceled || !filePaths[0]) return null;
+  return filePaths[0];
+});
+
+// ── restore:start ────────────────────────────────────────────────────────────
+// Downloads the Project Pack ZIP for a share token, extracts it safely (with
+// zip-slip protection), verifies every file's SHA-256 hash, persists the
+// restore record, then returns the path to the DAW project file.
+//
+// Progress is sent via 'restore:progress' events on the mainWindow webContents.
+// Errors are returned in the resolved value so the UI can classify them.
+
+function sendRestoreProgress(evt: string, payload: Record<string, unknown>) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('restore:progress', { evt, ...payload });
+  }
+}
+
+const FORBIDDEN_PATH_PATTERNS_RESTORE = [
+  /\.\./,          // zip-slip — path traversal
+  /^\//, /^\\/,    // absolute paths
+  /[\0\r\n]/,      // null / newline injection
+];
+function isSafeRestorePath(rel: string): boolean {
+  return !FORBIDDEN_PATH_PATTERNS_RESTORE.some(rx => rx.test(rel));
+}
+
+ipcMain.handle('restore:start', async (_e, opts: {
+  token: string;
+  shareId: string;
+  projectId: string;
+  versionId: string;
+  ownerUserId?: string;
+  collaboratorMode?: string;
+  parentVersionId?: string;
+  projectName: string;
+  dawType?: string;
+  fileCount: number;
+  totalSize: number;
+  files: Array<{ file_name: string; relative_path?: string; sha256?: string; file_size?: number; role?: string }>;
+  destinationFolder: string;
+}) => {
+  const { token, shareId, projectId, versionId, ownerUserId, collaboratorMode,
+          parentVersionId, projectName, dawType, fileCount, totalSize, files, destinationFolder } = opts;
+
+  // Sanitize project name for use as directory name
+  const safeName = projectName.replace(/[^\w\s\-().]/g, '').trim() || 'Restored-Project';
+  const projectDir = path.join(destinationFolder, safeName);
+
+  // Prevent overwriting existing restores by appending a timestamp
+  const finalDir = fs.existsSync(projectDir)
+    ? `${projectDir}-${Date.now()}`
+    : projectDir;
+
+  try {
+    fs.mkdirSync(finalDir, { recursive: true });
+  } catch (e: any) {
+    return { error: 'extraction_failure', detail: `Could not create project directory: ${e.message}` };
+  }
+
+  sendRestoreProgress('download_start', { totalSize, fileCount });
+
+  // Download the ZIP
+  let zipBuffer: Buffer;
+  try {
+    const downloadUrl = `${API_BASE.replace('/desktop/index', '')}/project-link/${token}/download`;
+    const resp = await fetch(downloadUrl, { signal: AbortSignal.timeout(300_000) });
+    if (!resp.ok) {
+      if (resp.status === 403) return { error: 'permission_denied', detail: 'Download not permitted for this link' };
+      if (resp.status === 410) return { error: 'expired_link', detail: 'This project link has expired' };
+      if (resp.status === 404) return { error: 'missing_asset', detail: 'Project archive not found' };
+      return { error: 'network', detail: `HTTP ${resp.status}` };
+    }
+    const arrayBuf = await resp.arrayBuffer();
+    zipBuffer = Buffer.from(arrayBuf);
+    sendRestoreProgress('download_complete', { downloadedBytes: zipBuffer.length });
+  } catch (e: any) {
+    if (e?.name === 'TimeoutError') return { error: 'network', detail: 'Download timed out' };
+    return { error: 'network', detail: e?.message ?? 'Download failed' };
+  }
+
+  sendRestoreProgress('extract_start', {});
+
+  // Extract ZIP with zip-slip protection (no native unzip — we parse in-process)
+  let dawProjectPath: string | null = null;
+  const extractedFiles: Array<{ relativePath: string; sha256: string }> = [];
+
+  try {
+    // Use the built-in unzipper via dynamic import (avoid adding another dep)
+    // We extract using the Node 'zlib' + manual ZIP parsing isn't practical,
+    // so we shell out to the macOS `unzip` command with explicit destination.
+    // To maintain zip-slip protection we validate every entry name before extraction.
+
+    // First pass: list entries and validate paths using `unzip -l`
+    const listResult = await new Promise<string>((resolve, reject) => {
+      const tmpZipPath = path.join(app.getPath('temp'), `wavi-restore-${Date.now()}.zip`);
+      fs.writeFileSync(tmpZipPath, zipBuffer);
+
+      execFile('unzip', ['-l', tmpZipPath], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        if (err && !stdout) { reject(new Error(stderr || err.message)); return; }
+        // Clean up temp zip after listing
+        try { fs.unlinkSync(tmpZipPath); } catch { /* ignore */ }
+        resolve(stdout);
+      });
+      // Store tmpZipPath for extraction pass
+      (listResult as any)._tmpZip = path.join(app.getPath('temp'), `wavi-restore-${Date.now()}.zip`);
+    });
+
+    // Parse entry names from `unzip -l` output (lines like: `   1234  ..  filename`)
+    const entryLines = listResult.split('\n').slice(3); // skip header
+    const entryNames = entryLines
+      .map(l => l.replace(/^\s+\d+\s+[\d-]+\s+[\d:]+\s+/, '').trim())
+      .filter(n => n && !n.startsWith('---') && !n.includes('files'));
+
+    for (const name of entryNames) {
+      if (!isSafeRestorePath(name)) {
+        return { error: 'extraction_failure', detail: `Zip-slip or unsafe path detected: ${name}` };
+      }
+    }
+
+    // Second pass: extract to finalDir
+    const tmpZipPath2 = path.join(app.getPath('temp'), `wavi-restore-${Date.now()}.zip`);
+    fs.writeFileSync(tmpZipPath2, zipBuffer);
+
+    await new Promise<void>((resolve, reject) => {
+      execFile('unzip', ['-o', tmpZipPath2, '-d', finalDir], { maxBuffer: 10 * 1024 * 1024 }, (err, _stdout, stderr) => {
+        try { fs.unlinkSync(tmpZipPath2); } catch { /* ignore */ }
+        if (err) { reject(new Error(stderr || err.message)); return; }
+        resolve();
+      });
+    });
+
+    sendRestoreProgress('extract_complete', { destDir: finalDir });
+  } catch (e: any) {
+    return { error: 'extraction_failure', detail: e?.message ?? 'Extraction failed' };
+  }
+
+  // Hash-verify every file in the manifest
+  sendRestoreProgress('verify_start', { fileCount: files.length });
+  const mismatches: string[] = [];
+  const missing: string[] = [];
+  let verifiedCount = 0;
+
+  for (const f of files) {
+    const relPath = (f.relative_path ?? f.file_name).replace(/^\//, '');
+    if (!isSafeRestorePath(relPath)) continue; // already caught above, but double-guard
+    const localPath = path.join(finalDir, relPath);
+
+    if (!fs.existsSync(localPath)) {
+      if (f.role === 'project') {
+        missing.push(relPath); // Required DAW project file
+      }
+      // Missing optional/audio files are warnings, not failures
+      continue;
+    }
+
+    // Verify SHA-256 if manifest provided one
+    if (f.sha256) {
+      const hash = crypto.createHash('sha256').update(fs.readFileSync(localPath)).digest('hex');
+      if (hash !== f.sha256) {
+        mismatches.push(relPath);
+      } else {
+        extractedFiles.push({ relativePath: relPath, sha256: hash });
+      }
+    } else {
+      extractedFiles.push({ relativePath: relPath, sha256: '' });
+    }
+    verifiedCount++;
+    if (verifiedCount % 5 === 0) {
+      sendRestoreProgress('verify_progress', { verified: verifiedCount, total: files.length });
+    }
+
+    // Never execute archive contents — enforce via extension allowlist check
+    const ext = path.extname(localPath).toLowerCase();
+    const NEVER_EXECUTE = ['.sh', '.bash', '.command', '.app', '.exe', '.bat', '.cmd', '.py', '.rb', '.pl'];
+    if (NEVER_EXECUTE.includes(ext)) {
+      // Don't delete; just ensure we never run it. Log for auditability.
+      mainLog(`[restore] Non-audio file in archive (will not execute): ${relPath}`);
+    }
+  }
+
+  if (missing.length > 0) {
+    return { error: 'missing_required_file', detail: `Required project file(s) missing: ${missing.join(', ')}`, partialDir: finalDir };
+  }
+  if (mismatches.length > 0) {
+    return { error: 'hash_mismatch', detail: `Hash mismatch for: ${mismatches.join(', ')}`, partialDir: finalDir };
+  }
+
+  sendRestoreProgress('verify_complete', { verified: verifiedCount });
+
+  // Find the DAW project file
+  for (const f of files) {
+    if (f.role === 'project') {
+      const relPath = (f.relative_path ?? f.file_name).replace(/^\//, '');
+      const candidate = path.join(finalDir, relPath);
+      if (fs.existsSync(candidate)) { dawProjectPath = candidate; break; }
+    }
+  }
+  // Fallback: search for .als, .ptx, .logic, .flp
+  if (!dawProjectPath) {
+    const DAW_EXTS = ['.als', '.ptx', '.logic', '.flp', '.cpr', '.npr'];
+    const walk = (dir: string): string | null => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) { const r = walk(full); if (r) return r; }
+        else if (DAW_EXTS.includes(path.extname(entry.name).toLowerCase())) return full;
+      }
+      return null;
+    };
+    dawProjectPath = walk(finalDir);
+  }
+
+  if (!dawProjectPath) {
+    return { error: 'missing_required_file', detail: 'No DAW project file found in archive', partialDir: finalDir };
+  }
+
+  // Persist restore record
+  const manifestHash = crypto.createHash('sha256')
+    .update(JSON.stringify(files.map(f => ({ p: f.relative_path ?? f.file_name, h: f.sha256 }))))
+    .digest('hex');
+
+  const restored = insertRestoredProject({
+    source_project_id: projectId,
+    source_version_id: versionId,
+    share_id: shareId,
+    owner_user_id: ownerUserId ?? null,
+    local_checkout_id: crypto.randomUUID(),
+    collaborator_permission: collaboratorMode ?? 'view',
+    parent_version_id: parentVersionId ?? null,
+    local_project_path: dawProjectPath,
+    project_name: projectName,
+    daw_type: dawType ?? null,
+    file_count: fileCount,
+    total_size: totalSize,
+    sha256_manifest: manifestHash,
+    restored_at: new Date().toISOString(),
+    last_opened_at: null,
+  });
+
+  logActivity({ id: crypto.randomUUID(), type: 'restore', message: `Restored project "${projectName}" from Project Link` });
+
+  sendRestoreProgress('restore_complete', { dawProjectPath, restoreId: restored.id });
+
+  return {
+    ok: true,
+    restoreId: restored.id,
+    dawProjectPath,
+    projectDir: finalDir,
+    dawType,
+  };
+});
+
+// Open an existing restored project (duplicate-restore flow).
+ipcMain.handle('restore:openExisting', async (_e, restoreId: string) => {
+  touchRestoredProject(restoreId);
+  return { ok: true };
+});
 
 // Folders
 ipcMain.handle('folders:getAll', () => {

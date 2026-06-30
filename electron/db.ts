@@ -214,6 +214,31 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   // instead of the non-downloadable cloud_version_id fingerprint.
   try { db.exec('ALTER TABLE projects ADD COLUMN project_asset_id TEXT'); } catch { /* already exists */ }
 
+  // ── Restored projects — recipient-side Project Link restore tracking ─────
+  // Stores every project that was received via a Project Link share.
+  // Never overwrites the owner's original version — collaboration is one-way
+  // at this stage (collaborator publishes a NEW version, not into owner's branch).
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS restored_projects (
+      id                    TEXT PRIMARY KEY,
+      source_project_id     TEXT NOT NULL,
+      source_version_id     TEXT NOT NULL,
+      share_id              TEXT NOT NULL,
+      owner_user_id         TEXT,
+      local_checkout_id     TEXT,
+      collaborator_permission TEXT NOT NULL DEFAULT 'view',
+      parent_version_id     TEXT,
+      local_project_path    TEXT NOT NULL,
+      project_name          TEXT NOT NULL,
+      daw_type              TEXT,
+      file_count            INTEGER DEFAULT 0,
+      total_size            INTEGER DEFAULT 0,
+      sha256_manifest       TEXT,
+      restored_at           TEXT NOT NULL,
+      last_opened_at        TEXT
+    )
+  `);
+
   // ── Phase 1: Association tables ─────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS asset_associations (
@@ -1034,4 +1059,55 @@ export function getDiagnostics(): {
   const missingFileCount = (db.prepare("SELECT COUNT(*) as c FROM files WHERE local_status='missing'").get() as any).c;
   const activityLogCount = (db.prepare('SELECT COUNT(*) as c FROM activity_log').get() as any).c;
   return { fileCount, projectCount, dbSizeBytes, queueCounts: getSyncQueueCounts(), missingFileCount, activityLogCount };
+}
+
+// ── Restored projects ────────────────────────────────────────────────────────
+
+export interface RestoredProject {
+  id: string;
+  source_project_id: string;
+  source_version_id: string;
+  share_id: string;
+  owner_user_id?: string | null;
+  local_checkout_id?: string | null;
+  collaborator_permission: string;
+  parent_version_id?: string | null;
+  local_project_path: string;
+  project_name: string;
+  daw_type?: string | null;
+  file_count: number;
+  total_size: number;
+  sha256_manifest?: string | null;
+  restored_at: string;
+  last_opened_at?: string | null;
+}
+
+export function insertRestoredProject(p: Omit<RestoredProject, 'id'>): RestoredProject {
+  const id = crypto.randomUUID();
+  db.prepare(`
+    INSERT INTO restored_projects
+      (id, source_project_id, source_version_id, share_id, owner_user_id,
+       local_checkout_id, collaborator_permission, parent_version_id,
+       local_project_path, project_name, daw_type, file_count, total_size,
+       sha256_manifest, restored_at, last_opened_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  `).run(
+    id, p.source_project_id, p.source_version_id, p.share_id,
+    p.owner_user_id ?? null, p.local_checkout_id ?? null,
+    p.collaborator_permission, p.parent_version_id ?? null,
+    p.local_project_path, p.project_name, p.daw_type ?? null,
+    p.file_count, p.total_size, p.sha256_manifest ?? null,
+    p.restored_at, p.last_opened_at ?? null,
+  );
+  return { id, ...p };
+}
+
+export function getRestoredProjectByShare(shareId: string): RestoredProject | null {
+  return (db.prepare('SELECT * FROM restored_projects WHERE share_id = ? ORDER BY restored_at DESC LIMIT 1')
+    .get(shareId) ?? null) as RestoredProject | null;
+}
+
+export function touchRestoredProject(id: string): void {
+  db.prepare('UPDATE restored_projects SET last_opened_at = ? WHERE id = ?')
+    .run(new Date().toISOString(), id);
 }

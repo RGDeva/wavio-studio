@@ -17,7 +17,7 @@ function readMainProcessArg(flag: string): string | undefined {
 const CHANNEL_PRELOAD = (readMainProcessArg('wavi-channel') as 'production' | 'qa' | 'development' | undefined) ?? 'production';
 const API_BASE_PRELOAD = (readMainProcessArg('wavi-api-base') ?? 'https://wavi.stream/api').replace(/\/$/, '');
 
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress', 'project:open-link']);
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress', 'project:open-link', 'restore:progress']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths', 'folderScanMeta']);
 
 contextBridge.exposeInMainWorld('waviAPI', {
@@ -101,6 +101,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
 
   // Project Links
   project: {
+    publishVersion: (opts: { localProjectId: string }) => ipcRenderer.invoke('project:publishVersion', opts),
     createLink: (opts: {
       projectId: string;
       cloudProjectId?: string;
@@ -113,6 +114,21 @@ contextBridge.exposeInMainWorld('waviAPI', {
     getCloudFiles: (opts: { cloudProjectId: string }) => ipcRenderer.invoke('project:getCloudFiles', opts),
     onOpenLink: (cb: (data: { token: string }) => void) => {
       ipcRenderer.on('project:open-link', (_e, data) => cb(data));
+    },
+  },
+
+  // Project Link restore flow
+  restore: {
+    resolve:          (token: string) => ipcRenderer.invoke('restore:resolve', token),
+    checkExisting:    (shareId: string) => ipcRenderer.invoke('restore:checkExisting', shareId),
+    pickDestination:  (defaultName: string) => ipcRenderer.invoke('restore:pickDestination', defaultName),
+    start:            (opts: Record<string, unknown>) => ipcRenderer.invoke('restore:start', opts),
+    openExisting:     (restoreId: string) => ipcRenderer.invoke('restore:openExisting', restoreId),
+    onProgress:       (cb: (data: Record<string, unknown>) => void) => {
+      ipcRenderer.on('restore:progress', (_e, data) => cb(data));
+    },
+    offProgress:      (cb: (data: Record<string, unknown>) => void) => {
+      ipcRenderer.removeListener('restore:progress', (_e, data) => cb(data));
     },
   },
 
