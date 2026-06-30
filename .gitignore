@@ -5,3 +5,4 @@ release/
 *.zip
 *.blockmap
 .DS_Store
+dist-electron/
