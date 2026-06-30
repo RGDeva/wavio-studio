@@ -136,11 +136,12 @@ if (!gotSingleInstanceLock) {
 }
 
 // ── Sanitized auth logging ───────────────────────────────────────────────────
-// Never log full tokens/JWTs/cookies/auth headers — only event names, the
-// resolved channel, and short non-reversible identifiers for correlation.
-function redactToken(token: string | null | undefined): string {
-  if (!token) return '(none)';
-  return `${token.slice(0, 6)}…(${token.length}ch)`;
+// Never log ANY characters from a token/JWT/cookie/auth header — not even a
+// short prefix. Only event names, the resolved channel, token type/length,
+// and other non-reversible metadata may be logged.
+function describeToken(token: string | null | undefined): { tokenType: string; tokenLength: number } | { tokenType: 'none' } {
+  if (!token) return { tokenType: 'none' };
+  return { tokenType: token.startsWith('wv_') ? 'desktop' : 'privy-jwt', tokenLength: token.length };
 }
 function authLog(event: string, fields: Record<string, unknown> = {}) {
   mainLog(`[auth] ${event} ${JSON.stringify({ channel: CHANNEL, ...fields })}`);
@@ -581,7 +582,7 @@ async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
       authLog('token-exchange-failed', { reason: 'unexpected-response-shape' });
       return null;
     }
-    authLog('token-exchange-success', { token: redactToken(data.token) });
+    authLog('token-exchange-success', describeToken(data.token));
     return data.token;
   } catch (e: any) {
     authLog('token-exchange-error', { message: e?.message ?? String(e) });
@@ -616,7 +617,7 @@ async function handleDeepLink(url: string) {
       return;
     }
 
-    authLog('deep-link-accepted', { token: redactToken(rawToken) });
+    authLog('deep-link-accepted', describeToken(rawToken));
 
     // Bring the window forward so the user sees auth progress immediately.
     if (mainWindow) {
@@ -648,7 +649,7 @@ async function handleDeepLink(url: string) {
       : finalToken;
     store.set('authToken', toStore);
     syncAgent?.setAuthToken(finalToken);
-    authLog('token-stored', { token: redactToken(finalToken), encrypted: safeStorage.isEncryptionAvailable() });
+    authLog('token-stored', { ...describeToken(finalToken), encrypted: safeStorage.isEncryptionAvailable() });
     // Signal renderer that auth succeeded; send token so renderer can set authed=true.
     // The renderer does NOT store the token on disk — that is main process responsibility.
     mainWindow?.webContents.send('auth:token-received', finalToken);
