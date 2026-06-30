@@ -111,6 +111,18 @@ if (isDev) {
   app.setName('wavio-studio-dev');
 }
 
+// ── QA user-data override ────────────────────────────────────────────────────
+// Lets a packaged build run against a disposable userData directory for E2E
+// testing without touching a real install's projects/auth/settings.
+// Gated on BOTH env vars so a normal double-click launch (no inherited shell
+// env) can never trigger this — it only fires when explicitly launched from a
+// terminal with both vars set, e.g.:
+//   WAVI_USER_DATA_DIR=/tmp/wavi-studio-beta-e2e WAVI_QA_OVERRIDE=1 \
+//     "/path/to/Wavi Studio.app/Contents/MacOS/Wavi Studio"
+if (process.env.WAVI_USER_DATA_DIR && (isDev || process.env.WAVI_QA_OVERRIDE === '1')) {
+  app.setPath('userData', process.env.WAVI_USER_DATA_DIR);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -793,6 +805,9 @@ ipcMain.handle('share:createLink', async (_e, opts: {
           allowDownload: opts.allowDownload ?? true,
           password: opts.password ?? null,
           expiresAt: opts.expiresAt ?? null,
+          // Reuse is only honored server-side when the existing active link's
+          // allowDownload + expiresAt match exactly (immutable-link model).
+          reuseExisting: true,
         }),
         signal: controller.signal,
       });

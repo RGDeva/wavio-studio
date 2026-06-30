@@ -16,6 +16,7 @@ export default defineConfig({
       'electron/db.maintenance.test.ts',
       'electron/fs.benchmark.test.ts',
       'electron/association.test.ts',
+      'electron/pending-resync.test.ts',
     ],
     environment: 'node',
   },
