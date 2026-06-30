@@ -20,6 +20,7 @@ export default defineConfig({
       'electron/deepLinkValidator.test.ts',
       'electron/iconAssets.test.ts',
       'electron/authLogging.test.ts',
+      'electron/localStatusMigration.test.ts',
     ],
     environment: 'node',
   },
