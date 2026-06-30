@@ -30,3 +30,14 @@ describe('official icon assets exist for packaging', () => {
     expect(pkg.build.appId).toBe('com.wavi.studio');
   });
 });
+
+describe('QA build userData isolation (electron-builder.qa.json)', () => {
+  it('the QA build config declares waviQaDefaults, used to detect a QA build independent of env vars', () => {
+    const qaConfig = require(join(ROOT, 'electron-builder.qa.json'));
+    expect(qaConfig.extraMetadata?.waviQaDefaults?.apiBase).toMatch(/^https:\/\//);
+    expect(qaConfig.extraMetadata?.waviQaDefaults?.publicUrl).toMatch(/^https:\/\//);
+    // appId must differ from production so it never shares a default userData
+    // directory — see the incident note in deepLinkValidator.ts BUNDLE_IDS.
+    expect(qaConfig.appId).not.toBe('com.wavi.studio');
+  });
+});

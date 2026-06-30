@@ -17,7 +17,7 @@ import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
 import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
-import { validateDeepLink, checkAndRecordReplay } from './deepLinkValidator';
+import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES } from './deepLinkValidator';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS } from './discovery';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
@@ -98,18 +98,42 @@ let _trayRebuildTimer: ReturnType<typeof setTimeout> | null = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 
-// ── Dev / prod data isolation ─────────────────────────────────────────────────
+// Is this a QA-channel build? Determined from the package.json baked into
+// THIS build (electron-builder.qa.json's extraMetadata.waviQaDefaults) —
+// available synchronously, independent of any env var or app.whenReady()
+// timing. This must NOT depend on WAVI_USER_DATA_DIR/WAVI_QA_OVERRIDE env
+// vars: a real macOS-routed cold launch (double-click, or routing a
+// wavi-qa:// callback to a non-running app) does not inherit terminal env
+// vars, so relying on them here previously caused a QA build to silently
+// fall through to the PRODUCTION userData directory and overwrite the real
+// app's stored auth token. See incident note in deepLinkValidator.ts.
+const isQaBuild = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    return isQaBuildFromPackageJson(require('../package.json'));
+  } catch {
+    return false;
+  }
+})();
+
+// ── Dev / QA / prod data isolation ───────────────────────────────────────────
 // MUST happen before app.whenReady() — Electron resolves userData from appName
-// at first access. Changing the name here routes dev to a separate directory:
+// at first access. Changing the name here routes each build to its own
+// directory:
 //   production: ~/Library/Application Support/wavio-studio
+//   QA:         ~/Library/Application Support/wavio-studio-qa
 //   dev:        ~/Library/Application Support/wavio-studio-dev
 //
-// This prevents dev builds from polluting the production DB, watched folders,
-// auth tokens, and settings — and prevents prod from seeing dev test data.
+// This prevents QA/dev builds from ever writing into the production DB,
+// watched folders, or auth token — and prevents prod from seeing test data —
+// regardless of how the process was launched (terminal with env vars, or a
+// real OS-routed cold launch with none).
 if (isDev) {
   // app.name must be set before any call to app.getPath('userData').
   // electron-store reads userData during construction, so this runs first.
-  app.setName('wavio-studio-dev');
+  app.setName(APP_NAMES.development);
+} else if (isQaBuild) {
+  app.setName(APP_NAMES.qa);
 }
 
 // ── QA user-data override ────────────────────────────────────────────────────
@@ -191,6 +215,13 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      // Preload runs in a restricted sandbox where require('../package.json')
+      // does not reliably resolve the same way it does in the main process
+      // (this previously caused preload to silently compute channel=
+      // "production" even when main correctly resolved "qa" — see git
+      // history). Pass main's already-correct values explicitly instead of
+      // having preload re-derive them independently.
+      additionalArguments: [`--wavi-channel=${CHANNEL}`, `--wavi-api-base=${API_BASE}`],
     },
     icon: path.join(__dirname, '../public/icon.png'),
   });

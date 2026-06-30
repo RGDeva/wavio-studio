@@ -1,21 +1,21 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
-const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
-const IS_DEV_API_PRELOAD = !!process.env.WAVI_API_BASE_URL && API_BASE_PRELOAD !== 'https://wavi.stream/api';
+// Preload runs in a restricted sandbox where require() of arbitrary app
+// files (e.g. '../package.json') does not reliably resolve the same way it
+// does in the main process — this previously caused preload to silently
+// compute channel="production" even when main correctly resolved "qa" on a
+// real cold launch with no env vars (require() in the sandbox returned
+// undefined for the package.json read, falling through to the production
+// default). Main already computes CHANNEL/API_BASE correctly (it has full
+// access to app.isPackaged and the baked package.json) and passes them via
+// webPreferences.additionalArguments — read those instead of re-deriving.
+function readMainProcessArg(flag: string): string | undefined {
+  const arg = process.argv.find((a) => a.startsWith(`--${flag}=`));
+  return arg ? arg.slice(flag.length + 3) : undefined;
+}
 
-// Same channel-derivation logic as electron/config.ts — kept duplicated here
-// because preload runs in a separate, sandboxed context from the main process
-// and CANNOT import `app` from 'electron' (it's undefined in the sandbox,
-// which previously crashed preload load entirely — silently breaking the
-// whole renderer bridge, including auth). `process.defaultApp` is a safe
-// Node/Electron global available in preload without importing electron's
-// main-process `app` module: it's `true` only when Electron is launched as
-// `electron .` against source (dev), and `undefined` in any packaged build.
-const CHANNEL_PRELOAD: 'production' | 'qa' | 'development' = (() => {
-  const isDev = process.env.NODE_ENV === 'development' || !!(process as any).defaultApp;
-  if (isDev) return 'development';
-  return IS_DEV_API_PRELOAD ? 'qa' : 'production';
-})();
+const CHANNEL_PRELOAD = (readMainProcessArg('wavi-channel') as 'production' | 'qa' | 'development' | undefined) ?? 'production';
+const API_BASE_PRELOAD = (readMainProcessArg('wavi-api-base') ?? 'https://wavi.stream/api').replace(/\/$/, '');
 
 const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths', 'folderScanMeta']);

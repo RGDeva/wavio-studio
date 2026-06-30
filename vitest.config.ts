@@ -21,6 +21,7 @@ export default defineConfig({
       'electron/iconAssets.test.ts',
       'electron/authLogging.test.ts',
       'electron/localStatusMigration.test.ts',
+      'electron/preloadArgvParsing.test.ts',
     ],
     environment: 'node',
   },

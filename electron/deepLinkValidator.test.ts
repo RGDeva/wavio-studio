@@ -6,6 +6,8 @@ import {
   checkAndRecordReplay,
   PROTOCOL_SCHEMES,
   BUNDLE_IDS,
+  APP_NAMES,
+  isQaBuildFromPackageJson,
 } from './deepLinkValidator';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -22,6 +24,42 @@ describe('resolveChannel — environment → channel mapping', () => {
 
   it('packaged build with no API override resolves to production', () => {
     expect(resolveChannel({ isDev: false, isDevApi: false })).toBe('production');
+  });
+});
+
+describe('APP_NAMES — userData directory isolation', () => {
+  it('every channel has a distinct app name (no two channels can share a default userData dir)', () => {
+    const names = Object.values(APP_NAMES);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('production keeps the already-distributed default app name', () => {
+    expect(APP_NAMES.production).toBe('wavio-studio');
+  });
+
+  it('QA and development both differ from production', () => {
+    expect(APP_NAMES.qa).not.toBe(APP_NAMES.production);
+    expect(APP_NAMES.development).not.toBe(APP_NAMES.production);
+  });
+});
+
+describe('isQaBuildFromPackageJson', () => {
+  it('detects a QA build via the baked waviQaDefaults marker', () => {
+    expect(isQaBuildFromPackageJson({ waviQaDefaults: { apiBase: 'x', publicUrl: 'y' } })).toBe(true);
+  });
+
+  it('a production package.json (no marker) is not detected as QA', () => {
+    expect(isQaBuildFromPackageJson({})).toBe(false);
+  });
+
+  it('does not depend on any env var — pure function of the package.json shape', () => {
+    // Regression guard for the incident: a real cold launch carries no env
+    // vars, so this detection must work from package.json content alone.
+    const originalEnv = { ...process.env };
+    delete process.env.WAVI_QA_OVERRIDE;
+    delete process.env.WAVI_USER_DATA_DIR;
+    expect(isQaBuildFromPackageJson({ waviQaDefaults: { apiBase: 'x' } })).toBe(true);
+    process.env = originalEnv;
   });
 });
 

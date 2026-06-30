@@ -26,6 +26,32 @@ export const BUNDLE_IDS: Record<WaviChannel, string> = {
   development: 'stream.wavi.studio.dev',
 };
 
+// Default per-channel app.setName() value — determines the userData
+// directory Electron resolves by default (~/Library/Application
+// Support/<name>). MUST differ across channels: a QA/dev build that falls
+// through to the production name will write into and corrupt the real
+// app's stored auth token/projects on a real cold launch that has no env
+// var overrides (this happened once during testing — see git history on
+// this file around the "isQaBuild" fix in main.ts).
+export const APP_NAMES: Record<WaviChannel, string> = {
+  production: 'wavio-studio',
+  qa: 'wavio-studio-qa',
+  development: 'wavio-studio-dev',
+};
+
+/**
+ * Detects a QA build independent of any runtime env var — reads a marker
+ * (`waviQaDefaults`) baked into package.json at build time by
+ * electron-builder.qa.json's extraMetadata. This must NOT depend on
+ * WAVI_QA_OVERRIDE/WAVI_USER_DATA_DIR: those are only set when a human
+ * launches the app from a terminal for disposable E2E testing, but a real
+ * macOS-routed cold launch (double-click, or routing a wavi-qa:// callback
+ * to a non-running app) inherits no env vars at all.
+ */
+export function isQaBuildFromPackageJson(pkg: { waviQaDefaults?: unknown }): boolean {
+  return !!pkg.waviQaDefaults;
+}
+
 export function resolveChannel(opts: { isDev: boolean; isDevApi: boolean }): WaviChannel {
   if (opts.isDev) return 'development';
   return opts.isDevApi ? 'qa' : 'production';

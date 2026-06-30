@@ -2,6 +2,12 @@
   "appId": "stream.wavi.studio.qa",
   "productName": "Wavi Studio QA",
   "copyright": "Copyright © 2026 Wavi",
+  "extraMetadata": {
+    "waviQaDefaults": {
+      "apiBase": "https://wavio-git-fix-seedbed-anon-share-rgdevas-projects.vercel.app/api",
+      "publicUrl": "https://wavio-git-fix-seedbed-anon-share-rgdevas-projects.vercel.app"
+    }
+  },
   "directories": {
     "output": "release"
   },

@@ -11,8 +11,24 @@
 const PRODUCTION_API = 'https://wavi.stream/api';
 const PRODUCTION_WEB = 'https://wavi.stream';
 
+// Baked-in fallback for the QA build only (see electron-builder.qa.json
+// extraMetadata.waviQaDefaults). A real macOS Launch-Services cold launch
+// (double-click, or routing a wavi-qa:// callback to a non-running app) does
+// NOT inherit terminal env vars — without this baked default, a QA build
+// cold-launched by the OS would silently fall back to hitting PRODUCTION,
+// not the preview deployment it's meant to test against.
+function getQaDefaults(): { apiBase?: string; publicUrl?: string } {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const pkg = require('../package.json');
+    return pkg.waviQaDefaults ?? {};
+  } catch {
+    return {};
+  }
+}
+
 function resolveApiBase(): string {
-  const override = process.env.WAVI_API_BASE_URL;
+  const override = process.env.WAVI_API_BASE_URL ?? getQaDefaults().apiBase;
 
   if (!override) return PRODUCTION_API;
 
@@ -38,7 +54,7 @@ export const IS_DEV_API = API_BASE !== PRODUCTION_API;
  * Production default: https://wavi.stream
  */
 export const WEB_BASE: string = (() => {
-  const override = process.env.WAVI_PUBLIC_URL;
+  const override = process.env.WAVI_PUBLIC_URL ?? getQaDefaults().publicUrl;
   if (override) return override.replace(/\/$/, '');
   // If API base is overridden to a non-production URL, derive web base from it
   // by stripping the /api suffix (only when the host matches the API host).
