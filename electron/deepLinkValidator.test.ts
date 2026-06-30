@@ -8,6 +8,7 @@ import {
   BUNDLE_IDS,
   APP_NAMES,
   isQaBuildFromPackageJson,
+  assertNotProductionUserDataDir,
 } from './deepLinkValidator';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -24,6 +25,48 @@ describe('resolveChannel — environment → channel mapping', () => {
 
   it('packaged build with no API override resolves to production', () => {
     expect(resolveChannel({ isDev: false, isDevApi: false })).toBe('production');
+  });
+});
+
+describe('assertNotProductionUserDataDir — last-resort safety net', () => {
+  const prodDir = '/Users/x/Library/Application Support/wavio-studio';
+  const qaDir = '/Users/x/Library/Application Support/wavio-studio-qa';
+
+  it('is a no-op for a genuine production build, even if paths somehow match', () => {
+    expect(assertNotProductionUserDataDir({
+      channel: 'production',
+      resolvedUserDataDir: prodDir,
+      productionUserDataDir: prodDir,
+    })).toBeNull();
+  });
+
+  it('passes when a QA build correctly resolved to its own directory', () => {
+    expect(assertNotProductionUserDataDir({
+      channel: 'qa',
+      resolvedUserDataDir: qaDir,
+      productionUserDataDir: prodDir,
+    })).toBeNull();
+  });
+
+  it('FATALs when a QA build resolved to the production directory (the incident scenario)', () => {
+    const result = assertNotProductionUserDataDir({
+      channel: 'qa',
+      resolvedUserDataDir: prodDir,
+      productionUserDataDir: prodDir,
+    });
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/FATAL/);
+    expect(result).toMatch(/qa/);
+  });
+
+  it('FATALs when a development build resolved to the production directory', () => {
+    const result = assertNotProductionUserDataDir({
+      channel: 'development',
+      resolvedUserDataDir: prodDir,
+      productionUserDataDir: prodDir,
+    });
+    expect(result).not.toBeNull();
+    expect(result).toMatch(/FATAL/);
   });
 });
 

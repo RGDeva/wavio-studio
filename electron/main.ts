@@ -17,7 +17,7 @@ import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
 import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
-import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES } from './deepLinkValidator';
+import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES, assertNotProductionUserDataDir } from './deepLinkValidator';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS } from './discovery';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
@@ -146,6 +146,30 @@ if (isDev) {
 //     "/path/to/Wavi Studio.app/Contents/MacOS/Wavi Studio"
 if (process.env.WAVI_USER_DATA_DIR && (isDev || process.env.WAVI_QA_OVERRIDE === '1')) {
   app.setPath('userData', process.env.WAVI_USER_DATA_DIR);
+}
+
+// ── Last-resort production-data-isolation safety net ────────────────────────
+// app.setName() above should already guarantee a non-production build never
+// resolves to the production userData directory — but after the incident
+// where that protection was missing for QA builds, this is a hard, fatal
+// assertion as defense in depth: if a non-production build's resolved
+// userData directory EVER equals the production directory, refuse to start
+// rather than risk reading or writing real user data.
+{
+  const resolvedChannel: 'production' | 'qa' | 'development' = isDev ? 'development' : isQaBuild ? 'qa' : 'production';
+  const productionUserDataDir = path.join(app.getPath('appData'), APP_NAMES.production);
+  const isolationError = assertNotProductionUserDataDir({
+    channel: resolvedChannel,
+    resolvedUserDataDir: app.getPath('userData'),
+    productionUserDataDir,
+  });
+  if (isolationError) {
+    mainLog(isolationError);
+    console.error(isolationError);
+    dialog.showErrorBox('Wavi Studio — startup aborted', isolationError);
+    app.quit();
+    process.exit(1);
+  }
 }
 
 // ── Single-instance lock ─────────────────────────────────────────────────────

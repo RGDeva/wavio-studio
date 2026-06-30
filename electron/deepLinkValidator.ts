@@ -40,6 +40,28 @@ export const APP_NAMES: Record<WaviChannel, string> = {
 };
 
 /**
+ * Safety assertion: a non-production build (QA or dev) must never resolve
+ * to the production userData directory. Returns an error message to throw/
+ * abort on, or null if safe. Pure function so it's directly unit testable —
+ * the caller passes in the already-resolved paths rather than calling
+ * Electron APIs here.
+ */
+export function assertNotProductionUserDataDir(opts: {
+  channel: WaviChannel;
+  resolvedUserDataDir: string;
+  productionUserDataDir: string;
+}): string | null {
+  if (opts.channel === 'production') return null;
+  if (opts.resolvedUserDataDir === opts.productionUserDataDir) {
+    return `FATAL: ${opts.channel} build resolved userData directory to the production path ` +
+      `(${opts.productionUserDataDir}). Refusing to start — this would read/write the real ` +
+      `production app's data. This should be unreachable (app.setName() should have already ` +
+      `isolated it); aborting as a last-resort safety net.`;
+  }
+  return null;
+}
+
+/**
  * Detects a QA build independent of any runtime env var — reads a marker
  * (`waviQaDefaults`) baked into package.json at build time by
  * electron-builder.qa.json's extraMetadata. This must NOT depend on
