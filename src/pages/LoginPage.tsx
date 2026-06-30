@@ -7,14 +7,22 @@ interface LoginPageProps {
 
 function getAuthUrl(): string {
   const apiBase = window.waviAPI?.config?.apiBase ?? 'https://wavi.stream/api';
+  const channel = window.waviAPI?.config?.channel ?? 'production';
   const webBase = apiBase.replace(/\/api$/, '');
-  return `${webBase}/auth?desktop=1`;
+  return `${webBase}/auth?desktop=1&channel=${channel}`;
+}
+
+// Short, non-reversible diagnostic ID — safe to display/copy, never a token.
+function makeDiagnosticId(): string {
+  return `wv-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 export function LoginPage({ onLogin }: LoginPageProps) {
   const [waiting, setWaiting] = useState(false);
   const [exchanging, setExchanging] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [diagnosticId, setDiagnosticId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     if (!waiting) return;
@@ -34,6 +42,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     const handleError = (reason: unknown) => {
       setExchanging(false);
       setWaiting(false);
+      setDiagnosticId(makeDiagnosticId());
       if (reason === 'exchange-failed') {
         setError('Sign in failed — check your internet connection and try again.');
       } else {
@@ -53,8 +62,18 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
   const handleSignIn = () => {
     setError(null);
+    setDiagnosticId(null);
     api.shell.openExternal(getAuthUrl());
     setWaiting(true);
+  };
+
+  const handleCopyDiagnosticId = () => {
+    if (!diagnosticId) return;
+    const channel = window.waviAPI?.config?.channel ?? 'production';
+    navigator.clipboard.writeText(`${diagnosticId} (channel=${channel})`).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   };
 
   return (
@@ -67,7 +86,24 @@ export function LoginPage({ onLogin }: LoginPageProps) {
 
         <div className="bg-[#111] border border-[#222] rounded-2xl p-6 space-y-4 text-center">
           {error && (
-            <p className="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
+            <div className="space-y-2">
+              <p className="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
+              <div className="flex items-center justify-center gap-3 text-[11px]">
+                <button onClick={handleSignIn} className="text-cyan-400 hover:text-cyan-300">Retry</button>
+                <span className="text-white/20">·</span>
+                <button onClick={() => api.shell.openExternal(getAuthUrl())} className="text-cyan-400 hover:text-cyan-300">
+                  Open browser again
+                </button>
+                {diagnosticId && (
+                  <>
+                    <span className="text-white/20">·</span>
+                    <button onClick={handleCopyDiagnosticId} className="text-white/40 hover:text-white/60">
+                      {copied ? 'Copied!' : `Copy diagnostic ID`}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
           )}
           {!waiting ? (
             <>

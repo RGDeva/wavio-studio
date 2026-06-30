@@ -17,6 +17,7 @@ export default defineConfig({
       'electron/fs.benchmark.test.ts',
       'electron/association.test.ts',
       'electron/pending-resync.test.ts',
+      'electron/deepLinkValidator.test.ts',
     ],
     environment: 'node',
   },

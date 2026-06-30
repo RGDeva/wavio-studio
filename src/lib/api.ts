@@ -115,6 +115,7 @@ export interface WaviAPI {
   };
   config: {
     apiBase: string;
+    channel: 'production' | 'qa' | 'development';
   };
   diagnostics: {
     get: () => Promise<{
@@ -173,7 +174,7 @@ const _stub: WaviAPI = {
     selectFolder:  () => Promise.resolve({ canceled: true }),
     syncToCloud:   _noop,
   },
-  config: { apiBase: 'https://wavi.stream/api' },
+  config: { apiBase: 'https://wavi.stream/api', channel: 'production' },
   diagnostics: { get: _noop },
   on: () => {},
   off: () => {},

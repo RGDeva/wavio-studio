@@ -55,3 +55,26 @@ export function logApiEnvironment() {
     console.log(`[config] ⚠ DEV API: ${API_BASE}`);
   }
 }
+
+// ── Build channel ─────────────────────────────────────────────────────────────
+// Determines the deep-link protocol scheme, app bundle identity, and which
+// auth `channel=` param is sent to the web Auth page. Derived from already-
+// validated signals (packaged state + API override) rather than a free-form
+// env var, so it can't be spoofed by setting an arbitrary string.
+import { resolveChannel, PROTOCOL_SCHEMES, BUNDLE_IDS, type WaviChannel } from './deepLinkValidator';
+export type { WaviChannel };
+
+export const CHANNEL: WaviChannel = (() => {
+  // Lazy require to avoid pulling electron into non-main-process contexts.
+  const { app } = require('electron');
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  return resolveChannel({ isDev, isDevApi: IS_DEV_API });
+})();
+
+export const PROTOCOL_SCHEME = PROTOCOL_SCHEMES[CHANNEL];
+export const BUNDLE_ID = BUNDLE_IDS[CHANNEL];
+
+/** Returns the desktop auth URL for this channel, including the channel param the web Auth page uses to pick the correct callback scheme. */
+export function getAuthUrl(): string {
+  return `${WEB_BASE}/auth?desktop=1&channel=${CHANNEL}`;
+}

@@ -16,7 +16,8 @@ import { registerAbletonHandlers } from './ableton';
 import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
-import { API_BASE, WEB_BASE, logApiEnvironment } from './config';
+import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
+import { validateDeepLink, checkAndRecordReplay } from './deepLinkValidator';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS } from './discovery';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
@@ -121,6 +122,59 @@ if (isDev) {
 //     "/path/to/Wavi Studio.app/Contents/MacOS/Wavi Studio"
 if (process.env.WAVI_USER_DATA_DIR && (isDev || process.env.WAVI_QA_OVERRIDE === '1')) {
   app.setPath('userData', process.env.WAVI_USER_DATA_DIR);
+}
+
+// ── Single-instance lock ─────────────────────────────────────────────────────
+// Without this, every launch (including the OS routing a wavi:// callback)
+// can spawn a brand-new process instead of focusing the already-running one.
+// That was a root cause of deep links silently going nowhere: macOS would
+// hand the callback to a fresh, windowless instance whose 'open-url' handler
+// fired before mainWindow existed, then that instance exited.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+}
+
+// ── Sanitized auth logging ───────────────────────────────────────────────────
+// Never log full tokens/JWTs/cookies/auth headers — only event names, the
+// resolved channel, and short non-reversible identifiers for correlation.
+function redactToken(token: string | null | undefined): string {
+  if (!token) return '(none)';
+  return `${token.slice(0, 6)}…(${token.length}ch)`;
+}
+function authLog(event: string, fields: Record<string, unknown> = {}) {
+  mainLog(`[auth] ${event} ${JSON.stringify({ channel: CHANNEL, ...fields })}`);
+}
+
+// ── Cold-launch deep link queuing ────────────────────────────────────────────
+// On macOS, 'open-url' can fire before app.whenReady() resolves and before
+// mainWindow exists (cold launch via custom protocol). Previously the handler
+// just did `mainWindow?.webContents.send(...)`, which silently no-ops with no
+// window — the callback was dropped. Now we queue it and drain exactly once
+// after DB + window + IPC are all ready.
+let pendingDeepLinkUrl: string | null = null;
+let appFullyReady = false;
+const processedDeepLinkUrls = new Set<string>(); // replay guard
+
+function queueOrHandleDeepLink(url: string) {
+  authLog('deep-link-received', { appFullyReady });
+  if (!appFullyReady) {
+    pendingDeepLinkUrl = url;
+    return;
+  }
+  void handleDeepLink(url);
+}
+
+// Cold launch on macOS via custom protocol.
+app.on('open-url', (event, url) => {
+  event.preventDefault();
+  queueOrHandleDeepLink(url);
+});
+
+// Windows/Linux cold launch passes the URL as an argv entry.
+const argvDeepLink = process.argv.find((arg) => arg.includes('://auth/callback') || arg.includes('://auth?'));
+if (argvDeepLink) {
+  pendingDeepLinkUrl = argvDeepLink;
 }
 
 function createWindow() {
@@ -234,10 +288,15 @@ app.whenReady().then(async () => {
   // Initialize store now that app is ready
   store = new Store();
 
-  // Register wavi:// deep-link protocol
-  if (!app.isDefaultProtocolClient('wavi')) {
-    app.setAsDefaultProtocolClient('wavi');
+  // Register this build's channel-specific deep-link protocol scheme.
+  // production -> wavi://, qa -> wavi-qa://, development -> wavi-dev://.
+  // Each channel is a distinct macOS bundle id (see config.ts BUNDLE_ID), so
+  // registering only PROTOCOL_SCHEME here means a QA build never claims the
+  // production wavi:// scheme and vice versa.
+  if (!app.isDefaultProtocolClient(PROTOCOL_SCHEME)) {
+    app.setAsDefaultProtocolClient(PROTOCOL_SCHEME);
   }
+  authLog('protocol-registered', { scheme: PROTOCOL_SCHEME, bundleId: BUNDLE_ID });
 
   // Initialize Sentry error tracking (async to avoid blocking)
   initSentry().catch(() => {});
@@ -319,6 +378,15 @@ app.whenReady().then(async () => {
   mainWindow?.webContents.once('did-finish-load', () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('main:ready');
+    }
+    // DB, secure storage, IPC handlers, and the window all exist now — safe to
+    // drain any deep link captured during cold launch, exactly once.
+    appFullyReady = true;
+    if (pendingDeepLinkUrl) {
+      const url = pendingDeepLinkUrl;
+      pendingDeepLinkUrl = null;
+      authLog('deep-link-drained-from-queue');
+      void handleDeepLink(url);
     }
   });
 
@@ -466,19 +534,18 @@ function rebuildTrayMenu() {
   tray.setContextMenu(menu);
 }
 
-// Deep-link: wavi://auth?token=wv_...
-// macOS: open-url fires when app is already running
-app.on('open-url', (_event, url) => {
-  void handleDeepLink(url);
-});
-
-// Windows/Linux: second-instance fires with argv containing the URL
+// Windows/Linux: second-instance fires with argv containing the URL. This also
+// fires on macOS/Windows/Linux when a second launch attempt is blocked by the
+// single-instance lock (e.g. the OS spawning a new process to deliver a
+// wavi:// callback) — argv from that blocked second launch arrives here, and
+// we route it into the one real running instance instead of losing it.
 app.on('second-instance', (_event, argv) => {
-  const url = argv.find(arg => arg.startsWith('wavi://'));
-  if (url) void handleDeepLink(url);
-  // Focus existing window
+  const url = argv.find((arg) => arg.includes('://auth/callback') || arg.includes('://auth?'));
+  if (url) queueOrHandleDeepLink(url);
+  // Restore/focus the existing window so the user sees auth progress.
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
+    if (!mainWindow.isVisible()) mainWindow.show();
     mainWindow.focus();
   }
 });
@@ -486,6 +553,7 @@ app.on('second-instance', (_event, argv) => {
 // Exchange a short-lived Privy JWT for a persistent wv_ desktop token.
 // Returns the wv_ token on success, null on failure.
 async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
+  authLog('token-exchange-start');
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 15_000);
@@ -505,17 +573,18 @@ async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
       clearTimeout(timer);
     }
     if (!res.ok) {
-      mainLog(`[auth] Token exchange HTTP ${res.status}`);
+      authLog('token-exchange-failed', { httpStatus: res.status });
       return null;
     }
     const data: { token?: string; expiresAt?: string } = await res.json();
     if (!data?.token?.startsWith('wv_')) {
-      mainLog('[auth] Token exchange: unexpected response shape');
+      authLog('token-exchange-failed', { reason: 'unexpected-response-shape' });
       return null;
     }
+    authLog('token-exchange-success', { token: redactToken(data.token) });
     return data.token;
   } catch (e: any) {
-    mainLog(`[auth] Token exchange error: ${e?.message ?? e}`);
+    authLog('token-exchange-error', { message: e?.message ?? String(e) });
     captureException(e);
     return null;
   }
@@ -523,12 +592,38 @@ async function exchangePrivyJwt(privyJwt: string): Promise<string | null> {
 
 async function handleDeepLink(url: string) {
   try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'wavi:') return;
-    if (parsed.hostname !== 'auth') return;
+    // Explicit allowlist + path/credential validation, shared with unit tests
+    // (see electron/deepLinkValidator.ts). This build only ever accepts its
+    // own channel's scheme — a QA build receiving a production wavi://
+    // callback (or vice versa) is rejected outright.
+    const validation = validateDeepLink(url, PROTOCOL_SCHEME);
+    if (!validation.ok) {
+      authLog('deep-link-rejected', { reason: validation.reason, expected: `${PROTOCOL_SCHEME}:` });
+      return;
+    }
+    const rawToken = validation.token;
 
-    const rawToken = parsed.searchParams.get('token');
-    if (!rawToken || rawToken.length < 10) return;
+    // Replay guard — a token value should only ever be processed once. We key
+    // on a short hash, never the raw token, and cap the set so it can't grow
+    // unbounded across a long-running session.
+    const isReplay = checkAndRecordReplay(
+      rawToken,
+      processedDeepLinkUrls,
+      (s) => crypto.createHash('sha256').update(s).digest('hex'),
+    );
+    if (isReplay) {
+      authLog('deep-link-rejected', { reason: 'replay' });
+      return;
+    }
+
+    authLog('deep-link-accepted', { token: redactToken(rawToken) });
+
+    // Bring the window forward so the user sees auth progress immediately.
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+    }
 
     let finalToken: string;
 
@@ -553,13 +648,15 @@ async function handleDeepLink(url: string) {
       : finalToken;
     store.set('authToken', toStore);
     syncAgent?.setAuthToken(finalToken);
+    authLog('token-stored', { token: redactToken(finalToken), encrypted: safeStorage.isEncryptionAvailable() });
     // Signal renderer that auth succeeded; send token so renderer can set authed=true.
     // The renderer does NOT store the token on disk — that is main process responsibility.
     mainWindow?.webContents.send('auth:token-received', finalToken);
+    authLog('renderer-notified');
     rebuildTrayMenu();
   } catch (e) {
     captureException(e);
-    mainLog(`[auth] handleDeepLink error: ${(e as any)?.message ?? e}`);
+    authLog('handle-deep-link-error', { message: (e as any)?.message ?? String(e) });
   }
 }
 

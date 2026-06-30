@@ -1,6 +1,15 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, app } from 'electron';
 
 const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
+const IS_DEV_API_PRELOAD = !!process.env.WAVI_API_BASE_URL && API_BASE_PRELOAD !== 'https://wavi.stream/api';
+
+// Same channel-derivation logic as electron/config.ts — kept duplicated here
+// because preload runs in a separate bundle/context from the main process.
+const CHANNEL_PRELOAD: 'production' | 'qa' | 'development' = (() => {
+  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  if (isDev) return 'development';
+  return IS_DEV_API_PRELOAD ? 'qa' : 'production';
+})();
 
 const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths', 'folderScanMeta']);
@@ -124,6 +133,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
   // Config exposed to renderer (safe, non-secret values only)
   config: {
     apiBase: API_BASE_PRELOAD,
+    channel: CHANNEL_PRELOAD,
   },
 
   // Bridge status
