@@ -209,6 +209,10 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('ALTER TABLE files ADD COLUMN classification_version INTEGER DEFAULT 0'); } catch { /* already exists */ }
   try { db.exec('ALTER TABLE projects ADD COLUMN share_url TEXT'); } catch { /* already exists */ }
   try { db.exec('ALTER TABLE projects ADD COLUMN tracking_id TEXT'); } catch { /* already exists */ }
+  // Cloud asset_id for the project's own DAW file (.als/.ptx/etc) — lets
+  // Project Link manifests reference a real downloadable asset for it,
+  // instead of the non-downloadable cloud_version_id fingerprint.
+  try { db.exec('ALTER TABLE projects ADD COLUMN project_asset_id TEXT'); } catch { /* already exists */ }
 
   // ── Phase 1: Association tables ─────────────────────────────────────────
   db.exec(`
@@ -411,6 +415,12 @@ export function updateProjectSyncStatus(
 
 export function updateProjectShareInfo(id: string, shareUrl: string | null, trackingId: string | null) {
   db.prepare('UPDATE projects SET share_url = ?, tracking_id = ? WHERE id = ?').run(shareUrl, trackingId, id);
+}
+
+/** Stores the cloud asset_id for the project's own DAW file (.als/.ptx/etc) so
+ *  Project Link manifests can reference a real downloadable asset for it. */
+export function updateProjectAssetId(id: string, assetId: string) {
+  db.prepare('UPDATE projects SET project_asset_id = ? WHERE id = ?').run(assetId, id);
 }
 
 // ── Files ─────────────────────────────────────────────────────────────────────

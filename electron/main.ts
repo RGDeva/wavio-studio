@@ -1077,19 +1077,157 @@ function getDecryptedToken(): string | null {
   } catch { return null; }
 }
 
+// ── project:publishVersion ────────────────────────────────────────────────────
+// Collects all local files associated with a project, computes safe project-
+// relative paths (never exposing absolute filesystem paths to the cloud),
+// and submits a complete transactional snapshot to publish-project-version.
+
+const PUBLISH_EXCLUDE = [
+  /\.DS_Store$/i, /Thumbs\.db$/i, /desktop\.ini$/i,
+  /\._[^/]+$/, /\.lck$/i, /\.lock$/i, /~\$/,
+  /Ableton Temp Files/i, /^Backups$/i,
+  /\.db$/, /\.log$/, /node_modules/,
+];
+
+function safeRelativePath(absoluteFile: string, projectRoot: string): string | null {
+  const rel = absoluteFile.startsWith(projectRoot)
+    ? absoluteFile.slice(projectRoot.length).replace(/^[/\\]/, '')
+    : null;
+  if (!rel) return null;
+  const parts = rel.split(/[/\\]/);
+  if (parts.some(p => PUBLISH_EXCLUDE.some(rx => rx.test(p)))) return null;
+  return rel;
+}
+
+function classifyFileRole(fileName: string, classifierRole: string): string {
+  const ext = path.extname(fileName).toLowerCase();
+  if (['.als', '.ptx', '.flp', '.logic', '.logicx', '.nproject', '.cpr', '.rpp'].includes(ext)) return 'project';
+  if (classifierRole === 'stem') return 'stem';
+  if (classifierRole === 'sample') return 'sample';
+  if (['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac'].includes(ext)) return 'audio';
+  if (ext === '.mid' || ext === '.midi') return 'midi';
+  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) return 'artwork';
+  if (['.pdf', '.txt', '.md', '.docx', '.rtf'].includes(ext)) return 'document';
+  if (['.zip', '.rar', '.tar', '.gz'].includes(ext)) return 'archive';
+  return 'other';
+}
+
+ipcMain.handle('project:publishVersion', async (_e, opts: {
+  localProjectId: string;  // local SQLite project id
+}) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+
+  const project = getProjectById(opts.localProjectId) as any;
+  if (!project) return { error: 'Project not found locally' };
+  if (!project.cloud_id) return { error: 'Project not yet synced to cloud' };
+
+  const projectFilePath = project.file_path as string;
+  const projectRoot = path.dirname(projectFilePath);
+
+  // Collect all files associated with this project
+  const localFiles = getFilesByProject(opts.localProjectId) as any[];
+  const syncedFiles = localFiles.filter((f: any) => f.sync_status === 'synced' && f.cloud_asset_id && f.file_path);
+
+  if (!syncedFiles.length) return { error: 'No synced files found for this project' };
+
+  // Build manifest — safe relative paths, no absolute paths
+  const fileManifest: Array<{
+    relativePath: string; fileName: string; fileSize: number;
+    sha256: string | null; role: string; mimeType: string | null; assetId: string;
+  }> = [];
+
+  // Include the primary project file itself (the .als/.ptx/etc.)
+  if (fs.existsSync(projectFilePath)) {
+    const stat = fs.statSync(projectFilePath);
+    fileManifest.push({
+      relativePath: path.basename(projectFilePath),
+      fileName: path.basename(projectFilePath),
+      fileSize: stat.size,
+      sha256: project.checksum ?? null,
+      role: 'project',
+      mimeType: null,
+      assetId: project.project_asset_id ?? '',
+    });
+  }
+
+  // Add all synced associated files
+  for (const f of syncedFiles) {
+    const rel = safeRelativePath(f.file_path, projectRoot + path.sep);
+    if (!rel) continue;
+    fileManifest.push({
+      relativePath: rel,
+      fileName: f.file_name,
+      fileSize: f.file_size ?? 0,
+      sha256: f.checksum ?? null,
+      role: classifyFileRole(f.file_name, f.classifier_role ?? 'misc'),
+      mimeType: null,
+      assetId: f.cloud_asset_id,
+    });
+  }
+
+  if (!fileManifest.length) return { error: 'No eligible files to publish in this project version' };
+
+  const result = await desktopApiPost(token, 'publish-project-version', {
+    projectId: project.cloud_id,
+    parentVersionId: project.cloud_version_id ?? null,
+    daw: project.daw_type ?? null,
+    bpm: null,
+    sha256: project.checksum ?? null,
+    fileSize: project.file_size ?? null,
+    deviceLabel: `Wavi Studio — ${require('os').hostname()}`,
+    files: fileManifest,
+    versionNotes: null,
+  });
+
+  return result;
+});
+
 ipcMain.handle('project:createLink', async (_e, opts: {
-  projectId: string;
-  cloudProjectId?: string;
-  projectVersionId?: string;
+  projectId: string;           // local SQLite project id
+  cloudProjectId?: string;     // cloud project UUID (if already known)
+  projectVersionId?: string;   // if explicit version to link — skips publish step
   allowDownload?: boolean;
   expiresAt?: string;
   collaboratorMode?: 'view' | 'comment' | 'edit';
 }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
+
+  let versionId = opts.projectVersionId ?? null;
+
+  // Step 1: ensure a complete immutable version exists with all files populated.
+  // If the caller didn't pass an explicit version, publish one now.
+  if (!versionId) {
+    const published = await desktopApiPost(token, 'publish-project-version', (() => {
+      const project = getProjectById(opts.projectId) as any;
+      if (!project?.cloud_id) return null;
+      const projectFilePath = project.file_path as string;
+      const projectRoot = path.dirname(projectFilePath) + path.sep;
+      const localFiles = (getFilesByProject(opts.projectId) as any[]).filter(
+        (f: any) => f.sync_status === 'synced' && f.cloud_asset_id && f.file_path
+      );
+      const fileManifest = [];
+      if (fs.existsSync(projectFilePath)) {
+        fileManifest.push({ relativePath: path.basename(projectFilePath), fileName: path.basename(projectFilePath), fileSize: project.file_size ?? 0, sha256: project.checksum ?? null, role: 'project', mimeType: null, assetId: project.project_asset_id ?? '' });
+      }
+      for (const f of localFiles) {
+        const rel = safeRelativePath(f.file_path, projectRoot);
+        if (!rel) continue;
+        fileManifest.push({ relativePath: rel, fileName: f.file_name, fileSize: f.file_size ?? 0, sha256: f.checksum ?? null, role: classifyFileRole(f.file_name, f.classifier_role ?? 'misc'), mimeType: null, assetId: f.cloud_asset_id });
+      }
+      return { projectId: project.cloud_id, parentVersionId: project.cloud_version_id ?? null, daw: project.daw_type ?? null, sha256: project.checksum ?? null, fileSize: project.file_size ?? null, deviceLabel: `Wavi Studio — ${require('os').hostname()}`, files: fileManifest };
+    })() as any);
+
+    if (!published || (published as any).error) return { error: (published as any)?.error ?? 'Failed to publish project version' };
+    versionId = (published as any).versionId;
+  }
+
+  // Step 2: create the Project Link referencing this exact immutable version
+  const cloudProjectId = opts.cloudProjectId ?? (getProjectById(opts.projectId) as any)?.cloud_id;
   return desktopApiPost(token, 'create-project-link', {
-    projectId: opts.cloudProjectId ?? opts.projectId,
-    projectVersionId: opts.projectVersionId ?? null,
+    projectId: cloudProjectId,
+    projectVersionId: versionId,
     allowDownload: opts.allowDownload ?? true,
     expiresAt: opts.expiresAt ?? null,
     collaboratorMode: opts.collaboratorMode ?? 'view',

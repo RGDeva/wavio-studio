@@ -13,6 +13,7 @@ import {
   getFileById,
   getDb,
   repairStalledQueue,
+  updateProjectAssetId,
 } from './db';
 import { fileChecksum } from './watcher';
 import crypto from 'crypto';
@@ -329,6 +330,41 @@ export class SyncAgent {
               status: 'uploading', bytesUploaded: stats.size, bytesTotal: stats.size, percentage: 100,
             });
           }
+        }
+
+        // Register the project file as a real cloud asset (was previously
+        // uploaded but never registered — meant project_version_files had no
+        // retrievable asset for the .als/.ptx/etc itself, and ZIP downloads
+        // silently dropped the DAW project file). Idempotent: register-asset
+        // dedupes by storage_path within the user.
+        try {
+          const registerProjectFileRes = await fetchWithTimeout(`${API_BASE}/desktop/index`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${this.authToken}`,
+              'X-Desktop-Action': 'register-asset',
+            },
+            body: JSON.stringify({
+              fileName,
+              storageKey: presignData.storageKey ?? presignData.fileUrl,
+              fileSize: stats.size,
+              sha256: project.sha256 ?? null,
+              projectId: cloudProjectId,
+              projectVersionId: cloudVersionId,
+              role: 'project',
+              daw: project.daw_type ?? null,
+              projectName: project.project_name,
+            }),
+          });
+          if (registerProjectFileRes.ok) {
+            const registerData = await registerProjectFileRes.json();
+            if (registerData?.assetId) {
+              updateProjectAssetId(project.id, registerData.assetId);
+            }
+          }
+        } catch (registerErr: any) {
+          console.warn('[syncAgent] Project file asset registration failed (non-fatal):', registerErr?.message);
         }
       }
     }
