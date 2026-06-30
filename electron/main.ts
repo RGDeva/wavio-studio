@@ -156,7 +156,18 @@ if (process.env.WAVI_USER_DATA_DIR && (isDev || process.env.WAVI_QA_OVERRIDE ===
 // fired before mainWindow existed, then that instance exited.
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
+  // app.quit() schedules an async quit — it does NOT halt synchronous
+  // execution. Without exiting immediately, this losing process's module
+  // continues running: app.whenReady().then(...) below still gets
+  // registered, and 'ready' can fire before quit() actually terminates the
+  // process. That raced a second _initDatabaseAtPath() open against the
+  // SAME db file as the real (lock-holding) instance, intermittently
+  // causing pending migrations to silently lose to SQLITE_BUSY (swallowed
+  // by the try/catch as "already exists") — observed as a recurring
+  // "no such column: local_status" error. Exit synchronously, before any
+  // further module code (including the whenReady registration) can run.
   app.quit();
+  process.exit(0);
 }
 
 // ── Sanitized auth logging ───────────────────────────────────────────────────

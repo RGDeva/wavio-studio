@@ -27,6 +27,93 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
+  // ── Base tables — MUST run before any ALTER TABLE migration below ────────────
+  // Root cause of a recurring "no such column: local_status" error: on a truly
+  // fresh database, ALTER TABLE ... ADD COLUMN against a table that doesn't
+  // exist yet throws "no such table", which the migrations' try/catch silently
+  // swallows (indistinguishable from "column already exists"). The base
+  // CREATE TABLE IF NOT EXISTS statements used to run much later in this
+  // function — so a first-ever launch created `files`/`projects`/etc. with
+  // their bare original schema, permanently missing every column that was
+  // meant to be added by a later ALTER migration (local_status,
+  // reconciled_from, cloud_asset_id, classifier_role, etc.), until a second
+  // app restart happened to patch them in (ALTER now succeeds once the table
+  // exists). Moved here so a fresh DB is fully migrated on its very first launch.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY,
+      project_name TEXT NOT NULL,
+      file_path TEXT NOT NULL UNIQUE,
+      daw_type TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      version_count INTEGER DEFAULT 1,
+      sync_status TEXT DEFAULT 'pending',
+      cloud_id TEXT,
+      cloud_version_id TEXT,
+      created_at TEXT NOT NULL,
+      modified_at TEXT NOT NULL,
+      last_synced_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS files (
+      id TEXT PRIMARY KEY,
+      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      file_name TEXT NOT NULL,
+      file_type TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      sync_status TEXT DEFAULT 'pending',
+      cloud_url TEXT,
+      cloud_asset_id TEXT,
+      checksum TEXT,
+      bpm INTEGER,
+      key_note TEXT,
+      duration REAL,
+      role TEXT DEFAULT 'unknown',
+      created_at TEXT NOT NULL,
+      modified_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_queue (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL,
+      file_id TEXT,
+      file_name TEXT,
+      type TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      priority INTEGER DEFAULT 5,
+      retries INTEGER DEFAULT 0,
+      max_retries INTEGER DEFAULT 3,
+      error_message TEXT,
+      upload_offset INTEGER DEFAULT 0,
+      upload_url TEXT,
+      created_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT,
+      next_retry_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_log (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      project_id TEXT,
+      file_id TEXT,
+      metadata TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS versions (
+      id TEXT PRIMARY KEY,
+      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      file_path TEXT NOT NULL,
+      file_size INTEGER DEFAULT 0,
+      checksum TEXT,
+      cloud_url TEXT,
+      created_at TEXT NOT NULL
+    );
+  `);
+
   // Schema migrations — safe to run on existing DBs (better-sqlite3 is sync)
   try { db.exec('ALTER TABLE sync_queue ADD COLUMN file_name TEXT'); } catch { /* column already exists */ }
   try { db.exec('ALTER TABLE files ADD COLUMN bpm INTEGER'); } catch { /* column already exists */ }
@@ -158,81 +245,6 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_asset_assoc_source ON asset_associations(source_file_id)'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_asset_assoc_target ON asset_associations(target_file_id)'); } catch {}
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_assoc_queue_status ON association_queue(status)'); } catch {}
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      project_name TEXT NOT NULL,
-      file_path TEXT NOT NULL UNIQUE,
-      daw_type TEXT NOT NULL,
-      file_size INTEGER DEFAULT 0,
-      version_count INTEGER DEFAULT 1,
-      sync_status TEXT DEFAULT 'pending',
-      cloud_id TEXT,
-      cloud_version_id TEXT,
-      created_at TEXT NOT NULL,
-      modified_at TEXT NOT NULL,
-      last_synced_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY,
-      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      file_type TEXT NOT NULL,
-      file_size INTEGER DEFAULT 0,
-      sync_status TEXT DEFAULT 'pending',
-      cloud_url TEXT,
-      cloud_asset_id TEXT,
-      checksum TEXT,
-      bpm INTEGER,
-      key_note TEXT,
-      duration REAL,
-      role TEXT DEFAULT 'unknown',
-      created_at TEXT NOT NULL,
-      modified_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sync_queue (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL,
-      file_id TEXT,
-      file_name TEXT,
-      type TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      priority INTEGER DEFAULT 5,
-      retries INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 3,
-      error_message TEXT,
-      upload_offset INTEGER DEFAULT 0,
-      upload_url TEXT,
-      created_at TEXT NOT NULL,
-      started_at TEXT,
-      completed_at TEXT,
-      next_retry_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS activity_log (
-      id TEXT PRIMARY KEY,
-      type TEXT NOT NULL,
-      message TEXT NOT NULL,
-      project_id TEXT,
-      file_id TEXT,
-      metadata TEXT,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS versions (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-      file_path TEXT NOT NULL,
-      file_size INTEGER DEFAULT 0,
-      checksum TEXT,
-      cloud_url TEXT,
-      created_at TEXT NOT NULL
-    );
-  `);
 
   // Indexes — run after CREATE TABLE so fresh DBs and existing DBs both get them
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_files_path ON files(file_path)'); } catch { /* already exists */ }

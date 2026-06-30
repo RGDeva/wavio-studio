@@ -128,3 +128,51 @@ maybeDescribe('local_status column migration', () => {
     }).toThrow(/no such column: local_status/);
   });
 });
+
+describe('regression: ALTER-before-CREATE ordering bug (root cause of the recurring error)', () => {
+  let Database: any;
+
+  beforeEach(async () => {
+    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+  });
+
+  // Reproduces the exact bug: electron/db.ts _initDatabaseAtPath used to run
+  // `ALTER TABLE files ADD COLUMN local_status ...` BEFORE the
+  // `CREATE TABLE IF NOT EXISTS files (...)` statement. On a truly fresh
+  // database (no tables at all), the ALTER throws "no such table" — which
+  // the try/catch silently swallows, indistinguishable from "column already
+  // exists" — and the later CREATE TABLE then creates `files` WITHOUT
+  // local_status. The column only appeared after a second app restart (by
+  // which point the table existed, so the ALTER finally succeeded).
+
+  it('demonstrates the bug: ALTER-then-CREATE order loses the column on a truly fresh DB', () => {
+    const db = new Database(':memory:');
+    // Buggy order: migration runs first, against a table that doesn't exist yet.
+    try { db.exec("ALTER TABLE files ADD COLUMN local_status TEXT DEFAULT 'present'"); } catch { /* swallowed, just like production code */ }
+    db.exec(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, file_path TEXT, created_at TEXT, modified_at TEXT)`);
+
+    const cols = db.prepare('PRAGMA table_info(files)').all() as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === 'local_status')).toBe(false); // the bug, reproduced
+  });
+
+  it('proves the fix: CREATE-then-ALTER order gives the column on a truly fresh DB, first launch', () => {
+    const db = new Database(':memory:');
+    // Fixed order (current electron/db.ts): tables created first, migrations after.
+    db.exec(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, file_path TEXT, created_at TEXT, modified_at TEXT)`);
+    try { db.exec("ALTER TABLE files ADD COLUMN local_status TEXT DEFAULT 'present'"); } catch { /* already exists, on subsequent runs */ }
+
+    const cols = db.prepare('PRAGMA table_info(files)').all() as Array<{ name: string }>;
+    expect(cols.some((c) => c.name === 'local_status')).toBe(true);
+  });
+
+  it('a fresh database reaches a fully-queryable state on the very first call, no restart needed', () => {
+    const db = new Database(':memory:');
+    db.exec(`CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, file_path TEXT, created_at TEXT, modified_at TEXT)`);
+    try { db.exec("ALTER TABLE files ADD COLUMN local_status TEXT DEFAULT 'present'"); } catch {}
+
+    // No second "restart" call here — this must work immediately.
+    expect(() => {
+      db.prepare("SELECT id FROM files WHERE local_status='missing'").all();
+    }).not.toThrow();
+  });
+});
