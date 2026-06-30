@@ -18,6 +18,7 @@ export default defineConfig({
       'electron/association.test.ts',
       'electron/pending-resync.test.ts',
       'electron/deepLinkValidator.test.ts',
+      'electron/iconAssets.test.ts',
     ],
     environment: 'node',
   },
