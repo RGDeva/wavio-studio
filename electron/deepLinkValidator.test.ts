@@ -33,7 +33,7 @@ describe('environment → protocol scheme / bundle id mapping', () => {
   });
 
   it('maps each channel to its own bundle id', () => {
-    expect(BUNDLE_IDS.production).toBe('stream.wavi.studio');
+    expect(BUNDLE_IDS.production).toBe('com.wavi.studio');
     expect(BUNDLE_IDS.qa).toBe('stream.wavi.studio.qa');
     expect(BUNDLE_IDS.development).toBe('stream.wavi.studio.dev');
   });

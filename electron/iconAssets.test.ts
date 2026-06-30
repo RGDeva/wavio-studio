@@ -26,6 +26,7 @@ describe('official icon assets exist for packaging', () => {
     const pkg = require(join(ROOT, 'package.json'));
     expect(pkg.build.productName).toBe('Wavi Studio');
     expect(pkg.build.appId).not.toMatch(/electron/i);
-    expect(pkg.build.appId).toBe('stream.wavi.studio');
+    // Production retains the already-distributed bundle id — see deepLinkValidator.ts BUNDLE_IDS comment.
+    expect(pkg.build.appId).toBe('com.wavi.studio');
   });
 });

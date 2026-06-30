@@ -12,8 +12,16 @@ export const PROTOCOL_SCHEMES: Record<WaviChannel, string> = {
   development: 'wavi-dev',
 };
 
+// Production retains the bundle id already distributed to real users
+// (com.wavi.studio, v1.1.0 installed at /Applications/Wavi Studio.app with
+// real auth tokens / Keychain entries / wavi:// registration). Changing it
+// would not be an in-place update — macOS treats a new bundle id as a
+// different app: Keychain-backed safeStorage can't decrypt the old token,
+// electron-updater/Squirrel.Mac would install a parallel copy rather than
+// upgrade, and Launch Services would need to re-bind wavi://. QA/dev use the
+// new stream.wavi.studio.* namespace since they have no installed base.
 export const BUNDLE_IDS: Record<WaviChannel, string> = {
-  production: 'stream.wavi.studio',
+  production: 'com.wavi.studio',
   qa: 'stream.wavi.studio.qa',
   development: 'stream.wavi.studio.dev',
 };
