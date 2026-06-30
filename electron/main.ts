@@ -1413,18 +1413,14 @@ ipcMain.handle('restore:start', async (_e, opts: {
     // To maintain zip-slip protection we validate every entry name before extraction.
 
     // First pass: list entries and validate paths using `unzip -l`
+    const tmpZipList = path.join(app.getPath('temp'), `wavi-restore-list-${Date.now()}.zip`);
+    fs.writeFileSync(tmpZipList, zipBuffer);
     const listResult = await new Promise<string>((resolve, reject) => {
-      const tmpZipPath = path.join(app.getPath('temp'), `wavi-restore-${Date.now()}.zip`);
-      fs.writeFileSync(tmpZipPath, zipBuffer);
-
-      execFile('unzip', ['-l', tmpZipPath], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+      execFile('unzip', ['-l', tmpZipList], { maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+        try { fs.unlinkSync(tmpZipList); } catch { /* ignore */ }
         if (err && !stdout) { reject(new Error(stderr || err.message)); return; }
-        // Clean up temp zip after listing
-        try { fs.unlinkSync(tmpZipPath); } catch { /* ignore */ }
         resolve(stdout);
       });
-      // Store tmpZipPath for extraction pass
-      (listResult as any)._tmpZip = path.join(app.getPath('temp'), `wavi-restore-${Date.now()}.zip`);
     });
 
     // Parse entry names from `unzip -l` output (lines like: `   1234  ..  filename`)
