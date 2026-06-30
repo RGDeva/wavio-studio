@@ -375,18 +375,27 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
   const [revokeLoading, setRevokeLoading] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [showPermissions, setShowPermissions] = useState(false);
+  const [allowDownload, setAllowDownload] = useState(true);
+  const [expiry, setExpiry] = useState<'never' | '24h' | '7d' | '30d'>('never');
+
+  function expiryToDate(e: typeof expiry): string | undefined {
+    if (e === 'never') return undefined;
+    const ms = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 }[e];
+    return new Date(Date.now() + ms).toISOString();
+  }
 
   const createShareLink = async () => {
     if (shareLoading) return;
     // If we already have a URL, just copy it again
     if (shareUrl) {
       navigator.clipboard.writeText(shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+      setShowPermissions(false);
       return;
     }
     setShareLoading(true);
     setShareError(null);
     try {
-      // Find the best synced asset for this project (prefer master, then any synced file)
       const files = await api.files.getByProject(project.id);
       const synced = (files as any[]).filter((f: any) => f.sync_status === 'synced' && f.cloud_url);
       const best = synced.find((f: any) => f.role === 'master' || f.role === 'mix')
@@ -399,7 +408,6 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
         return;
       }
 
-      // Use the cloud asset ID stored in cloud_url or id field
       const assetId = best.cloud_asset_id ?? best.cloud_id ?? null;
       if (!assetId) {
         setShareError('Asset not yet registered with Wavi. Sync the project first.');
@@ -407,13 +415,19 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
         return;
       }
 
-      const result = await api.share.createLink({ assetId, projectId: project.id, allowDownload: true });
+      const result = await api.share.createLink({
+        assetId,
+        projectId: project.id,
+        allowDownload,
+        expiresAt: expiryToDate(expiry),
+      });
       if (result.error) {
         setShareError(result.error);
       } else if (result.shareUrl) {
         setShareUrl(result.shareUrl);
         if (result.trackingId) setTrackingId(result.trackingId);
         navigator.clipboard.writeText(result.shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
+        setShowPermissions(false);
       }
     } catch (e: any) {
       setShareError(e?.message ?? 'Failed to create link');
@@ -492,11 +506,12 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
             </button>
             <span>{formatRelativeTime(project.modified_at)}</span>
           </div>
-          {/* Create Link button — visible when project is synced */}
+          {/* Share link controls — visible when project is synced */}
           {project.sync_status === 'synced' && (
             <div className="mt-2 flex flex-col items-end gap-1">
+              {/* Primary action button */}
               <button
-                onClick={createShareLink}
+                onClick={() => shareUrl ? createShareLink() : setShowPermissions(v => !v)}
                 disabled={shareLoading}
                 className="flex items-center gap-1 text-[10px] font-medium text-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
                 title={shareUrl ? 'Copy link' : 'Create Wavi link'}
@@ -511,6 +526,50 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
                 }
                 {shareLoading ? 'Creating…' : copied ? 'Copied!' : shareUrl ? 'Copy link' : 'Create link'}
               </button>
+
+              {/* Permissions panel — shown before creating a new link */}
+              {showPermissions && !shareUrl && (
+                <div className="mt-1 p-2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg flex flex-col gap-2 w-44">
+                  {/* Allow download toggle */}
+                  <label className="flex items-center justify-between cursor-pointer">
+                    <span className="text-[10px] text-white/50">Allow download</span>
+                    <button
+                      type="button"
+                      onClick={() => setAllowDownload(v => !v)}
+                      className={`w-7 h-4 rounded-full transition-colors relative ${allowDownload ? 'bg-cyan-600' : 'bg-white/10'}`}
+                    >
+                      <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${allowDownload ? 'left-3.5' : 'left-0.5'}`} />
+                    </button>
+                  </label>
+
+                  {/* Expiry selector */}
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-white/50">Expires</span>
+                    <div className="grid grid-cols-2 gap-1">
+                      {(['never', '24h', '7d', '30d'] as const).map(opt => (
+                        <button
+                          key={opt}
+                          type="button"
+                          onClick={() => setExpiry(opt)}
+                          className={`text-[9px] py-0.5 rounded transition-colors ${expiry === opt ? 'bg-cyan-600 text-white' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}
+                        >
+                          {opt === 'never' ? 'Never' : opt === '24h' ? '24 hours' : opt === '7d' ? '7 days' : '30 days'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Create button */}
+                  <button
+                    onClick={createShareLink}
+                    disabled={shareLoading}
+                    className="w-full py-1 rounded text-[10px] font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-40"
+                  >
+                    {shareLoading ? 'Creating…' : 'Create link'}
+                  </button>
+                </div>
+              )}
+
               {shareError && <p className="text-[9px] text-red-400 text-right max-w-[160px]">{shareError}</p>}
               {shareUrl && !copied && (
                 <a
