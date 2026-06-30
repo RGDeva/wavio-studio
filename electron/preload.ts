@@ -1,12 +1,18 @@
-import { contextBridge, ipcRenderer, app } from 'electron';
+import { contextBridge, ipcRenderer } from 'electron';
 
 const API_BASE_PRELOAD = (process.env.WAVI_API_BASE_URL ?? 'https://wavi.stream/api').replace(/\/$/, '');
 const IS_DEV_API_PRELOAD = !!process.env.WAVI_API_BASE_URL && API_BASE_PRELOAD !== 'https://wavi.stream/api';
 
 // Same channel-derivation logic as electron/config.ts — kept duplicated here
-// because preload runs in a separate bundle/context from the main process.
+// because preload runs in a separate, sandboxed context from the main process
+// and CANNOT import `app` from 'electron' (it's undefined in the sandbox,
+// which previously crashed preload load entirely — silently breaking the
+// whole renderer bridge, including auth). `process.defaultApp` is a safe
+// Node/Electron global available in preload without importing electron's
+// main-process `app` module: it's `true` only when Electron is launched as
+// `electron .` against source (dev), and `undefined` in any packaged build.
 const CHANNEL_PRELOAD: 'production' | 'qa' | 'development' = (() => {
-  const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+  const isDev = process.env.NODE_ENV === 'development' || !!(process as any).defaultApp;
   if (isDev) return 'development';
   return IS_DEV_API_PRELOAD ? 'qa' : 'production';
 })();

@@ -1,0 +1,36 @@
+{
+  "appId": "stream.wavi.studio.qa",
+  "productName": "Wavi Studio QA",
+  "copyright": "Copyright © 2026 Wavi",
+  "directories": {
+    "output": "release"
+  },
+  "files": [
+    "dist/**/*",
+    "dist-electron/**/*"
+  ],
+  "asarUnpack": [
+    "node_modules/better-sqlite3/**/*",
+    "node_modules/fsevents/**/*"
+  ],
+  "protocols": [
+    {
+      "name": "wavi-qa-protocol",
+      "schemes": ["wavi-qa"]
+    }
+  ],
+  "mac": {
+    "category": "public.app-category.music",
+    "icon": "public/icon.icns",
+    "hardenedRuntime": true,
+    "gatekeeperAssess": true,
+    "entitlements": "build/entitlements.mac.plist",
+    "entitlementsInherit": "build/entitlements.mac.plist",
+    "target": [
+      { "target": "dir", "arch": ["arm64"] }
+    ]
+  },
+  "dmg": {
+    "sign": false
+  }
+}

@@ -80,7 +80,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
     <div className="h-screen bg-black flex flex-col items-center justify-center p-8">
       <div className="w-full max-w-xs">
         <div className="flex items-center gap-3 mb-10 justify-center">
-          <img src="/icon.png" alt="Wavi" className="w-8 h-8 object-contain" />
+          <img src="./icon.png" alt="Wavi" className="w-8 h-8 object-contain" />
           <h1 className="text-2xl font-bold text-white tracking-tight">Wavi Studio</h1>
         </div>
 

@@ -9,7 +9,7 @@
     "build": "vite build && tsc -p tsconfig.electron.json",
     "build:all": "npm run build && electron-builder",
     "build:mac": "npm run build && electron-builder --mac",
-    "build:mac:qa": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c.appId=stream.wavi.studio.qa -c.productName=\"Wavi Studio QA\" -c.protocols[0].name=wavi-qa-protocol -c.protocols[0].schemes[0]=wavi-qa",
+    "build:mac:qa": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c electron-builder.qa.json",
     "build:win": "npm run build && electron-builder --win",
     "build:linux": "npm run build && electron-builder --linux",
     "lint": "eslint . --ext ts,tsx",
