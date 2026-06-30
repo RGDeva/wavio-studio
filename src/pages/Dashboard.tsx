@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2, Link, Copy, Check } from 'lucide-react';
+import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2, Link, Copy, Check, Package, ExternalLink } from 'lucide-react';
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { DawLogo } from '../components/DawLogo';
@@ -378,12 +378,45 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
   const [showPermissions, setShowPermissions] = useState(false);
   const [allowDownload, setAllowDownload] = useState(true);
   const [expiry, setExpiry] = useState<'never' | '24h' | '7d' | '30d'>('never');
+  // Project link state
+  const [projectLinkUrl, setProjectLinkUrl] = useState<string | null>(null);
+  const [projectLinkLoading, setProjectLinkLoading] = useState(false);
+  const [projectLinkCopied, setProjectLinkCopied] = useState(false);
+  const [projectLinkError, setProjectLinkError] = useState<string | null>(null);
 
   function expiryToDate(e: typeof expiry): string | undefined {
     if (e === 'never') return undefined;
     const ms = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 }[e];
     return new Date(Date.now() + ms).toISOString();
   }
+
+  const createProjectLink = async () => {
+    if (!project.cloud_id || projectLinkLoading) return;
+    if (projectLinkUrl) {
+      navigator.clipboard.writeText(projectLinkUrl).then(() => {
+        setProjectLinkCopied(true);
+        setTimeout(() => setProjectLinkCopied(false), 2000);
+      });
+      return;
+    }
+    setProjectLinkLoading(true);
+    setProjectLinkError(null);
+    try {
+      const result = await api.project.createLink({ projectId: project.id, cloudProjectId: project.cloud_id });
+      if ((result as any).error) {
+        setProjectLinkError((result as any).error);
+      } else if ((result as any).linkUrl) {
+        setProjectLinkUrl((result as any).linkUrl);
+        navigator.clipboard.writeText((result as any).linkUrl).then(() => {
+          setProjectLinkCopied(true);
+          setTimeout(() => setProjectLinkCopied(false), 2000);
+        });
+      }
+    } catch (e: any) {
+      setProjectLinkError(e?.message ?? 'Failed to create project link');
+    }
+    setProjectLinkLoading(false);
+  };
 
   const createShareLink = async () => {
     if (shareLoading) return;
@@ -588,6 +621,35 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
                 >
                   {revokeLoading ? 'Revoking…' : 'Revoke'}
                 </button>
+              )}
+
+              {/* Project Link — for sharing the full DAW project (ZIP + Open in Wavi Studio) */}
+              {project.cloud_id && (
+                <div className="mt-1 pt-1 border-t border-white/5">
+                  <button
+                    onClick={createProjectLink}
+                    disabled={projectLinkLoading}
+                    className="flex items-center gap-1 text-[10px] font-medium text-purple-400 hover:text-purple-300 transition-colors disabled:opacity-40"
+                    title={projectLinkUrl ? 'Copy project link' : 'Create project link (ZIP download + Open in DAW)'}
+                  >
+                    {projectLinkLoading
+                      ? <div className="w-2.5 h-2.5 border border-purple-400 border-t-transparent rounded-full animate-spin" />
+                      : projectLinkCopied
+                      ? <Check className="w-2.5 h-2.5 text-green-400" />
+                      : projectLinkUrl
+                      ? <Copy className="w-2.5 h-2.5" />
+                      : <Package className="w-2.5 h-2.5" />
+                    }
+                    {projectLinkLoading ? 'Creating…' : projectLinkCopied ? 'Copied!' : projectLinkUrl ? 'Copy project link' : 'Share project'}
+                  </button>
+                  {projectLinkError && <p className="text-[9px] text-red-400 mt-0.5">{projectLinkError}</p>}
+                  {projectLinkUrl && !projectLinkCopied && (
+                    <a href="#" onClick={(e) => { e.preventDefault(); api.shell.openExternal(projectLinkUrl); }}
+                      className="text-[9px] text-white/20 hover:text-white/40 transition-colors">
+                      Open ↗
+                    </a>
+                  )}
+                </div>
               )}
             </div>
           )}

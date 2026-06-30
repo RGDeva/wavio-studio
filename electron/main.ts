@@ -217,6 +217,11 @@ let appFullyReady = false;
 const processedDeepLinkUrls = new Set<string>(); // replay guard
 
 function queueOrHandleDeepLink(url: string) {
+  // Route project deep links directly — they don't need the auth queue
+  if (url.includes('://open-project/')) {
+    queueOrHandleOpenProject(url);
+    return;
+  }
   authLog('deep-link-received', { appFullyReady });
   if (!appFullyReady) {
     pendingDeepLinkUrl = url;
@@ -1037,6 +1042,92 @@ ipcMain.handle('share:revokeLink', async (_e, opts: { trackingId: string; projec
     return { error: e?.message ?? 'Unknown error' };
   }
 });
+
+// ── Project Links ─────────────────────────────────────────────────────────────
+
+async function desktopApiPost(token: string, action: string, body: Record<string, unknown>) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch(`${API_BASE}/desktop/index`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'X-Desktop-Action': action,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({})) as Record<string, unknown>;
+    if (!res.ok) return { error: data?.error ?? `HTTP ${res.status}` };
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function getDecryptedToken(): string | null {
+  const stored = store.get('authToken', null) as string | null;
+  if (!stored) return null;
+  try {
+    return safeStorage.isEncryptionAvailable()
+      ? safeStorage.decryptString(Buffer.from(stored, 'base64'))
+      : stored;
+  } catch { return null; }
+}
+
+ipcMain.handle('project:createLink', async (_e, opts: {
+  projectId: string;
+  cloudProjectId?: string;
+  projectVersionId?: string;
+  allowDownload?: boolean;
+  expiresAt?: string;
+  collaboratorMode?: 'view' | 'comment' | 'edit';
+}) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+  return desktopApiPost(token, 'create-project-link', {
+    projectId: opts.cloudProjectId ?? opts.projectId,
+    projectVersionId: opts.projectVersionId ?? null,
+    allowDownload: opts.allowDownload ?? true,
+    expiresAt: opts.expiresAt ?? null,
+    collaboratorMode: opts.collaboratorMode ?? 'view',
+  });
+});
+
+ipcMain.handle('project:revokeLink', async (_e, opts: { trackingId: string }) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+  return desktopApiPost(token, 'revoke-project-link', { trackingId: opts.trackingId });
+});
+
+ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: string }) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+  return desktopApiPost(token, 'get-project-files', { projectId: opts.cloudProjectId });
+});
+
+// Open-project deep link: wavi://open-project/:token
+// Queued by the same cold-launch mechanism as the auth callback.
+function queueOrHandleOpenProject(url: string) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== `${PROTOCOL_SCHEME}:`) return;
+    if (parsed.hostname !== 'open-project') return;
+    const token = parsed.pathname.replace(/^\//, '').split('/')[0];
+    if (!token) return;
+    authLog('open-project-deep-link', { token: token.slice(0, 8) + '…' });
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      if (!mainWindow.isVisible()) mainWindow.show();
+      mainWindow.focus();
+      mainWindow.webContents.send('project:open-link', { token });
+    }
+  } catch (e) {
+    mainLog(`[open-project] parse error: ${(e as any)?.message}`);
+  }
+}
 
 // Folders
 ipcMain.handle('folders:getAll', () => {

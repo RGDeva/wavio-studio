@@ -72,6 +72,19 @@ export interface WaviAPI {
     revokeLink: (opts: { trackingId: string; projectId?: string }) =>
       Promise<{ success?: boolean; error?: string }>;
   };
+  project: {
+    createLink: (opts: {
+      projectId: string;
+      cloudProjectId?: string;
+      projectVersionId?: string;
+      allowDownload?: boolean;
+      expiresAt?: string;
+      collaboratorMode?: 'view' | 'comment' | 'edit';
+    }) => Promise<{ linkUrl?: string; trackingId?: string; versionId?: string; error?: string }>;
+    revokeLink: (opts: { trackingId: string }) => Promise<{ success?: boolean; error?: string }>;
+    getCloudFiles: (opts: { cloudProjectId: string }) => Promise<{ assets?: unknown[]; versions?: unknown[]; error?: string }>;
+    onOpenLink: (cb: (data: { token: string }) => void) => void;
+  };
   app: {
     relaunch: () => Promise<void>;
   };
@@ -152,6 +165,7 @@ const _stub: WaviAPI = {
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop, revokeLink: _noop },
+  project: { createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },

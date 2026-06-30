@@ -17,7 +17,7 @@ function readMainProcessArg(flag: string): string | undefined {
 const CHANNEL_PRELOAD = (readMainProcessArg('wavi-channel') as 'production' | 'qa' | 'development' | undefined) ?? 'production';
 const API_BASE_PRELOAD = (readMainProcessArg('wavi-api-base') ?? 'https://wavi.stream/api').replace(/\/$/, '');
 
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress']);
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress', 'project:open-link']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths', 'folderScanMeta']);
 
 contextBridge.exposeInMainWorld('waviAPI', {
@@ -97,6 +97,23 @@ contextBridge.exposeInMainWorld('waviAPI', {
     }) => ipcRenderer.invoke('share:createLink', opts),
     revokeLink: (opts: { trackingId: string; projectId?: string }) =>
       ipcRenderer.invoke('share:revokeLink', opts),
+  },
+
+  // Project Links
+  project: {
+    createLink: (opts: {
+      projectId: string;
+      cloudProjectId?: string;
+      projectVersionId?: string;
+      allowDownload?: boolean;
+      expiresAt?: string;
+      collaboratorMode?: 'view' | 'comment' | 'edit';
+    }) => ipcRenderer.invoke('project:createLink', opts),
+    revokeLink: (opts: { trackingId: string }) => ipcRenderer.invoke('project:revokeLink', opts),
+    getCloudFiles: (opts: { cloudProjectId: string }) => ipcRenderer.invoke('project:getCloudFiles', opts),
+    onOpenLink: (cb: (data: { token: string }) => void) => {
+      ipcRenderer.on('project:open-link', (_e, data) => cb(data));
+    },
   },
 
   // App
