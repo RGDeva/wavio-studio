@@ -22,6 +22,7 @@ export default defineConfig({
       'electron/authLogging.test.ts',
       'electron/localStatusMigration.test.ts',
       'electron/preloadArgvParsing.test.ts',
+      'electron/restore.security.test.ts',
     ],
     environment: 'node',
   },
