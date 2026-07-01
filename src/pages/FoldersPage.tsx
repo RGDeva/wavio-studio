@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { FolderPlus, Trash2, FolderOpen, ExternalLink, Sparkles, Plus, Check, RefreshCw, Clock, FileAudio, ChevronDown, ChevronRight, Ban, Loader2, X } from 'lucide-react';
-import { api } from '../lib/api';
+import { FolderPlus, Trash2, FolderOpen, ExternalLink, Sparkles, Plus, Check, RefreshCw, Clock, FileAudio, ChevronDown, ChevronRight, Ban, Loader2, X, AlertTriangle } from 'lucide-react';
+import { api, FolderClassification } from '../lib/api';
+import { interpretFolderAddResult, confirmationCopy, completeAmbiguousAdd } from '../lib/folderAddFlow';
 import { DawLogo } from '../components/DawLogo';
 
 const DAW_FOLDER_HINTS: Record<string, string> = {
@@ -62,6 +63,9 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
   const [expandedExcludes, setExpandedExcludes] = useState<Set<string>>(new Set());
   const [excludingFolder, setExcludingFolder] = useState<string | null>(null);
   const [progress, setProgress] = useState<DiscoveryProgress | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<FolderClassification | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
   useEffect(() => { mountedRef.current = true; return () => { mountedRef.current = false; }; }, []);
@@ -92,11 +96,35 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
   useEffect(() => { if (visible) refresh(); }, [visible, refresh]);
 
+  // Routes every add result through the full contract: added → refresh,
+  // needs-confirmation → show the dialog, error → visible banner. A folder
+  // must never silently disappear without explanation.
+  const applyAddOutcome = useCallback(async (outcome: ReturnType<typeof interpretFolderAddResult>) => {
+    switch (outcome.kind) {
+      case 'added':
+        setAddError(null);
+        await refresh();
+        break;
+      case 'needs-confirmation':
+        setAddError(null);
+        setPendingConfirmation(outcome.classification);
+        break;
+      case 'error':
+        setAddError(outcome.message);
+        break;
+      case 'cancelled':
+        break; // user closed the native dialog — nothing to do
+    }
+  }, [refresh]);
+
   const handleAdd = async () => {
     setAdding(true);
     try {
-      const result = await api.folders.add();
-      if (result) await refresh();
+      const result = await api.folders.add().catch((e) => {
+        setAddError(`Could not add folder: ${(e as Error)?.message ?? 'unknown error'}`);
+        return null;
+      });
+      if (result !== null) await applyAddOutcome(interpretFolderAddResult(result));
     } finally {
       setAdding(false);
     }
@@ -105,11 +133,31 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
   const handleAddPath = async (folderPath: string) => {
     setAddingPath(folderPath);
     try {
-      await api.folders.addPath(folderPath);
-      await refresh();
+      const result = await api.folders.addPath(folderPath).catch((e) => {
+        setAddError(`Could not add “${folderPath.split('/').pop()}”: ${(e as Error)?.message ?? 'unknown error'}`);
+        return null;
+      });
+      if (result !== null) await applyAddOutcome(interpretFolderAddResult(result));
     } finally {
       setAddingPath(null);
     }
+  };
+
+  const handleConfirmAddAnyway = async () => {
+    if (!pendingConfirmation) return;
+    setConfirming(true);
+    try {
+      const outcome = await completeAmbiguousAdd(api.folders.confirmAmbiguous, pendingConfirmation.path);
+      setPendingConfirmation(null);
+      await applyAddOutcome(outcome);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  const handleCancelConfirmation = () => {
+    // Explicit cancel: no folder is indexed, dialog closes, no state changes.
+    setPendingConfirmation(null);
   };
 
   const handleRemove = async (folder: string) => {
@@ -194,6 +242,57 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
             {adding ? 'Selecting…' : 'Add Folder'}
           </button>
         </div>
+
+        {/* Folder-add error banner */}
+        {addError && (
+          <div className="bg-red-500/5 border border-red-500/20 rounded-xl px-4 py-3 flex items-center gap-3">
+            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
+            <p className="flex-1 text-xs text-red-300/80">{addError}</p>
+            <button
+              onClick={() => setAddError(null)}
+              className="text-white/30 hover:text-white/60 transition-colors flex-shrink-0"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        {/* Ambiguous-folder confirmation dialog */}
+        {pendingConfirmation && (() => {
+          const copy = confirmationCopy(pendingConfirmation);
+          return (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
+              <div className="bg-[#111] border border-amber-500/30 rounded-xl p-5 max-w-md mx-4 space-y-4">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-white/90">{copy.title}</p>
+                    <p className="text-[10px] text-white/25 font-mono truncate mt-0.5">{pendingConfirmation.path}</p>
+                  </div>
+                </div>
+                <p className="text-xs text-white/50 leading-relaxed">{copy.body}</p>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    onClick={handleCancelConfirmation}
+                    disabled={confirming}
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white/60 hover:text-white/90 border border-white/10 hover:border-white/20 transition-colors disabled:opacity-40"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleConfirmAddAnyway}
+                    disabled={confirming}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors disabled:opacity-40"
+                  >
+                    {confirming && <Loader2 className="w-3 h-3 animate-spin" />}
+                    Add Anyway
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Rescan progress bar */}
         {rescanning && (
