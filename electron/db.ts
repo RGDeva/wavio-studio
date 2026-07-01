@@ -594,16 +594,35 @@ export function getAllFiles(limit = 500, offset = 0) {
   `).all(limit, offset);
 }
 
-export function searchFiles(query: string, limit = 100) {
+export function searchFiles(
+  query: string,
+  limit = 100,
+  opts: { afterMs?: number; beforeMs?: number } = {}
+) {
   const like = `%${query}%`;
+  const conditions: string[] = [
+    '(f.file_name LIKE ? OR f.role LIKE ? OR p.project_name LIKE ? OR f.file_path LIKE ?)',
+  ];
+  const bindings: (string | number)[] = [like, like, like, like];
+
+  if (opts.afterMs != null) {
+    conditions.push('f.modified_at >= ?');
+    bindings.push(new Date(opts.afterMs).toISOString());
+  }
+  if (opts.beforeMs != null) {
+    conditions.push('f.modified_at <= ?');
+    bindings.push(new Date(opts.beforeMs).toISOString());
+  }
+
+  bindings.push(limit);
   return db.prepare(`
     SELECT f.*, p.project_name, p.daw_type
     FROM files f
     LEFT JOIN projects p ON f.project_id = p.id
-    WHERE f.file_name LIKE ? OR f.role LIKE ? OR p.project_name LIKE ?
+    WHERE ${conditions.join(' AND ')}
     ORDER BY f.modified_at DESC
     LIMIT ?
-  `).all(like, like, like, limit);
+  `).all(...bindings);
 }
 
 export function getFileStats() {
