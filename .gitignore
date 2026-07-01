@@ -6,3 +6,4 @@ release/
 *.blockmap
 .DS_Store
 dist-electron/
+.vercel

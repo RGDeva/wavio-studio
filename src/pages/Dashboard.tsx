@@ -3,6 +3,7 @@ import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, P
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { DawLogo } from '../components/DawLogo';
+import { ProjectDetail } from '../components/ProjectDetail';
 import { formatBytes, formatRelativeTime, getDawColor, truncatePath } from '../lib/utils';
 import type { Project, SyncQueueItem, SyncProgress } from '../types';
 
@@ -26,6 +27,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [queue, setQueue] = useState<SyncQueueItem[]>([]);
   const [syncStatus, setSyncStatus] = useState('idle');
@@ -339,6 +341,7 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
                   key={project.id}
                   project={project}
                   progress={Object.values(syncProgresses).find(p => p.projectId === project.id)}
+                  onOpenDetail={() => setSelectedProject(project)}
                 />
               ))}
             </div>
@@ -355,11 +358,15 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
           </button>
         )}
       </div>
+
+      {selectedProject && (
+        <ProjectDetail project={selectedProject} onClose={() => setSelectedProject(null)} />
+      )}
     </div>
   );
 }
 
-function ProjectRow({ project, progress }: { project: Project; progress?: SyncProgress }) {
+function ProjectRow({ project, progress, onOpenDetail }: { project: Project; progress?: SyncProgress; onOpenDetail?: () => void }) {
   const dawColor = getDawColor(project.daw_type);
   const pct = progress?.percentage;
   const [expanded, setExpanded] = useState(false);
@@ -512,7 +519,9 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
         <DawLogo daw={project.daw_type} size={34} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-0.5">
-            <span className="text-sm font-semibold text-white truncate">{project.project_name}</span>
+            <button onClick={onOpenDetail} className="text-sm font-semibold text-white truncate hover:text-cyan-300 transition-colors text-left" title="Open project detail">
+              {project.project_name}
+            </button>
           </div>
           <p className="text-xs text-white/25 font-mono truncate">{truncatePath(project.file_path)}</p>
           {pct !== undefined && (
