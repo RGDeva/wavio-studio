@@ -724,6 +724,21 @@ export function getPendingSyncItems(limit = 10) {
   `).all(now, limit);
 }
 
+/**
+ * Bumps every active (pending/retrying) sync_queue row for a project to the
+ * given priority so it's picked up ahead of the rest of the backlog on the
+ * next tick — used by "Sync This Project" so a user's selection doesn't wait
+ * behind thousands of unrelated already-queued files. Touches only rows for
+ * this project_id; never resets status or duplicates rows.
+ */
+export function bumpProjectPriority(projectId: string, priority: number): number {
+  const result = db.prepare(`
+    UPDATE sync_queue SET priority = ?
+    WHERE project_id = ? AND status IN ('pending', 'retrying')
+  `).run(priority, projectId);
+  return result.changes;
+}
+
 export function updateSyncItem(id: string, updates: Record<string, unknown>) {
   const keys = Object.keys(updates);
   const setClause = keys.map((k) => `${k} = ?`).join(', ');
