@@ -7,7 +7,7 @@ import {
   summarizeProjectContext,
   type ToolResult,
 } from './midiTools';
-import { searchFiles, getAllFiles, semanticSearchFiles } from './db';
+import { searchFiles, getAllFiles } from './db';
 import { shell } from 'electron';
 import type { ProjectContext } from './copilotTypes';
 
@@ -120,19 +120,7 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
       const query = (params.query as string) ?? '';
-      const { tokens, dateFilter } = parseSemanticQuery(query);
-      // Fall back to original LIKE search if no useful tokens extracted
-      let rows: any[];
-      if (tokens.length > 0) {
-        rows = semanticSearchFiles(tokens, dateFilter, 20) as any[];
-        // Also try exact LIKE for the full query and merge without duplicates
-        const exact = searchFiles(query, 20) as any[];
-        const seen = new Set(rows.map((r: any) => r.id));
-        exact.forEach((r: any) => { if (!seen.has(r.id)) rows.push(r); });
-      } else {
-        rows = searchFiles(query, 20) as any[];
-      }
-      rows = rows.filter((f: any) => {
+      const rows = (searchFiles(query, 20) as any[]).filter(f => {
         if (params.bpm && Math.abs((f.bpm ?? 0) - (params.bpm as number)) > 3) return false;
         if (params.key && !(f.key_note ?? '').toLowerCase().includes((params.key as string).toLowerCase())) return false;
         return true;
@@ -140,10 +128,18 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
       if (rows.length === 0) {
         return { status: 'done', message: `No local files found matching "${query}". Fields searched: filename, project name, role. Try a different name or run Discover to scan for new files.` };
       }
-      const list = rows.slice(0, 5).map((f: any) =>
-        `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}`
-      ).join('\n');
-      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''}:\n${list}`, data: rows };
+      const qLow = query.toLowerCase();
+      const list = rows.slice(0, 5).map(f => {
+        const matchReasons: string[] = [];
+        if ((f.file_name ?? '').toLowerCase().includes(qLow)) matchReasons.push('name');
+        if ((f.project_name ?? '').toLowerCase().includes(qLow)) matchReasons.push('project');
+        if ((f.role ?? '').toLowerCase().includes(qLow)) matchReasons.push('role');
+        if (params.bpm) matchReasons.push('BPM');
+        if (params.key) matchReasons.push('key');
+        const why = matchReasons.length ? ` [matched: ${matchReasons.join(', ')}]` : '';
+        return `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}${why}`;
+      }).join('\n');
+      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} (fields searched: filename, project, role):\n${list}`, data: rows };
     },
   },
   {
@@ -155,14 +151,7 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
       const query = (params.query as string) ?? '';
-      const { tokens, dateFilter } = parseSemanticQuery(query);
-      let rows: any[];
-      if (tokens.length > 0) {
-        rows = semanticSearchFiles(tokens, dateFilter, 5) as any[];
-        if (!rows.length) rows = searchFiles(query, 5) as any[];
-      } else {
-        rows = searchFiles(query, 5) as any[];
-      }
+      const rows = searchFiles(query, 3) as any[];
       if (!rows.length) {
         return { status: 'error', error: `Could not find "${query}" in your library. Try adding the file via the Library tab first.` };
       }
@@ -171,8 +160,9 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
       try { require('fs').statSync(file.file_path); } catch {
         return { status: 'error', error: `File "${file.file_name}" was moved or deleted. Path: ${file.file_path}` };
       }
+      // Only open files that are actually in the indexed library (already confirmed via DB lookup)
       shell.openPath(file.file_path);
-      return { status: 'done', message: `Opening "${file.file_name}" in your default app.`, filePath: file.file_path };
+      return { status: 'done', message: `Opening "${file.file_name}" in your default app.\n(Matched by: name search for "${query}")`, filePath: file.file_path };
     },
   },
   {
@@ -184,14 +174,7 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
       const query = (params.query as string) ?? '';
-      const { tokens, dateFilter } = parseSemanticQuery(query);
-      let rows: any[];
-      if (tokens.length > 0) {
-        rows = semanticSearchFiles(tokens, dateFilter, 3) as any[];
-        if (!rows.length) rows = searchFiles(query, 3) as any[];
-      } else {
-        rows = searchFiles(query, 3) as any[];
-      }
+      const rows = searchFiles(query, 3) as any[];
       if (!rows.length) {
         return { status: 'error', error: `Could not find "${query}" in your library.` };
       }
@@ -226,74 +209,6 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
 
 export function getToolByName(name: string): RegisteredTool | undefined {
   return TOOL_REGISTRY.find((t) => t.name === name);
-}
-
-// ── Semantic query parser ─────────────────────────────────────────────────────
-
-const STOPWORDS = new Set([
-  'a','an','the','my','your','our','their','his','her','its','this','that','these','those',
-  'is','are','was','were','be','been','being','have','has','had','do','does','did','will',
-  'would','could','should','may','might','shall','can','need','must','ought',
-  'i','me','we','you','he','she','they','them','us',
-  'in','on','at','from','to','of','for','with','by','about','as','into','through','over',
-  'find','open','play','load','show','reveal','search','look','any','get','give','tell',
-  'track','tracks','file','files','song','songs','project','projects','audio','sound',
-  'latest','newest','recent','last','first','old','new','some','all',
-  "rishi's","rishis",'rishi',
-]);
-
-const MONTH_MAP: Record<string, string> = {
-  jan:'01',feb:'02',mar:'03',apr:'04',may:'05',jun:'06',
-  jul:'07',aug:'08',sep:'09',oct:'10',nov:'11',dec:'12',
-  january:'01',february:'02',march:'03',april:'04',june:'06',
-  july:'07',august:'08',september:'09',october:'10',november:'11',december:'12',
-};
-
-/**
- * Parse a natural-language query into search tokens and an optional date filter.
- * Example: "open Rishi's track die this way from June 22"
- *   → tokens: ["die","way"], dateFilter: "2026-06-22" (uses current year)
- */
-export function parseSemanticQuery(raw: string): { tokens: string[]; dateFilter: string | null } {
-  const low = raw.toLowerCase().trim();
-
-  // Extract date: "June 22", "jun 22", "22 june", "june 22 2025", "2025-06-22"
-  let dateFilter: string | null = null;
-  let cleaned = low;
-
-  // ISO date
-  const isoMatch = cleaned.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (isoMatch) {
-    dateFilter = isoMatch[0];
-    cleaned = cleaned.replace(isoMatch[0], ' ');
-  } else {
-    // "Month DD [YYYY]" or "DD Month [YYYY]"
-    const monthPattern = Object.keys(MONTH_MAP).join('|');
-    const mdy = cleaned.match(new RegExp(`\\b(${monthPattern})\\s+(\\d{1,2})(?:\\s+(\\d{4}))?\\b`));
-    const dmy = cleaned.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthPattern})(?:\\s+(\\d{4}))?\\b`));
-    const match = mdy ?? dmy;
-    if (match) {
-      const monthStr = mdy ? match[1] : match[2];
-      const dayStr = mdy ? match[2] : match[1];
-      const yearStr = match[3] ?? String(new Date().getFullYear());
-      const mo = MONTH_MAP[monthStr];
-      if (mo) {
-        dateFilter = `${yearStr}-${mo}-${dayStr.padStart(2, '0')}`;
-        cleaned = cleaned.replace(match[0], ' ');
-      }
-    }
-  }
-
-  // Strip "from <date phrase>" leftovers like "from june" already consumed above
-  cleaned = cleaned.replace(/\bfrom\b/g, ' ');
-
-  // Tokenize: split on non-alpha, remove stopwords and short tokens
-  const tokens = cleaned
-    .split(/[^a-z0-9_]+/)
-    .map(t => t.trim())
-    .filter(t => t.length >= 3 && !STOPWORDS.has(t));
-
-  return { tokens, dateFilter };
 }
 
 // ── LLM Agent Loop ────────────────────────────────────────────────────────────
@@ -375,7 +290,7 @@ async function tryLocalIntent(
   const last = messages.filter(m => m.role === 'user').pop()?.content ?? '';
   const low = last.toLowerCase();
 
-  // "open / play / load [description]"
+  // "open [track name]" or "play [track name]"
   const openMatch = low.match(/^(?:open|play|load)\s+(.+)/);
   if (openMatch) {
     const query = openMatch[1].trim();
@@ -384,8 +299,8 @@ async function tryLocalIntent(
     return result.message ?? result.error ?? null;
   }
 
-  // "show me / reveal / find in folder [description]"
-  const revealMatch = low.match(/^(?:show|reveal|find in folder|show me)\s+(.+)/);
+  // "show me / reveal / find in folder [track name]"
+  const revealMatch = low.match(/^(?:show|reveal|find in folder|show me|find)\s+(.+)/);
   if (revealMatch) {
     const query = revealMatch[1].trim();
     const tool = getToolByName('reveal_local_file')!;
@@ -400,35 +315,13 @@ async function tryLocalIntent(
     return result.message ?? null;
   }
 
-  // "find tracks" / "search for" / "do i have" / "any tracks with"
+  // "find tracks" / "search for" / "any tracks with"
   const findMatch = low.match(/(?:find|search for|do i have|any tracks?|look for)\s+(.+)/);
   if (findMatch) {
     const query = findMatch[1].trim();
     const tool = getToolByName('search_local_files')!;
     const result = await tool.handler({ query }, context);
     return result.message ?? null;
-  }
-
-  // Natural: "[name] from [date]" — no explicit verb but contains a date hint
-  const { tokens, dateFilter } = parseSemanticQuery(low);
-  if (dateFilter && tokens.length > 0) {
-    const rows = semanticSearchFiles(tokens, dateFilter, 5) as any[];
-    if (rows.length > 0) {
-      const file = rows[0] as any;
-      // If user seems to want to open it
-      if (low.includes('open') || low.includes('play') || low.includes('load')) {
-        try { require('fs').statSync(file.file_path); } catch {
-          return `File "${file.file_name}" was moved or deleted.`;
-        }
-        shell.openPath(file.file_path);
-        return `Opening "${file.file_name}"${file.modified_at ? ` (${new Date(file.modified_at).toLocaleDateString()})` : ''}.`;
-      }
-      // Otherwise list
-      const list = rows.slice(0, 5).map((f: any) =>
-        `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}`
-      ).join('\n');
-      return `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} matching your query:\n${list}`;
-    }
   }
 
   return null;

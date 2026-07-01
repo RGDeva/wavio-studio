@@ -16,15 +16,15 @@ interface DiscoveryProgress {
 
 const PROMPTS = [
   'What have I been working on recently?',
-  'Open die this way from June 22',
-  'Find all my stems from last week',
   'Open my latest mix',
+  'Find all my stems from last week',
+  'What BPM is my project?',
   'Pre-release checklist for this project',
   'Generate a trap chord progression in Am',
 ];
 
 // Human-readable search capability disclaimer shown in empty state
-const SEARCH_NOTE = 'Natural language search — say "open die this way from June 22" to find and open the file.';
+const SEARCH_NOTE = 'Searches filename, project name, role, BPM, and key — not audio content.';
 
 export function CopilotPage({ visible }: { visible?: boolean }) {
   const [messages, setMessages] = useState<Msg[]>([]);
