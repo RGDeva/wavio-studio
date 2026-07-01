@@ -440,6 +440,13 @@ app.whenReady().then(async () => {
   // Step 4 (cont): Start services — all folder scanning deferred below
   const storedMaxConcurrent = store.get('maxConcurrent', 2) as number;
   syncAgent.setMaxConcurrent(storedMaxConcurrent);
+  // D2: restore a persisted user pause BEFORE start() so no upload slips
+  // through between startup and the pause taking effect. Applies only the
+  // user pause — auth/limit pauses are re-derived from live state.
+  if (store.get('syncPausedByUser', false)) {
+    syncAgent.pauseUser();
+    mainLog('[sync] restored user pause from settings');
+  }
   syncAgent.start();
   initCopilot(store);
   registerAbletonHandlers();
@@ -2035,8 +2042,21 @@ ipcMain.handle('sync:getQueue', () => syncAgent?.getQueue() ?? []);
 ipcMain.handle('sync:retryAll', () => syncAgent?.retryFailed());
 ipcMain.handle('sync:getStatus', () => syncAgent?.getStatus() ?? 'idle');
 ipcMain.handle('sync:now', () => { syncAgent?.retryFailed(); syncAgent?.tick?.(); });
-ipcMain.handle('sync:pause', () => { syncAgent?.pauseUser(); return syncAgent?.getStatus() ?? 'idle'; });
-ipcMain.handle('sync:resume', () => { syncAgent?.resumeUser(); return syncAgent?.getStatus() ?? 'idle'; });
+// User pause is persisted so it survives app restart (D2). The store lives in
+// this instance's userData directory, so the setting is naturally scoped per
+// channel/user-data dir (production vs QA vs WAVI_USER_DATA_DIR overrides).
+// Only the *user* pause is persisted — auth/limit pauses are derived from
+// live server/token state on every launch and must never be persisted.
+ipcMain.handle('sync:pause', () => {
+  syncAgent?.pauseUser();
+  store.set('syncPausedByUser', true);
+  return syncAgent?.getStatus() ?? 'idle';
+});
+ipcMain.handle('sync:resume', () => {
+  syncAgent?.resumeUser();
+  store.set('syncPausedByUser', false);
+  return syncAgent?.getStatus() ?? 'idle';
+});
 ipcMain.handle('sync:isPausedByUser', () => syncAgent?.isPausedByUser() ?? false);
 ipcMain.handle('sync:prioritizeProject', (_e, projectId: string) => syncAgent?.prioritizeProject(projectId) ?? 0);
 ipcMain.handle('sync:cancelItem', (_e, itemId: string) => syncAgent?.cancelItem(itemId) ?? false);

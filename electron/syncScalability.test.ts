@@ -491,6 +491,91 @@ describe('SyncAgent scheduler mirror — pause and resume', () => {
   });
 });
 
+describe('Persistent pause (D2) — mirrors main.ts store wiring', () => {
+  // Fake electron-store scoped to one "user-data dir" (one Map per store,
+  // like one store file per userData directory).
+  function makeStore() {
+    const m = new Map<string, unknown>();
+    return {
+      get: (k: string, d: unknown) => (m.has(k) ? m.get(k) : d),
+      set: (k: string, v: unknown) => void m.set(k, v),
+    };
+  }
+  // Mirrors main.ts: sync:pause / sync:resume handlers persist, startup restores.
+  function pauseViaIpc(sched: MirrorScheduler, store: ReturnType<typeof makeStore>) {
+    sched.pauseUser();
+    store.set('syncPausedByUser', true);
+  }
+  function resumeViaIpc(sched: MirrorScheduler, store: ReturnType<typeof makeStore>) {
+    sched.resumeUser();
+    store.set('syncPausedByUser', false);
+  }
+  function startupRestore(store: ReturnType<typeof makeStore>): MirrorScheduler {
+    const sched = new MirrorScheduler();
+    if (store.get('syncPausedByUser', false)) sched.pauseUser(); // before start()
+    return sched;
+  }
+
+  it('pause → restart → still paused', () => {
+    const store = makeStore();
+    const first = startupRestore(store);
+    pauseViaIpc(first, store);
+    expect(first.isPausedByUser()).toBe(true);
+
+    const second = startupRestore(store); // app relaunch
+    expect(second.isPausedByUser()).toBe(true);
+
+    // and no work starts on the relaunched instance
+    let started = false;
+    second.queue.push({ id: 'x', run: () => { started = true; return Promise.resolve(); } });
+    second.tick();
+    expect(started).toBe(false);
+  });
+
+  it('resume → restart → still resumed', () => {
+    const store = makeStore();
+    const first = startupRestore(store);
+    pauseViaIpc(first, store);
+    resumeViaIpc(first, store);
+
+    const second = startupRestore(store);
+    expect(second.isPausedByUser()).toBe(false);
+  });
+
+  it('auth block + persisted user resume: resume clears only the user layer, auth still blocks', () => {
+    const store = makeStore();
+    const sched = startupRestore(store);
+    pauseViaIpc(sched, store);
+    sched.pausedReason = 'auth'; // token revoked while user-paused? auth wins as the live reason
+    resumeViaIpc(sched, store);
+    expect(sched.pausedReason).toBe('auth'); // still blocked
+    expect(store.get('syncPausedByUser', true)).toBe(false); // but the persisted user intent is cleared
+    // relaunch: auth state is re-derived live, user pause not restored
+    const relaunched = startupRestore(store);
+    expect(relaunched.isPausedByUser()).toBe(false);
+  });
+
+  it('plan-limit block + user resume: resume cannot bypass the limit pause', () => {
+    const store = makeStore();
+    const sched = startupRestore(store);
+    sched.pausedReason = 'limit';
+    resumeViaIpc(sched, store);
+    expect(sched.pausedReason).toBe('limit');
+    let started = false;
+    sched.queue.push({ id: 'x', run: () => { started = true; return Promise.resolve(); } });
+    sched.tick();
+    expect(started).toBe(false);
+  });
+
+  it('system pauses are never persisted — only the user pause key exists in the store', () => {
+    const store = makeStore();
+    const sched = startupRestore(store);
+    sched.pausedReason = 'auth'; // system pause happens; nothing writes the store
+    const relaunched = startupRestore(store);
+    expect(relaunched.pausedReason).toBe(null); // auth must be re-derived, not restored
+  });
+});
+
 describe('SyncAgent scheduler mirror — cancellation', () => {
   it('cancelItem aborts the tracked controller for an in-flight item', async () => {
     const sched = new MirrorScheduler();

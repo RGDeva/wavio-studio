@@ -28,9 +28,16 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
   const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
   const [dawPaths, setDawPaths] = useState<Record<string, string>>({});
   const [syncPaused, setSyncPaused] = useState(false);
+  const [systemPause, setSystemPause] = useState<'auth' | 'limit' | null>(null);
 
   useEffect(() => {
     api.sync.isPausedByUser().then(setSyncPaused);
+    // Distinguish a user pause from system pauses so the UI can explain
+    // accurately why nothing is uploading — Resume cannot clear auth/limit.
+    api.sync.getStatus().then((s) => {
+      if (s === 'paused:auth') setSystemPause('auth');
+      else if (s === 'paused:limit') setSystemPause('limit');
+    });
   }, []);
 
   useEffect(() => {
@@ -121,10 +128,14 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
             </select>
           </SettingRow>
           <SettingRow
-            label={syncPaused ? 'Sync paused' : 'Sync running'}
-            description={syncPaused
-              ? 'No files are uploading. Resume to continue the queue.'
-              : 'Pause to stop all uploads until you resume.'}
+            label={systemPause ? 'Sync blocked' : syncPaused ? 'Sync paused' : 'Sync running'}
+            description={systemPause === 'auth'
+              ? 'Sync is blocked because your session expired. Sign in again to continue — Resume alone won\'t restart uploads.'
+              : systemPause === 'limit'
+              ? 'Sync is blocked because your plan storage limit was reached. Free up space or upgrade — Resume alone won\'t restart uploads.'
+              : syncPaused
+              ? 'You paused sync. Nothing uploads until you resume — this persists across app restarts. In-flight uploads finish first.'
+              : 'Pause to stop all uploads until you resume. The pause persists across app restarts.'}
           >
             <button
               onClick={async () => {
