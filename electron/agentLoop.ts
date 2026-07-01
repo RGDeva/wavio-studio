@@ -8,82 +8,6 @@ import {
   type ToolResult,
 } from './midiTools';
 import { searchFiles, getAllFiles } from './db';
-
-// ── Date parser ───────────────────────────────────────────────────────────────
-
-/**
- * Extracts a date range from natural language like "from June 22", "last week",
- * "yesterday", "in July". Returns { afterMs, beforeMs, cleanQuery } where
- * cleanQuery has the date phrase stripped so the remainder is used for text search.
- */
-function parseDateFromQuery(raw: string): { afterMs?: number; beforeMs?: number; cleanQuery: string } {
-  const now = new Date();
-  const y = now.getFullYear();
-  let afterMs: number | undefined;
-  let beforeMs: number | undefined;
-  let cleanQuery = raw;
-
-  // "last week"
-  if (/\blast week\b/i.test(raw)) {
-    const d = new Date(now); d.setDate(d.getDate() - 7);
-    afterMs = d.getTime();
-    cleanQuery = raw.replace(/\blast week\b/i, '').trim();
-    return { afterMs, beforeMs, cleanQuery };
-  }
-  // "yesterday"
-  if (/\byesterday\b/i.test(raw)) {
-    const d = new Date(now); d.setDate(d.getDate() - 1);
-    d.setHours(0, 0, 0, 0);
-    afterMs = d.getTime();
-    beforeMs = d.getTime() + 86_400_000;
-    cleanQuery = raw.replace(/\byesterday\b/i, '').trim();
-    return { afterMs, beforeMs, cleanQuery };
-  }
-  // "today"
-  if (/\btoday\b/i.test(raw)) {
-    const d = new Date(now); d.setHours(0, 0, 0, 0);
-    afterMs = d.getTime();
-    cleanQuery = raw.replace(/\btoday\b/i, '').trim();
-    return { afterMs, beforeMs, cleanQuery };
-  }
-  // "from June 22" or "on June 22" or "June 22nd" (month + day)
-  const monthDayRe = /\b(?:from|on|in)?\s*(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(\d{1,2})(?:st|nd|rd|th)?\b/i;
-  const mdMatch = raw.match(monthDayRe);
-  if (mdMatch) {
-    const monthStr = mdMatch[1];
-    const day = parseInt(mdMatch[2], 10);
-    const monthIdx = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
-      .findIndex(m => monthStr.toLowerCase().startsWith(m));
-    if (monthIdx >= 0) {
-      const candidate = new Date(y, monthIdx, day);
-      // If candidate is in the future, use previous year
-      if (candidate.getTime() > now.getTime()) candidate.setFullYear(y - 1);
-      candidate.setHours(0, 0, 0, 0);
-      afterMs = candidate.getTime();
-      beforeMs = candidate.getTime() + 86_400_000 * 7; // within a week of that date
-      cleanQuery = raw.replace(monthDayRe, '').replace(/\s+/g, ' ').trim();
-      return { afterMs, beforeMs, cleanQuery };
-    }
-  }
-  // "in June" (just month)
-  const monthOnlyRe = /\b(?:in\s+)?(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/i;
-  const moMatch = raw.match(monthOnlyRe);
-  if (moMatch) {
-    const monthIdx = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec']
-      .findIndex(m => moMatch[1].toLowerCase().startsWith(m));
-    if (monthIdx >= 0) {
-      const start = new Date(y, monthIdx, 1); start.setHours(0, 0, 0, 0);
-      if (start.getTime() > now.getTime()) start.setFullYear(y - 1);
-      const end = new Date(start.getFullYear(), monthIdx + 1, 1);
-      afterMs = start.getTime();
-      beforeMs = end.getTime();
-      cleanQuery = raw.replace(monthOnlyRe, '').replace(/\s+/g, ' ').trim();
-      return { afterMs, beforeMs, cleanQuery };
-    }
-  }
-
-  return { cleanQuery };
-}
 import { shell } from 'electron';
 import type { ProjectContext } from './copilotTypes';
 
@@ -195,32 +119,27 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     },
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
-      const rawQuery = (params.query as string) ?? '';
-      const { afterMs, beforeMs, cleanQuery } = parseDateFromQuery(rawQuery);
-      const textQuery = cleanQuery || rawQuery;
-      const rows = (searchFiles(textQuery, 20, { afterMs, beforeMs }) as any[]).filter(f => {
+      const query = (params.query as string) ?? '';
+      const rows = (searchFiles(query, 20) as any[]).filter(f => {
         if (params.bpm && Math.abs((f.bpm ?? 0) - (params.bpm as number)) > 3) return false;
         if (params.key && !(f.key_note ?? '').toLowerCase().includes((params.key as string).toLowerCase())) return false;
         return true;
       });
       if (rows.length === 0) {
-        const dateHint = afterMs ? ` around ${new Date(afterMs).toLocaleDateString()}` : '';
-        return { status: 'done', message: `No local files found matching "${textQuery}"${dateHint}. Fields searched: filename, path, project name, role. Try a different name or run Discover to scan for new files.` };
+        return { status: 'done', message: `No local files found matching "${query}". Fields searched: filename, project name, role. Try a different name or run Discover to scan for new files.` };
       }
-      const qLow = textQuery.toLowerCase();
+      const qLow = query.toLowerCase();
       const list = rows.slice(0, 5).map(f => {
         const matchReasons: string[] = [];
         if ((f.file_name ?? '').toLowerCase().includes(qLow)) matchReasons.push('name');
-        if ((f.file_path ?? '').toLowerCase().includes(qLow)) matchReasons.push('path');
         if ((f.project_name ?? '').toLowerCase().includes(qLow)) matchReasons.push('project');
         if ((f.role ?? '').toLowerCase().includes(qLow)) matchReasons.push('role');
-        if (afterMs) matchReasons.push('date');
         if (params.bpm) matchReasons.push('BPM');
         if (params.key) matchReasons.push('key');
         const why = matchReasons.length ? ` [matched: ${matchReasons.join(', ')}]` : '';
         return `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}${why}`;
       }).join('\n');
-      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} (searched: filename, path, project, role):\n${list}`, data: rows };
+      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} (fields searched: filename, project, role):\n${list}`, data: rows };
     },
   },
   {
@@ -231,19 +150,19 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
     },
     confirmationRequired: false,
     handler: async (params, _ctx): Promise<ToolResult> => {
-      const rawQuery = (params.query as string) ?? '';
-      const { afterMs, beforeMs, cleanQuery } = parseDateFromQuery(rawQuery);
-      const textQuery = cleanQuery || rawQuery;
-      const rows = searchFiles(textQuery, 5, { afterMs, beforeMs }) as any[];
+      const query = (params.query as string) ?? '';
+      const rows = searchFiles(query, 3) as any[];
       if (!rows.length) {
-        return { status: 'error', error: `Could not find "${rawQuery}" in your library. Try adding the file via the Library tab first, or run Discover.` };
+        return { status: 'error', error: `Could not find "${query}" in your library. Try adding the file via the Library tab first.` };
       }
       const file = rows[0];
+      // Validate file still exists on disk
       try { require('fs').statSync(file.file_path); } catch {
         return { status: 'error', error: `File "${file.file_name}" was moved or deleted. Path: ${file.file_path}` };
       }
+      // Only open files that are actually in the indexed library (already confirmed via DB lookup)
       shell.openPath(file.file_path);
-      return { status: 'done', message: `Opening "${file.file_name}" in your default app.\n(Matched: "${rawQuery}")`, filePath: file.file_path };
+      return { status: 'done', message: `Opening "${file.file_name}" in your default app.\n(Matched by: name search for "${query}")`, filePath: file.file_path };
     },
   },
   {
@@ -387,14 +306,6 @@ async function tryLocalIntent(
     const tool = getToolByName('reveal_local_file')!;
     const result = await tool.handler({ query }, context);
     return result.message ?? result.error ?? null;
-  }
-
-  // natural-language date query — "tracks from June 22" etc.
-  const dateQuery = parseDateFromQuery(last);
-  if (dateQuery.afterMs || dateQuery.beforeMs) {
-    const tool = getToolByName('search_local_files')!;
-    const result = await tool.handler({ query: last }, context);
-    return result.message ?? null;
   }
 
   // "what have i been working on" / "recent tracks"
