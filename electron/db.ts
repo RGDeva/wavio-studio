@@ -606,6 +606,61 @@ export function searchFiles(query: string, limit = 100) {
   `).all(like, like, like, limit);
 }
 
+/**
+ * Multi-token semantic search: splits query into tokens, scores rows by how
+ * many tokens they match across file_name, project_name, role, and key_note.
+ * Supports optional date filter (YYYY-MM-DD prefix string for modified_at).
+ */
+export function semanticSearchFiles(
+  tokens: string[],
+  dateFilter: string | null,
+  limit = 20
+): Array<Record<string, unknown>> {
+  if (tokens.length === 0) return [];
+
+  // Build WHERE clauses for each token
+  const conditions = tokens.map(() =>
+    `(f.file_name LIKE ? OR p.project_name LIKE ? OR f.role LIKE ? OR f.key_note LIKE ?)`
+  ).join(' OR ');
+
+  const params: string[] = tokens.flatMap(t => {
+    const like = `%${t}%`;
+    return [like, like, like, like];
+  });
+
+  let sql = `
+    SELECT f.*, p.project_name, p.daw_type
+    FROM files f
+    LEFT JOIN projects p ON f.project_id = p.id
+    WHERE (${conditions})
+  `;
+
+  if (dateFilter) {
+    sql += ` AND f.modified_at LIKE ?`;
+    params.push(`${dateFilter}%`);
+  }
+
+  sql += ` ORDER BY f.modified_at DESC LIMIT ?`;
+  params.push(String(limit));
+
+  const rows = db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+
+  // Score rows: more token matches = higher score, appear first
+  const scored = rows.map(row => {
+    const haystack = [
+      String(row.file_name ?? ''),
+      String(row.project_name ?? ''),
+      String(row.role ?? ''),
+      String(row.key_note ?? ''),
+    ].join(' ').toLowerCase();
+    const score = tokens.filter(t => haystack.includes(t.toLowerCase())).length;
+    return { row, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.map(s => s.row);
+}
+
 export function getFileStats() {
   const total = db.prepare('SELECT COUNT(*) as count FROM files').get() as { count: number };
   const byType = db.prepare('SELECT file_type, COUNT(*) as count FROM files GROUP BY file_type ORDER BY count DESC').all();
