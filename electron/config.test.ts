@@ -56,4 +56,24 @@ describe('WEB_BASE — single source of truth for generated link base URLs', () 
     expect(WEB_BASE).not.toMatch(/wavio-git-/);
     expect(WEB_BASE).toBe('https://wavi.stream');
   });
+
+  it('when QA defaults are baked in, WEB_BASE and API_BASE target the SAME deployment', async () => {
+    // Simulates the QA app boot where electron-builder.qa.json bakes
+    // waviQaDefaults.apiBase and waviQaDefaults.publicUrl into package.json.
+    // The critical invariant: every generated URL (Project Link, preview, archive,
+    // resolver) must share the same origin so there is no stale-alias mismatch.
+    const qaApiBase = 'https://wavio-3ex7vi5zq-rgdevas-projects.vercel.app/api';
+    const qaPublicUrl = 'https://wavio-3ex7vi5zq-rgdevas-projects.vercel.app';
+    const { WEB_BASE, API_BASE } = await loadConfig({
+      WAVI_PUBLIC_URL: qaPublicUrl,
+      WAVI_API_BASE_URL: qaApiBase,
+    });
+    expect(WEB_BASE).toBe(qaPublicUrl);
+    expect(API_BASE).toBe(qaApiBase);
+    // The web base must be a strict prefix of API_BASE to avoid cross-deployment URLs
+    expect(API_BASE.startsWith(WEB_BASE)).toBe(true);
+    // Neither must reference the old stale deployment alias
+    expect(WEB_BASE).not.toContain('wavio-pe463fc1i');
+    expect(API_BASE).not.toContain('wavio-pe463fc1i');
+  });
 });
