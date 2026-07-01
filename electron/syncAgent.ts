@@ -14,6 +14,7 @@ import {
   getDb,
   repairStalledQueue,
   updateProjectAssetId,
+  bumpProjectPriority,
 } from './db';
 import { fileChecksum } from './watcher';
 import crypto from 'crypto';
@@ -30,18 +31,27 @@ function formatSyncError(err: any): string {
   return msg;
 }
 
-const POLL_INTERVAL_MS = 5000;
-const MAX_CONCURRENT = 2;
+const POLL_INTERVAL_MS = 5000; // periodic safety-net only — primary refill is immediate-on-completion, see _tick()
+const DEFAULT_MAX_CONCURRENT = 2;
+const MIN_CONCURRENT = 1;
+const MAX_ALLOWED_CONCURRENT = 8; // hard ceiling so a bad Settings value can't spawn unbounded work
 const RETRY_DELAYS_MS = [5_000, 30_000, 120_000, 300_000]; // 5s, 30s, 2m, 5m
 const FETCH_TIMEOUT_MS = 60000; // 60s for Vercel Hobby cold-starts
 const UPLOAD_TIMEOUT_MS = 300000; // 5 minute timeout for file uploads
+const HIGH_PRIORITY = 10; // used by prioritizeProject() to jump the queue ahead of default priority 5/3
 
-// Fetch with timeout to prevent hanging
-async function fetchWithTimeout(url: string, options: RequestInit & { timeout?: number } = {}): Promise<Response> {
-  const { timeout = FETCH_TIMEOUT_MS, ...fetchOptions } = options;
+// Fetch with timeout to prevent hanging. Accepts an optional external signal
+// (from cancelItem()) that aborts the request independent of the timeout.
+async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeout?: number; externalSignal?: AbortSignal } = {},
+): Promise<Response> {
+  const { timeout = FETCH_TIMEOUT_MS, externalSignal, ...fetchOptions } = options;
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeout);
-  
+  const onExternalAbort = () => controller.abort();
+  externalSignal?.addEventListener('abort', onExternalAbort);
+
   try {
     const response = await fetch(url, {
       ...fetchOptions,
@@ -49,12 +59,16 @@ async function fetchWithTimeout(url: string, options: RequestInit & { timeout?: 
     });
     return response;
   } catch (error: any) {
+    if (externalSignal?.aborted) {
+      throw new Error('Upload cancelled');
+    }
     if (error.name === 'AbortError') {
       throw new Error(`Request timeout after ${timeout}ms: ${url}`);
     }
     throw error;
   } finally {
     clearTimeout(id);
+    externalSignal?.removeEventListener('abort', onExternalAbort);
   }
 }
 
@@ -78,9 +92,13 @@ export class SyncAgent {
   private onProgress: (progress: SyncProgress) => void;
   private authToken: string | null = null;
   private running = false;
-  private pausedReason: 'auth' | 'limit' | null = null; // null = not paused
+  // null = not paused. 'user' = explicit Pause Sync button (resumable any time).
+  // 'auth'/'limit' = system-triggered pauses that need re-auth/upgrade to clear.
+  private pausedReason: 'auth' | 'limit' | 'user' | null = null;
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private activeUploads = new Set<string>();
+  private activeControllers = new Map<string, AbortController>();
+  private maxConcurrent = DEFAULT_MAX_CONCURRENT;
 
   constructor(db: Database.Database, onProgress: (progress: SyncProgress) => void) {
     this.db = db;
@@ -89,7 +107,18 @@ export class SyncAgent {
 
   setAuthToken(token: string | null) {
     this.authToken = token;
-    if (token) this.pausedReason = null; // resume on new token
+    if (token && this.pausedReason === 'auth') this.pausedReason = null; // resume on new token
+  }
+
+  /** Bounded by [MIN_CONCURRENT, MAX_ALLOWED_CONCURRENT] regardless of caller input. */
+  setMaxConcurrent(n: number) {
+    const floored = Number.isFinite(n) ? Math.floor(n) : DEFAULT_MAX_CONCURRENT;
+    this.maxConcurrent = Math.max(MIN_CONCURRENT, Math.min(MAX_ALLOWED_CONCURRENT, floored));
+    this._tick(); // new slots may have opened up immediately
+  }
+
+  getMaxConcurrent() {
+    return this.maxConcurrent;
   }
 
   start() {
@@ -98,6 +127,9 @@ export class SyncAgent {
     // Crash recovery: reset zombie 'uploading' rows and collapse duplicates
     const r = repairStalledQueue();
     console.log(`[sync] startup repair: recovered=${r.recovered} deduped=${r.deduped}`);
+    // Periodic safety-net tick — catches newly-enqueued items between
+    // completion events (e.g. from a file-watcher change) and covers the
+    // case where a slot never gets an immediate refill signal.
     this.pollTimer = setInterval(() => this._tick(), POLL_INTERVAL_MS);
     this._tick();
   }
@@ -115,6 +147,45 @@ export class SyncAgent {
     }
   }
 
+  /** User-initiated pause — distinct from the system 'auth'/'limit' pauses so
+   *  resume() doesn't accidentally clear a real auth/plan-limit block. */
+  pauseUser() {
+    if (this.pausedReason === null) this.pausedReason = 'user';
+  }
+
+  /** Resumes only a user-initiated pause. No-op if paused for auth/limit —
+   *  those require setAuthToken()/plan upgrade respectively to clear. */
+  resumeUser() {
+    if (this.pausedReason === 'user') {
+      this.pausedReason = null;
+      this._tick();
+    }
+  }
+
+  isPausedByUser(): boolean {
+    return this.pausedReason === 'user';
+  }
+
+  /** Bumps every active (pending/retrying) queue row for a project to
+   *  HIGH_PRIORITY so it's picked up ahead of the rest of the backlog on
+   *  the very next tick, without touching any other project's rows or
+   *  resetting/duplicating anything. */
+  prioritizeProject(projectId: string) {
+    const changed = bumpProjectPriority(projectId, HIGH_PRIORITY);
+    this._tick();
+    return changed;
+  }
+
+  /** Cancels an in-flight upload (no-op if the item isn't currently active).
+   *  The aborted fetch surfaces as a rejected promise which processItem()
+   *  turns into an explicit 'cancelled' terminal status — not a retry. */
+  cancelItem(itemId: string): boolean {
+    const controller = this.activeControllers.get(itemId);
+    if (!controller) return false;
+    controller.abort();
+    return true;
+  }
+
   getQueue() {
     return getSyncQueue();
   }
@@ -122,6 +193,7 @@ export class SyncAgent {
   getStatus(): string {
     if (this.pausedReason === 'auth') return 'paused:auth';
     if (this.pausedReason === 'limit') return 'paused:limit';
+    if (this.pausedReason === 'user') return 'paused:user';
     const active = this.activeUploads.size;
     return active > 0 ? `uploading (${active} active)` : 'idle';
   }
@@ -137,21 +209,29 @@ export class SyncAgent {
   private async _tick() {
     if (!this.authToken) return;
     if (this.pausedReason !== null) return;
-    if (this.activeUploads.size >= MAX_CONCURRENT) return;
+    if (this.activeUploads.size >= this.maxConcurrent) return;
 
-    const slots = MAX_CONCURRENT - this.activeUploads.size;
+    const slots = this.maxConcurrent - this.activeUploads.size;
     const items = getPendingSyncItems(slots);
 
     for (const item of items as any[]) {
       if (this.activeUploads.has(item.id)) continue;
       this.activeUploads.add(item.id);
-      this.processItem(item).finally(() => {
+      const controller = new AbortController();
+      this.activeControllers.set(item.id, controller);
+      this.processItem(item, controller.signal).finally(() => {
         this.activeUploads.delete(item.id);
+        this.activeControllers.delete(item.id);
+        // Immediate refill: don't wait for the next POLL_INTERVAL_MS tick.
+        // This is the core throughput fix — previously a freed slot sat idle
+        // for up to POLL_INTERVAL_MS, capping max throughput at
+        // maxConcurrent / POLL_INTERVAL_MS regardless of real upload speed.
+        if (this.running) this._tick();
       });
     }
   }
 
-  private async processItem(item: any) {
+  private async processItem(item: any, signal: AbortSignal) {
     updateSyncItem(item.id, {
       status: 'uploading',
       started_at: new Date().toISOString(),
@@ -172,9 +252,9 @@ export class SyncAgent {
 
     try {
       if (item.type === 'project_upload' || item.type === 'project_update') {
-        await this.syncProject(item);
+        await this.syncProject(item, signal);
       } else if (item.type === 'dependency_upload') {
-        await this.syncFile(item);
+        await this.syncFile(item, signal);
       }
 
       updateSyncItem(item.id, {
@@ -190,6 +270,17 @@ export class SyncAgent {
         metadata: { itemId: item.id },
       });
     } catch (err: any) {
+      // Explicit user cancellation — terminal, not a retry/failure.
+      if (signal.aborted) {
+        updateSyncItem(item.id, {
+          status: 'cancelled',
+          completed_at: new Date().toISOString(),
+          error_message: 'Cancelled by user',
+        });
+        this.onProgress({ itemId: item.id, projectId: item.project_id, type: item.type, status: 'cancelled' });
+        return;
+      }
+
       const retries = (item.retries ?? 0) + 1;
       const maxRetries = item.max_retries ?? RETRY_DELAYS_MS.length;
       const failed = retries >= maxRetries;
@@ -243,7 +334,7 @@ export class SyncAgent {
     }
   }
 
-  private async syncProject(item: any) {
+  private async syncProject(item: any, signal: AbortSignal) {
     const project = getProjectById(item.project_id) as any;
     if (!project) throw new Error('Project not found');
 
@@ -270,6 +361,7 @@ export class SyncAgent {
         lastModified: project.modified_at,
         sha256: projectChecksum,
       }),
+      externalSignal: signal,
     });
 
     if (!res.ok) {
@@ -300,6 +392,7 @@ export class SyncAgent {
           sha256: project.sha256 ?? null,
           projectId: cloudProjectId,
         }),
+        externalSignal: signal,
       });
 
       if (presignRes.ok) {
@@ -318,6 +411,7 @@ export class SyncAgent {
             headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(stats.size) },
             body: fileStream as any,
             timeout: UPLOAD_TIMEOUT_MS,
+            externalSignal: signal,
             // @ts-ignore — duplex required in Node 18+
             duplex: 'half',
           });
@@ -356,6 +450,7 @@ export class SyncAgent {
               daw: project.daw_type ?? null,
               projectName: project.project_name,
             }),
+            externalSignal: signal,
           });
           if (registerProjectFileRes.ok) {
             const registerData = await registerProjectFileRes.json();
@@ -382,7 +477,7 @@ export class SyncAgent {
     });
   }
 
-  private async syncFile(item: any) {
+  private async syncFile(item: any, signal: AbortSignal) {
     let file: any;
 
     // Try by file_id first (fastest, most reliable)
@@ -429,6 +524,7 @@ export class SyncAgent {
         fileSize: stats.size,
         sha256: file.checksum ?? null,
       }),
+      externalSignal: signal,
     });
 
     if (!presignRes.ok) {
@@ -451,6 +547,7 @@ export class SyncAgent {
         headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(fileSize2) },
         body: fileStream as any,
         timeout: UPLOAD_TIMEOUT_MS,
+        externalSignal: signal,
         // @ts-ignore — duplex required in Node 18+
         duplex: 'half',
       });
@@ -475,6 +572,7 @@ export class SyncAgent {
             sha256: file.checksum ?? null,
             storageKey: presignData.storageKey,
           }),
+          externalSignal: signal,
         });
       } catch {
         // Non-fatal: confirm failure means next presign re-uploads instead of dedup
@@ -523,6 +621,7 @@ export class SyncAgent {
             // sha256 dedup in daw-sync ensures identical bounces don't create duplicate versions.
             sha256: `bounce:${file.checksum ?? presignData.storageKey}`,
           }),
+          externalSignal: signal,
         });
         if (bumpRes.ok) {
           const bumpData = await bumpRes.json();
@@ -559,6 +658,7 @@ export class SyncAgent {
         daw,
         projectName,
       }),
+      externalSignal: signal,
     });
 
     if (!registerRes.ok) {
