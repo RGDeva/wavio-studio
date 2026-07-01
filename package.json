@@ -9,7 +9,7 @@
     "build": "vite build && tsc -p tsconfig.electron.json",
     "build:all": "npm run build && electron-builder",
     "build:mac": "npm run build && electron-builder --mac",
-    "build:mac:qa": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir --arm64 -c electron-builder.qa.json",
+    "build:mac:qa": "node scripts/build-qa.mjs",
     "build:win": "npm run build && electron-builder --win",
     "build:linux": "npm run build && electron-builder --linux",
     "lint": "eslint . --ext ts,tsx",

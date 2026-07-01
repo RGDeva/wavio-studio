@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { readFileSync } from 'fs';
+import path from 'path';
 
 // config.ts (and the package.json waviQaDefaults it reads) computes every
 // exported value ONCE at module-load time, so each test case needs a fresh
@@ -75,5 +77,22 @@ describe('WEB_BASE — single source of truth for generated link base URLs', () 
     // Neither must reference the old stale deployment alias
     expect(WEB_BASE).not.toContain('wavio-3ex7vi5zq');
     expect(API_BASE).not.toContain('wavio-3ex7vi5zq');
+  });
+});
+
+describe('QA build reproducibility — source package.json must not be mutated', () => {
+  it('source package.json does not contain waviQaDefaults (build artifact must not leak here)', () => {
+    const pkgPath = path.resolve(__dirname, '../package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    expect(pkg.waviQaDefaults).toBeUndefined();
+  });
+
+  it('source package.json retains required top-level sections', () => {
+    const pkgPath = path.resolve(__dirname, '../package.json');
+    const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    expect(pkg.scripts).toBeDefined();
+    expect(pkg.devDependencies).toBeDefined();
+    expect(pkg.build).toBeDefined();
+    expect(pkg.dependencies).toBeDefined();
   });
 });
