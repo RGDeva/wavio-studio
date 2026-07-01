@@ -18,7 +18,7 @@ import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsa
 import Store from 'electron-store';
 import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
 import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES, assertNotProductionUserDataDir } from './deepLinkValidator';
-import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS } from './discovery';
+import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS, classifyFolderForImport, FolderClassification } from './discovery';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -438,6 +438,8 @@ app.whenReady().then(async () => {
   }
 
   // Step 4 (cont): Start services — all folder scanning deferred below
+  const storedMaxConcurrent = store.get('maxConcurrent', 2) as number;
+  syncAgent.setMaxConcurrent(storedMaxConcurrent);
   syncAgent.start();
   initCopilot(store);
   registerAbletonHandlers();
@@ -612,10 +614,16 @@ function rebuildTrayMenu() {
 // single-instance lock (e.g. the OS spawning a new process to deliver a
 // wavi:// callback) — argv from that blocked second launch arrives here, and
 // we route it into the one real running instance instead of losing it.
+//
+// Bug fixed: this previously only matched auth-callback URLs, so an
+// open-project (wavi://open-project?share=...) link arriving via a blocked
+// second launch was silently dropped — the token was in argv but never
+// looked at. Now matches any wavi:// URL and lets queueOrHandleDeepLink's
+// own routing (open-project vs auth) decide what to do with it.
 app.on('second-instance', (_event, argv) => {
-  const url = argv.find((arg) => arg.includes('://auth/callback') || arg.includes('://auth?'));
+  const url = argv.find((arg) => arg.includes('://auth/callback') || arg.includes('://auth?') || arg.includes('://open-project'));
   if (url) queueOrHandleDeepLink(url);
-  // Restore/focus the existing window so the user sees auth progress.
+  // Restore/focus the existing window so the user sees auth/restore progress.
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     if (!mainWindow.isVisible()) mainWindow.show();
@@ -1694,14 +1702,39 @@ ipcMain.handle('folders:discover', () => {
   });
 });
 
-ipcMain.handle('folders:addPath', (_e, folderPath: string) => {
+/**
+ * Checks whether a folder looks like a purchased/downloaded sample library
+ * rather than a user's own project, before it gets added to watchedFolders.
+ * Never classifies on file count alone — see classifyFolderForImport's own
+ * ratio-based heuristic. Read-only: does not touch the filesystem beyond a
+ * single readdirSync of the folder's direct children.
+ */
+function checkAmbiguousFolder(folderPath: string): FolderClassification | null {
+  try {
+    const entries = fs.readdirSync(folderPath);
+    const classification = classifyFolderForImport(folderPath, entries);
+    return classification.likelySampleLibrary ? classification : null;
+  } catch {
+    return null;
+  }
+}
+
+function addWatchedFolder(folderPath: string) {
   const folders = store.get('watchedFolders', []) as string[];
   if (!folders.includes(folderPath)) {
     folders.push(folderPath);
     store.set('watchedFolders', folders);
     watcherManager?.addFolder(folderPath);
   }
-  return folderPath;
+}
+
+ipcMain.handle('folders:addPath', (_e, folderPath: string, opts?: { force?: boolean }) => {
+  if (!opts?.force) {
+    const ambiguous = checkAmbiguousFolder(folderPath);
+    if (ambiguous) return { needsConfirmation: true, classification: ambiguous };
+  }
+  addWatchedFolder(folderPath);
+  return { needsConfirmation: false, path: folderPath };
 });
 
 ipcMain.handle('folders:add', async () => {
@@ -1712,13 +1745,19 @@ ipcMain.handle('folders:add', async () => {
   if (result.canceled || !result.filePaths.length) return null;
 
   const folderPath = result.filePaths[0];
-  const folders = store.get('watchedFolders', []) as string[];
-  if (!folders.includes(folderPath)) {
-    folders.push(folderPath);
-    store.set('watchedFolders', folders);
-    watcherManager?.addFolder(folderPath);
-  }
-  return folderPath;
+  const ambiguous = checkAmbiguousFolder(folderPath);
+  if (ambiguous) return { needsConfirmation: true, classification: ambiguous };
+
+  addWatchedFolder(folderPath);
+  return { needsConfirmation: false, path: folderPath };
+});
+
+// Completes an add after the renderer confirmed an ambiguous-folder prompt
+// (e.g. "this looks like a sample library — add anyway?"). Skips
+// re-classification since the user has already made the call.
+ipcMain.handle('folders:confirmAmbiguous', (_e, folderPath: string) => {
+  addWatchedFolder(folderPath);
+  return { needsConfirmation: false, path: folderPath };
 });
 
 ipcMain.handle('folders:remove', (_e, folderPath: string) => {
@@ -1996,6 +2035,11 @@ ipcMain.handle('sync:getQueue', () => syncAgent?.getQueue() ?? []);
 ipcMain.handle('sync:retryAll', () => syncAgent?.retryFailed());
 ipcMain.handle('sync:getStatus', () => syncAgent?.getStatus() ?? 'idle');
 ipcMain.handle('sync:now', () => { syncAgent?.retryFailed(); syncAgent?.tick?.(); });
+ipcMain.handle('sync:pause', () => { syncAgent?.pauseUser(); return syncAgent?.getStatus() ?? 'idle'; });
+ipcMain.handle('sync:resume', () => { syncAgent?.resumeUser(); return syncAgent?.getStatus() ?? 'idle'; });
+ipcMain.handle('sync:isPausedByUser', () => syncAgent?.isPausedByUser() ?? false);
+ipcMain.handle('sync:prioritizeProject', (_e, projectId: string) => syncAgent?.prioritizeProject(projectId) ?? 0);
+ipcMain.handle('sync:cancelItem', (_e, itemId: string) => syncAgent?.cancelItem(itemId) ?? false);
 
 // Activity
 ipcMain.handle('activity:getAll', () => getActivityLog(100));
@@ -2165,6 +2209,10 @@ ipcMain.handle('settings:set', (_e, key: string, value: unknown) => {
   // Wire autoStart to macOS login item
   if (key === 'autoStart') {
     app.setLoginItemSettings({ openAtLogin: !!value, openAsHidden: true });
+  }
+  // Wire maxConcurrent live — no restart required to take effect
+  if (key === 'maxConcurrent') {
+    syncAgent?.setMaxConcurrent(value as number);
   }
 });
 

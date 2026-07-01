@@ -34,7 +34,8 @@ contextBridge.exposeInMainWorld('waviAPI', {
     add: () => ipcRenderer.invoke('folders:add'),
     remove: (folderPath: string) => ipcRenderer.invoke('folders:remove', folderPath),
     discover: () => ipcRenderer.invoke('folders:discover'),
-    addPath: (folderPath: string) => ipcRenderer.invoke('folders:addPath', folderPath),
+    addPath: (folderPath: string, opts?: { force?: boolean }) => ipcRenderer.invoke('folders:addPath', folderPath, opts),
+    confirmAmbiguous: (folderPath: string) => ipcRenderer.invoke('folders:confirmAmbiguous', folderPath),
     rescan: (folderPath: string) => ipcRenderer.invoke('folders:rescan', folderPath),
     scanMeta: () => ipcRenderer.invoke('folders:scanMeta'),
     fileCounts: () => ipcRenderer.invoke('folders:fileCounts'),
@@ -70,6 +71,11 @@ contextBridge.exposeInMainWorld('waviAPI', {
     retryAll: () => ipcRenderer.invoke('sync:retryAll'),
     getStatus: () => ipcRenderer.invoke('sync:getStatus'),
     now: () => ipcRenderer.invoke('sync:now'),
+    pause: () => ipcRenderer.invoke('sync:pause'),
+    resume: () => ipcRenderer.invoke('sync:resume'),
+    isPausedByUser: () => ipcRenderer.invoke('sync:isPausedByUser'),
+    prioritizeProject: (projectId: string) => ipcRenderer.invoke('sync:prioritizeProject', projectId),
+    cancelItem: (itemId: string) => ipcRenderer.invoke('sync:cancelItem', itemId),
   },
 
   // Activity
