@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle, CheckCircle2, Download, FolderOpen, Loader2,
-  Music, Package, RefreshCw, X, ExternalLink, ChevronDown, ChevronRight,
+  Music, Package, RefreshCw, X, ExternalLink, ChevronDown, ChevronRight, Search,
 } from 'lucide-react';
 import { api } from '../lib/api';
 
@@ -184,6 +184,13 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
   async function handleOpenExisting() {
     if (!existing) return;
     await api.restore.openExisting(existing.id as string);
+    await api.shell.openPath(existing.local_project_path as string);
+    onClose();
+  }
+
+  async function handleRevealExisting() {
+    if (!existing) return;
+    await api.restore.openExisting(existing.id as string);
     await api.shell.revealInFinder(existing.local_project_path as string);
     onClose();
   }
@@ -262,33 +269,46 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
             </div>
           )}
 
-          {/* Phase: existing found */}
+          {/* Phase: existing found — 4-option duplicate restore dialog */}
           {phase === 'existing_found' && existing && (
             <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
               <div className="flex items-start gap-2.5">
                 <FolderOpen className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-white">Already Restored</p>
-                  <p className="text-xs text-white/40 mt-0.5">
-                    This project was previously restored to:<br />
-                    <span className="font-mono break-all">{existing.local_project_path as string}</span>
+                  <p className="text-xs text-white/40 mt-0.5 font-mono break-all leading-relaxed">
+                    {existing.local_project_path as string}
                   </p>
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={handleOpenExisting}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium rounded-lg transition-colors"
                 >
-                  <FolderOpen className="w-3.5 h-3.5" />
+                  <ExternalLink className="w-3.5 h-3.5" />
                   Open Existing Copy
                 </button>
                 <button
+                  onClick={handleRevealExisting}
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white/8 hover:bg-white/12 text-white/70 text-xs font-medium rounded-lg transition-colors"
+                >
+                  <Search className="w-3.5 h-3.5" />
+                  Reveal in Finder
+                </button>
+                <button
                   onClick={() => setPhase('confirm')}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-white/8 hover:bg-white/12 text-white/70 text-xs font-medium rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white/8 hover:bg-white/12 text-white/70 text-xs font-medium rounded-lg transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  Restore New Copy
+                  Restore Another Copy
+                </button>
+                <button
+                  onClick={onClose}
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white/5 hover:bg-white/10 text-white/40 text-xs font-medium rounded-lg transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  Cancel
                 </button>
               </div>
             </div>
