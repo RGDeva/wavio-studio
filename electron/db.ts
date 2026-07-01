@@ -576,57 +576,6 @@ export function associateUnclaimedFilesInDirectory(projectId: string, dir: strin
   return tx() as number;
 }
 
-/**
- * After a bulk discovery import, group unclaimed files into virtual projects by
- * parent directory. Folders with ≥2 audio files become a project named after
- * the folder. Files already belonging to a project are skipped.
- * Returns number of new projects created and files associated.
- */
-export function groupDiscoveredFilesByFolder(): { projects: number; files: number } {
-  const rows = db.prepare(
-    "SELECT id, file_path FROM files WHERE project_id IS NULL"
-  ).all() as { id: string; file_path: string }[];
-
-  // Group by parent directory
-  const byDir = new Map<string, string[]>();
-  for (const row of rows) {
-    const dir = path.dirname(row.file_path);
-    const bucket = byDir.get(dir) ?? [];
-    bucket.push(row.id);
-    byDir.set(dir, bucket);
-  }
-
-  let projectsCreated = 0;
-  let filesAssociated = 0;
-  const now = new Date().toISOString();
-
-  for (const [dir, fileIds] of byDir) {
-    if (fileIds.length < 2) continue; // single file → stays standalone
-    const existing = findProjectForDirectory(dir);
-    let projectId: string;
-    if (existing) {
-      projectId = existing.id;
-    } else {
-      projectId = crypto.randomUUID();
-      const folderName = path.basename(dir);
-      db.prepare(`
-        INSERT OR IGNORE INTO projects (id, project_name, file_path, daw_type, file_size, created_at, modified_at)
-        VALUES (?, ?, ?, 'unknown', 0, ?, ?)
-      `).run(projectId, folderName, dir, now, now);
-      projectsCreated++;
-    }
-    const update = db.prepare("UPDATE files SET project_id = ? WHERE id = ? AND project_id IS NULL");
-    const tx = db.transaction(() => {
-      let n = 0;
-      for (const id of fileIds) { const info = update.run(projectId, id); n += info.changes; }
-      return n;
-    });
-    filesAssociated += tx() as number;
-  }
-
-  return { projects: projectsCreated, files: filesAssociated };
-}
-
 export function getFileById(id: string) {
   return db.prepare('SELECT * FROM files WHERE id = ?').get(id);
 }
