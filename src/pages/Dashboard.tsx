@@ -376,6 +376,7 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
   const [shareError, setShareError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
+  const [prioritizing, setPrioritizing] = useState(false);
   const [allowDownload, setAllowDownload] = useState(true);
   const [expiry, setExpiry] = useState<'never' | '24h' | '7d' | '30d'>('never');
   // Project link state
@@ -539,6 +540,19 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
             </button>
             <span>{formatRelativeTime(project.modified_at)}</span>
           </div>
+          {(project.sync_status === 'pending' || project.sync_status === 'failed') && (
+            <button
+              onClick={async () => { setPrioritizing(true); await api.sync.prioritizeProject(project.id); setPrioritizing(false); }}
+              disabled={prioritizing}
+              className="flex items-center gap-1 text-[10px] font-medium text-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
+              title="Jump this project ahead of the rest of the sync queue"
+            >
+              {prioritizing
+                ? <div className="w-2.5 h-2.5 border border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                : <Zap className="w-2.5 h-2.5" />}
+              {prioritizing ? 'Prioritizing…' : 'Sync This Project'}
+            </button>
+          )}
           {/* Share link controls — visible when project is synced */}
           {project.sync_status === 'synced' && (
             <div className="mt-2 flex flex-col items-end gap-1">

@@ -4,6 +4,14 @@ declare global {
   }
 }
 
+export interface FolderClassification {
+  path: string;
+  audioFileCount: number;
+  projectFileCount: number;
+  likelySampleLibrary: boolean;
+  reason: 'name_match' | 'high_audio_ratio' | 'none';
+}
+
 export interface WaviAPI {
   auth: {
     getToken: () => Promise<string | null>;
@@ -17,10 +25,11 @@ export interface WaviAPI {
   };
   folders: {
     getAll: () => Promise<string[]>;
-    add: () => Promise<string | null>;
+    add: () => Promise<string | null | { needsConfirmation: true; classification: FolderClassification } | { needsConfirmation: false; path: string }>;
     remove: (folderPath: string) => Promise<void>;
     discover: () => Promise<string[]>;
-    addPath: (folderPath: string) => Promise<string>;
+    addPath: (folderPath: string, opts?: { force?: boolean }) => Promise<{ needsConfirmation: true; classification: FolderClassification } | { needsConfirmation: false; path: string }>;
+    confirmAmbiguous: (folderPath: string) => Promise<{ needsConfirmation: false; path: string }>;
     rescan: (folderPath: string) => Promise<{ found: number; imported: number; duplicates: number; scanned: number; durationMs: number; cancelled: boolean }>;
     scanMeta: () => Promise<Record<string, { lastScanned: string; fileCount: number }>>;
     fileCounts: () => Promise<Record<string, number>>;
@@ -50,6 +59,11 @@ export interface WaviAPI {
     retryAll: () => Promise<void>;
     getStatus: () => Promise<string>;
     now: () => Promise<void>;
+    pause: () => Promise<string>;
+    resume: () => Promise<string>;
+    isPausedByUser: () => Promise<boolean>;
+    prioritizeProject: (projectId: string) => Promise<number>;
+    cancelItem: (itemId: string) => Promise<boolean>;
   };
   activity: {
     getAll: () => Promise<any[]>;
@@ -167,10 +181,10 @@ const _noop = () => Promise.resolve(null as any);
 const _stub: WaviAPI = {
   auth: { getToken: _noop, setToken: _noop, clearToken: _noop },
   copilot: { toggle: _noop, getContext: _noop, chat: _noop },
-  folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop, rescan: _noop, scanMeta: () => Promise.resolve({}), fileCounts: () => Promise.resolve({}), excludePath: _noop, getExcluded: () => Promise.resolve([]), unexcludePath: _noop },
+  folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop, confirmAmbiguous: _noop, rescan: _noop, scanMeta: () => Promise.resolve({}), fileCounts: () => Promise.resolve({}), excludePath: _noop, getExcluded: () => Promise.resolve([]), unexcludePath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
   files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]), discoverAll: () => Promise.resolve({ found: 0, imported: 0, duplicates: 0, scanned: 0, permissionErrors: 0, durationMs: 0, cancelled: false, limitReached: false }), discoverCancel: _noop, defaultDiscoveryRoots: () => Promise.resolve([]) },
-  sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop },
+  sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop, pause: () => Promise.resolve('idle'), resume: () => Promise.resolve('idle'), isPausedByUser: () => Promise.resolve(false), prioritizeProject: () => Promise.resolve(0), cancelItem: () => Promise.resolve(false) },
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop, revokeLink: _noop },

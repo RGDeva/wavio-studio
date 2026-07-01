@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { LogOut, ExternalLink, Shield, Cpu, HardDrive, Zap, BarChart2, Music2, FolderOpen } from 'lucide-react';
+import { LogOut, ExternalLink, Shield, Cpu, HardDrive, Zap, BarChart2, Music2, FolderOpen, Pause, Play } from 'lucide-react';
 import { api } from '../lib/api';
 import { BridgeStatusPanel } from '../components/BridgeStatusPanel';
 
@@ -27,6 +27,11 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
   const [maxConcurrent, setMaxConcurrent] = useState(2);
   const [planInfo, setPlanInfo] = useState<PlanInfo | null>(null);
   const [dawPaths, setDawPaths] = useState<Record<string, string>>({});
+  const [syncPaused, setSyncPaused] = useState(false);
+
+  useEffect(() => {
+    api.sync.isPausedByUser().then(setSyncPaused);
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -114,6 +119,25 @@ export function SettingsPage({ onLogout }: SettingsPageProps) {
                 <option key={n} value={n}>{n}</option>
               ))}
             </select>
+          </SettingRow>
+          <SettingRow
+            label={syncPaused ? 'Sync paused' : 'Sync running'}
+            description={syncPaused
+              ? 'No files are uploading. Resume to continue the queue.'
+              : 'Pause to stop all uploads until you resume.'}
+          >
+            <button
+              onClick={async () => {
+                if (syncPaused) { await api.sync.resume(); setSyncPaused(false); }
+                else { await api.sync.pause(); setSyncPaused(true); }
+              }}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                syncPaused ? 'bg-cyan-600 hover:bg-cyan-500 text-white' : 'bg-white/10 hover:bg-white/15 text-white/70'
+              }`}
+            >
+              {syncPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+              {syncPaused ? 'Resume Sync' : 'Pause Sync'}
+            </button>
           </SettingRow>
         </Section>
 
