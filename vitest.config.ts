@@ -23,6 +23,7 @@ export default defineConfig({
       'electron/localStatusMigration.test.ts',
       'electron/preloadArgvParsing.test.ts',
       'electron/restore.security.test.ts',
+      'electron/config.test.ts',
     ],
     environment: 'node',
   },

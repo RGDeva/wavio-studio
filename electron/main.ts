@@ -1105,12 +1105,66 @@ function classifyFileRole(fileName: string, classifierRole: string): string {
   if (['.als', '.ptx', '.flp', '.logic', '.logicx', '.nproject', '.cpr', '.rpp'].includes(ext)) return 'project';
   if (classifierRole === 'stem') return 'stem';
   if (classifierRole === 'sample') return 'sample';
+  if (ext === '.asd') return 'analysis';
   if (['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac'].includes(ext)) return 'audio';
   if (ext === '.mid' || ext === '.midi') return 'midi';
   if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) return 'artwork';
   if (['.pdf', '.txt', '.md', '.docx', '.rtf'].includes(ext)) return 'document';
   if (['.zip', '.rar', '.tar', '.gz'].includes(ext)) return 'archive';
   return 'other';
+}
+
+type ManifestEntry = {
+  relativePath: string; fileName: string; fileSize: number;
+  sha256: string | null; role: string; mimeType: string | null; assetId: string | null;
+};
+
+/**
+ * Ableton Live projects need an `Ableton Project Info/` directory next to the
+ * .als file for Ableton to recognize the extracted folder as a real Project
+ * (required for RelativePathType="3" sample references to auto-resolve) —
+ * otherwise Ableton treats it as a "Temp Project" and reports missing media
+ * even when the referenced sample is present at the correct relative path.
+ * Normal file-walk logic skips empty directories, so this directory is
+ * special-cased into the manifest even when it has no contents.
+ *
+ * Backup/ (auto-save history) and Icon (macOS resource-fork marker) are
+ * intentionally NOT included — see PUBLISH_EXCLUDE / watcher ignore rules.
+ */
+function getAbletonManifestExtras(daw: string | null | undefined, projectFilePath: string, projectRoot: string): ManifestEntry[] {
+  const isAbleton = daw === 'ableton' || daw === 'Ableton Live' || projectFilePath.toLowerCase().endsWith('.als');
+  if (!isAbleton) return [];
+
+  const extras: ManifestEntry[] = [];
+  const infoDirAbs = path.join(projectRoot, 'Ableton Project Info');
+  if (fs.existsSync(infoDirAbs) && fs.statSync(infoDirAbs).isDirectory()) {
+    // Directory marker — represented with a trailing slash and no asset, so the
+    // ZIP builder creates the folder even when it's empty on disk.
+    extras.push({
+      relativePath: 'Ableton Project Info/',
+      fileName: 'Ableton Project Info',
+      fileSize: 0,
+      sha256: null,
+      role: 'directory',
+      mimeType: null,
+      assetId: null,
+    });
+  }
+  return extras;
+}
+
+// Convention for a dedicated preview bounce: a full-arrangement render placed
+// at the project root (never inside Samples/ or a stems folder), named
+// preview.<ext> or bounce.<ext>. No prior convention existed in the codebase
+// for this — this is the one we're introducing.
+const PREVIEW_FILENAME_RE = /^(preview|bounce)\.(wav|mp3|aiff|aif|flac|m4a)$/i;
+
+function findPreviewCandidate(syncedFiles: any[], projectRoot: string): any | null {
+  for (const f of syncedFiles) {
+    if (path.dirname(f.file_path) !== projectRoot) continue; // must be at project root, not a stem/sample subfolder
+    if (PREVIEW_FILENAME_RE.test(path.basename(f.file_path))) return f;
+  }
+  return null;
 }
 
 ipcMain.handle('project:publishVersion', async (_e, opts: {
@@ -1133,10 +1187,7 @@ ipcMain.handle('project:publishVersion', async (_e, opts: {
   if (!syncedFiles.length) return { error: 'No synced files found for this project' };
 
   // Build manifest — safe relative paths, no absolute paths
-  const fileManifest: Array<{
-    relativePath: string; fileName: string; fileSize: number;
-    sha256: string | null; role: string; mimeType: string | null; assetId: string;
-  }> = [];
+  const fileManifest: ManifestEntry[] = [];
 
   // Include the primary project file itself (the .als/.ptx/etc.)
   if (fs.existsSync(projectFilePath)) {
@@ -1167,18 +1218,43 @@ ipcMain.handle('project:publishVersion', async (_e, opts: {
     });
   }
 
+  // Ableton: always include the (possibly empty) "Ableton Project Info" directory
+  // marker so restored packs are recognized as a real Project, not a Temp Project.
+  fileManifest.push(...getAbletonManifestExtras(project.daw_type, projectFilePath, projectRoot));
+
   if (!fileManifest.length) return { error: 'No eligible files to publish in this project version' };
+
+  // Preview bounce: prefer an explicit preview.wav/bounce.wav at the project root
+  // over auto-selecting an arbitrary stem. If none exists, fall back to the
+  // server's auto-selection but flag it so a stem is never silently treated as
+  // the canonical preview.
+  const previewCandidate = findPreviewCandidate(syncedFiles, projectRoot);
+  const previewAssetId = previewCandidate?.cloud_asset_id ?? null;
+  if (!previewCandidate) {
+    logActivity({
+      id: crypto.randomUUID(),
+      type: 'preview_auto_selected',
+      message: `No preview.wav/bounce.wav found at project root for "${project.project_name}" — falling back to auto-selected stem as preview`,
+      project_id: opts.localProjectId,
+    });
+  }
 
   const result = await desktopApiPost(token, 'publish-project-version', {
     projectId: project.cloud_id,
     parentVersionId: project.cloud_version_id ?? null,
     daw: project.daw_type ?? null,
-    bpm: null,
+    bpm: previewCandidate?.bpm ?? null,
     sha256: project.checksum ?? null,
     fileSize: project.file_size ?? null,
     deviceLabel: `Wavi Studio — ${require('os').hostname()}`,
     files: fileManifest,
     versionNotes: null,
+    previewAssetId,
+    previewRelativePath: previewCandidate ? safeRelativePath(previewCandidate.file_path, projectRoot + path.sep) : null,
+    previewDuration: previewCandidate?.duration ?? null,
+    previewFormat: previewCandidate ? path.extname(previewCandidate.file_name).replace(/^\./, '') : null,
+    previewKey: previewCandidate?.key_note ?? null,
+    previewAutoSelected: !previewCandidate,
   });
 
   return result;
@@ -1208,7 +1284,7 @@ ipcMain.handle('project:createLink', async (_e, opts: {
       const localFiles = (getFilesByProject(opts.projectId) as any[]).filter(
         (f: any) => f.sync_status === 'synced' && f.cloud_asset_id && f.file_path
       );
-      const fileManifest = [];
+      const fileManifest: ManifestEntry[] = [];
       if (fs.existsSync(projectFilePath)) {
         fileManifest.push({ relativePath: path.basename(projectFilePath), fileName: path.basename(projectFilePath), fileSize: project.file_size ?? 0, sha256: project.checksum ?? null, role: 'project', mimeType: null, assetId: project.project_asset_id ?? '' });
       }
@@ -1217,7 +1293,27 @@ ipcMain.handle('project:createLink', async (_e, opts: {
         if (!rel) continue;
         fileManifest.push({ relativePath: rel, fileName: f.file_name, fileSize: f.file_size ?? 0, sha256: f.checksum ?? null, role: classifyFileRole(f.file_name, f.classifier_role ?? 'misc'), mimeType: null, assetId: f.cloud_asset_id });
       }
-      return { projectId: project.cloud_id, parentVersionId: project.cloud_version_id ?? null, daw: project.daw_type ?? null, sha256: project.checksum ?? null, fileSize: project.file_size ?? null, deviceLabel: `Wavi Studio — ${require('os').hostname()}`, files: fileManifest };
+      // Ableton: always include the (possibly empty) "Ableton Project Info" directory
+      // marker — see getAbletonManifestExtras for why this is required.
+      fileManifest.push(...getAbletonManifestExtras(project.daw_type, projectFilePath, path.dirname(projectFilePath)));
+
+      const previewCandidate = findPreviewCandidate(localFiles, path.dirname(projectFilePath));
+      return {
+        projectId: project.cloud_id,
+        parentVersionId: project.cloud_version_id ?? null,
+        daw: project.daw_type ?? null,
+        bpm: previewCandidate?.bpm ?? null,
+        sha256: project.checksum ?? null,
+        fileSize: project.file_size ?? null,
+        deviceLabel: `Wavi Studio — ${require('os').hostname()}`,
+        files: fileManifest,
+        previewAssetId: previewCandidate?.cloud_asset_id ?? null,
+        previewRelativePath: previewCandidate ? safeRelativePath(previewCandidate.file_path, projectRoot) : null,
+        previewDuration: previewCandidate?.duration ?? null,
+        previewFormat: previewCandidate ? path.extname(previewCandidate.file_name).replace(/^\./, '') : null,
+        previewKey: previewCandidate?.key_note ?? null,
+        previewAutoSelected: !previewCandidate,
+      };
     })() as any);
 
     if (!published || (published as any).error) return { error: (published as any)?.error ?? 'Failed to publish project version' };

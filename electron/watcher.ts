@@ -13,7 +13,10 @@ import { runAssociationEngine } from './projectAssociation/projectAssociationEng
 const BPM_EXTENSIONS = new Set(['.wav', '.aif', '.aiff', '.flac', '.mp3', '.m4a']);
 
 const DAW_EXTENSIONS = new Set(['.flp', '.ptx', '.ptf', '.als', '.logic', '.logicx', '.rpp', '.cpr', '.band', '.sesx', '.song', '.reason', '.bwproject', '.npr']);
-const DEPENDENCY_EXTENSIONS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.mid', '.midi', '.stems', '.flac', '.ogg', '.m4a', '.aac', '.opus']);
+// .asd = Ableton's per-sample analysis/waveform cache file. Tracked as an optional
+// dependency so it rides along with its sample when present, but never required
+// (Ableton silently regenerates .asd files if missing).
+const DEPENDENCY_EXTENSIONS = new Set(['.wav', '.mp3', '.aiff', '.aif', '.mid', '.midi', '.stems', '.flac', '.ogg', '.m4a', '.aac', '.opus', '.asd']);
 
 export interface WatcherEvent {
   type: 'project_added' | 'project_changed' | 'project_deleted' | 'dependency_found' | 'bounce_detected';
@@ -145,7 +148,7 @@ export class WatcherManager {
     if (this.watchers.has(folderPath)) return;
 
     // Only watch audio & DAW files — avoids scanning tens of thousands of irrelevant files
-    const audioGlob = '**/*.{flp,ptx,ptf,als,logic,logicx,rpp,cpr,band,sesx,song,reason,bwproject,npr,wav,mp3,aiff,aif,mid,midi,flac,ogg,m4a,aac,opus}';
+    const audioGlob = '**/*.{flp,ptx,ptf,als,logic,logicx,rpp,cpr,band,sesx,song,reason,bwproject,npr,wav,mp3,aiff,aif,mid,midi,flac,ogg,m4a,aac,opus,asd}';
     const watcher = chokidar.watch(audioGlob, {
       cwd: folderPath,
       persistent: true,
@@ -156,6 +159,9 @@ export class WatcherManager {
         stabilityThreshold: 3000,
         pollInterval: 500,
       },
+      // Backup/ (Ableton auto-save history) and Autosave are excluded as unnecessary
+      // size; macOS "Icon\r" resource-fork markers and dotfiles are excluded implicitly
+      // because they never match the extension glob above.
       ignored: /(^|[/\\])(\.|(node_modules|__MACOSX|Backup|Autosave|\.trash))/,
     });
 
