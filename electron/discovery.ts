@@ -79,6 +79,14 @@ const SKIP_DIRS = new Set([
   'release', 'dist-electron', '.electron-gyp',
   // Xcode
   'DerivedData', 'xcuserdata',
+  // ── Caches / backups / temp exports (Phase 2: sync-engine scalability) ───
+  'Cache', 'Caches', 'CachedData', 'Temp', 'tmp', '.tmp',
+  'Time Machine Backups', '.Trashes', 'Backup', 'Backups', 'Old Backups',
+  'Exported', 'Freeze Files', 'Frozen',
+  // Plugin content — large, rarely worth syncing, frequently duplicated
+  // across every DAW install on the machine
+  'VST', 'VST3', 'Components', 'Audio Music Apps', 'Plug-Ins', 'Plugins',
+  'Kontakt', 'iLok', 'Waves Preferences',
 ]);
 
 // Name patterns that indicate a directory should be skipped
@@ -91,6 +99,64 @@ function shouldSkipDir(name: string, fullPath: string): boolean {
   // Skip Wavio's own release output wherever it lives
   if (name === 'release' && fullPath.includes('wavio')) return true;
   return false;
+}
+
+// ── Sample-library heuristic ──────────────────────────────────────────────────
+// A folder is "likely a sample library" (not a user's own project) when it
+// has a large number of audio files but essentially no DAW project files
+// alongside them, and/or its name matches a well-known sample-vendor
+// pattern. We never auto-index these — the caller must get explicit user
+// confirmation first (see files:confirmAmbiguousFolder in main.ts). Never
+// classifies on file count alone: the ratio to DAW project files is the
+// signal, since a real project folder with many stems/bounces is legitimate.
+const DAW_PROJECT_EXTS = new Set(['.flp', '.als', '.ptx', '.ptf', '.rpp', '.logic', '.band', '.npr', '.sesx', '.song', '.reason', '.bwproject', '.cpr']);
+const SAMPLE_LIBRARY_NAME_PATTERNS = [
+  /splice/i, /loopmasters/i, /native instruments/i, /kontakt library/i,
+  /output\s*(rev|arcade|portal)/i, /spitfire/i, /sample\s*pack/i,
+  /loop\s*pack/i, /construction\s*kit/i, /\bwav\s*library\b/i,
+];
+
+export interface FolderClassification {
+  path: string;
+  audioFileCount: number;
+  projectFileCount: number;
+  likelySampleLibrary: boolean;
+  reason: 'name_match' | 'high_audio_ratio' | 'none';
+}
+
+/**
+ * Classifies a folder as a likely sample library vs a real project folder,
+ * given its direct-child entry names. Used before indexing an ambiguous
+ * large folder so the caller can prompt for confirmation rather than
+ * silently uploading what might be a purchased sample library.
+ */
+export function classifyFolderForImport(dirPath: string, entryNames: string[]): FolderClassification {
+  const name = path.basename(dirPath);
+  const nameMatch = SAMPLE_LIBRARY_NAME_PATTERNS.some((re) => re.test(name));
+
+  let audioFileCount = 0;
+  let projectFileCount = 0;
+  for (const entryName of entryNames) {
+    const ext = path.extname(entryName).toLowerCase();
+    if (DAW_PROJECT_EXTS.has(ext)) projectFileCount++;
+    else if (AUDIO_EXTS.has(ext)) audioFileCount++;
+  }
+
+  if (nameMatch) {
+    return { path: dirPath, audioFileCount, projectFileCount, likelySampleLibrary: true, reason: 'name_match' };
+  }
+
+  // High-ratio heuristic: many audio files, essentially no project file.
+  // The absolute threshold (200) keeps this from firing on a legitimate
+  // project's stems/bounces folder, which normally holds a handful of files.
+  const highRatio = audioFileCount >= 200 && projectFileCount === 0;
+  return {
+    path: dirPath,
+    audioFileCount,
+    projectFileCount,
+    likelySampleLibrary: highRatio,
+    reason: highRatio ? 'high_audio_ratio' : 'none',
+  };
 }
 
 // ── Default roots ─────────────────────────────────────────────────────────────
