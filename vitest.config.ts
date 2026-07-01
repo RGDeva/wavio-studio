@@ -24,6 +24,7 @@ export default defineConfig({
       'electron/preloadArgvParsing.test.ts',
       'electron/restore.security.test.ts',
       'electron/config.test.ts',
+      'electron/syncScalability.test.ts',
     ],
     environment: 'node',
   },
