@@ -1322,13 +1322,21 @@ ipcMain.handle('project:createLink', async (_e, opts: {
 
   // Step 2: create the Project Link referencing this exact immutable version
   const cloudProjectId = opts.cloudProjectId ?? (getProjectById(opts.projectId) as any)?.cloud_id;
-  return desktopApiPost(token, 'create-project-link', {
+  const result = await desktopApiPost(token, 'create-project-link', {
     projectId: cloudProjectId,
     projectVersionId: versionId,
     allowDownload: opts.allowDownload ?? true,
     expiresAt: opts.expiresAt ?? null,
     collaboratorMode: opts.collaboratorMode ?? 'view',
   });
+
+  // Override server-returned linkUrl with the desktop's own WEB_BASE so the
+  // generated link always points at the deployment this app is wired to,
+  // regardless of what WAVI_PUBLIC_URL is set to on the Vercel side.
+  if (result && !(result as any).error && (result as any).trackingId) {
+    (result as any).linkUrl = `${WEB_BASE}/project-link/${(result as any).trackingId}`;
+  }
+  return result;
 });
 
 ipcMain.handle('project:revokeLink', async (_e, opts: { trackingId: string }) => {
