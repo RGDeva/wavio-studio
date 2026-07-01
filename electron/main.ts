@@ -1384,7 +1384,9 @@ ipcMain.handle('restore:start', async (_e, opts: {
   // Download the ZIP
   let zipBuffer: Buffer;
   try {
-    const downloadUrl = `${API_BASE.replace('/desktop/index', '')}/project-link/${token}/download`;
+    // API_BASE = https://host/api — strip /api suffix to get the web origin
+    const webOrigin = API_BASE.replace(/\/api\/?$/, '');
+    const downloadUrl = `${webOrigin}/api/project-link/${token}/download`;
     const resp = await fetch(downloadUrl, { signal: AbortSignal.timeout(300_000) });
     if (!resp.ok) {
       if (resp.status === 403) return { error: 'permission_denied', detail: 'Download not permitted for this link' };

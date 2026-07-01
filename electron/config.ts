@@ -65,10 +65,16 @@ export const WEB_BASE: string = (() => {
   return PRODUCTION_WEB;
 })();
 
-/** Log the connected environment once at startup (dev builds only). */
+/** Log the selected API environment once at startup — always in QA/dev, never in production. */
 export function logApiEnvironment() {
   if (IS_DEV_API) {
-    console.log(`[config] ⚠ DEV API: ${API_BASE}`);
+    // Log in all non-production builds so QA never silently hits the wrong backend.
+    console.log(`[config] ⚠ NON-PRODUCTION API: ${API_BASE}`);
+    console.log(`[config]   WEB_BASE: ${WEB_BASE}`);
+    console.log(`[config]   CHANNEL: ${CHANNEL}`);
+  } else {
+    // Production: single quiet confirmation line only (no full URL logged)
+    console.log('[config] API: production (wavi.stream)');
   }
 }
 
