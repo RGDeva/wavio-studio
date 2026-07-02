@@ -490,6 +490,13 @@ export class WatcherManager {
         duration = analysis?.duration ?? null;
       }
 
+      // IMPORTANT: when the path already exists, the upserts keep the EXISTING
+      // row's id — the freshly generated fileId above never lands in the files
+      // table. The enqueue below must use the RESOLVED id, not the proposed
+      // one: enqueueSyncItemIdempotent dedups on file_id, so enqueueing with a
+      // dangling id both defeats dedup (duplicate active rows per rescan) and
+      // forces syncAgent into its file_name fallback lookup.
+      let resolvedFileId = fileId;
       if (projectId) {
         upsertFile({
           id: fileId,
@@ -506,9 +513,14 @@ export class WatcherManager {
           created_at: now,
           modified_at: stats.mtime.toISOString(),
         });
+        // upsertFile is ON CONFLICT(file_path)-based and returns nothing —
+        // resolve the surviving row id by path.
+        const surviving = this.db.prepare('SELECT id FROM files WHERE file_path = ?').get(filePath) as { id: string } | undefined;
+        if (surviving) resolvedFileId = surviving.id;
       } else {
-        // Standalone audio file — no parent project
-        upsertStandaloneFile({
+        // Standalone audio file — no parent project. Returns the existing
+        // row's id when the path was already indexed.
+        resolvedFileId = upsertStandaloneFile({
           id: fileId,
           file_path: filePath,
           file_name: fileName,
@@ -564,11 +576,12 @@ export class WatcherManager {
         });
       }
 
-      // Enqueue for sync AFTER DB row exists (avoids race condition)
+      // Enqueue for sync AFTER DB row exists (avoids race condition).
+      // Uses resolvedFileId — see the upsert comment above.
       enqueueSyncItemIdempotent({
         id: generateId(),
         project_id: projectId ?? '__standalone__',
-        file_id: fileId,
+        file_id: resolvedFileId,
         file_name: path.basename(filePath),
         type: 'dependency_upload',
         priority: 3,

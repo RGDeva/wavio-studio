@@ -699,6 +699,35 @@ export function repairStalledQueue(): { recovered: number; deduped: number } {
     deduped = ids.length;
   }
 
+  // 3. Prune active rows whose file_id no longer resolves to a files row when
+  //    a valid row exists for the same work item. Legacy watcher bug: re-adds
+  //    of an already-indexed path enqueued with a freshly generated (never
+  //    persisted) file_id, defeating the file_id-keyed dedup — existing user
+  //    databases can still hold those rows, and each would double-upload via
+  //    syncAgent's file_name fallback. Only deletes when a valid duplicate
+  //    exists; solitary dangling rows are kept (the fallback still syncs them).
+  const danglingDupes = db.prepare(`
+    SELECT q.id FROM sync_queue q
+    WHERE q.status IN ('pending', 'retrying')
+      AND q.file_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM files f WHERE f.id = q.file_id)
+      AND EXISTS (
+        SELECT 1 FROM sync_queue q2
+        JOIN files f2 ON f2.id = q2.file_id
+        WHERE q2.id != q.id
+          AND q2.status IN ('pending', 'uploading', 'retrying')
+          AND q2.type = q.type
+          AND q2.project_id = q.project_id
+          AND COALESCE(q2.file_name, '') = COALESCE(q.file_name, '')
+      )
+  `).all() as { id: string }[];
+  if (danglingDupes.length > 0) {
+    const ids = danglingDupes.map(r => r.id);
+    const placeholders = ids.map(() => '?').join(',');
+    db.prepare(`DELETE FROM sync_queue WHERE id IN (${placeholders})`).run(...ids);
+    deduped += ids.length;
+  }
+
   if (recovered > 0 || deduped > 0) {
     db.prepare(`
       INSERT INTO activity_log (id, type, message, created_at)

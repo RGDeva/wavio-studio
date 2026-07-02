@@ -111,16 +111,24 @@ async function main() {
   agent.stop();
 
   // ── Phase 3: pause/resume mid-drain ─────────────────────────────────────
+  // Slow the mock (25ms per call) so the drain is observably in progress
+  // when pause fires — with an instant mock the queue empties before pause.
+  const instantFetch = global.fetch;
+  global.fetch = async (...args) => {
+    await new Promise((r) => setTimeout(r, 25));
+    return instantFetch(...args);
+  };
   for (let i = 0; i < 60; i++) seedFile('pausable', `p${i}.wav`, 3);
   const agent2 = new SyncAgent(db, () => {});
   agent2.setAuthToken('mock-token-not-real');
   agent2.start();
-  await new Promise((r) => setTimeout(r, 60)); // let some drain
+  await new Promise((r) => setTimeout(r, 150)); // let some drain
   agent2.pauseUser();
-  await new Promise((r) => setTimeout(r, 150)); // give in-flight items time to settle
+  await new Promise((r) => setTimeout(r, 300)); // give in-flight items time to settle
   const remainingAtPause = activeQueueCount();
-  await new Promise((r) => setTimeout(r, 400)); // paused window
+  await new Promise((r) => setTimeout(r, 600)); // paused window
   const remainingAfterPauseWindow = activeQueueCount();
+  global.fetch = instantFetch; // restore instant mock for the resumed drain
   agent2.resumeUser();
   const resumeStart = Date.now();
   await new Promise((resolve) => {
