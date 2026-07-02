@@ -97,7 +97,7 @@ export interface FileStats {
   byRole: { role: string; count: number }[];
 }
 
-export type Page = 'dashboard' | 'library' | 'folders' | 'activity' | 'studio' | 'settings' | 'review' | 'search' | 'copilot' | 'ableton' | 'diagnostics';
+export type Page = 'dashboard' | 'links' | 'library' | 'folders' | 'activity' | 'studio' | 'settings' | 'review' | 'search' | 'copilot' | 'ableton' | 'diagnostics';
 
 export interface MemoryEntry {
   id: string;

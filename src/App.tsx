@@ -4,6 +4,7 @@ import { TitleBar } from './components/TitleBar';
 import { Dashboard } from './pages/Dashboard';
 import { LibraryPage } from './pages/LibraryPage';
 import { FoldersPage } from './pages/FoldersPage';
+import { LinksPage } from './pages/LinksPage';
 import { ActivityPage } from './pages/ActivityPage';
 import { StudioSyncPage } from './pages/StudioSyncPage';
 import { SettingsPage } from './pages/SettingsPage';
@@ -139,6 +140,7 @@ export default function App() {
           )}
           <div className={page === 'dashboard' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Dashboard error"><Dashboard syncProgresses={syncProgresses} visible={page === 'dashboard'} onNavigate={setPage} /></ErrorBoundary></div>
           <div className={page === 'library' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Library error"><LibraryPage visible={page === 'library'} /></ErrorBoundary></div>
+          <div className={page === 'links' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Links error"><LinksPage visible={page === 'links'} /></ErrorBoundary></div>
           <div className={page === 'folders' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Folders error"><FoldersPage visible={page === 'folders'} /></ErrorBoundary></div>
           <div className={page === 'studio' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="Studio Sync error"><StudioSyncPage syncProgresses={syncProgresses} visible={page === 'studio'} /></ErrorBoundary></div>
           <div className={page === 'review' ? 'h-full' : 'hidden'}><ErrorBoundary fallbackLabel="File Review error"><FileReviewPage visible={page === 'review'} onPendingCountChange={setPendingAssociations} /></ErrorBoundary></div>
