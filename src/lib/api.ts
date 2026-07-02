@@ -12,6 +12,23 @@ export interface FolderClassification {
   reason: 'name_match' | 'high_audio_ratio' | 'none';
 }
 
+/** A locally-known link from the desktop links registry (Links page). */
+export interface LinkListItem {
+  tracking_id: string;
+  kind: 'listen' | 'project';
+  project_id: string | null;
+  project_name: string | null;
+  asset_id: string | null;
+  version_id: string | null;
+  url: string;
+  label: string | null;
+  allow_download: number;
+  collaborator_mode: string | null;
+  expires_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
 /** Result of sync:prioritizeProject ("Sync This Project", D3). */
 export type PrioritizeResult =
   | { needsConfirmation: true; retryCount: number }
@@ -90,6 +107,11 @@ export interface WaviAPI {
     }) => Promise<{ shareUrl?: string; trackingId?: string; reused?: boolean; error?: string }>;
     revokeLink: (opts: { trackingId: string; projectId?: string }) =>
       Promise<{ success?: boolean; error?: string }>;
+  };
+  links: {
+    getAll: () => Promise<LinkListItem[]>;
+    rename: (opts: { trackingId: string; label: string | null }) => Promise<{ success?: boolean; error?: string }>;
+    revoke: (opts: { trackingId: string }) => Promise<{ success?: boolean; error?: string }>;
   };
   project: {
     publishVersion: (opts: { localProjectId: string }) => Promise<{ versionId?: string; versionNumber?: number; fileCount?: number; created?: boolean; skipped?: boolean; error?: string }>;
@@ -193,6 +215,7 @@ const _stub: WaviAPI = {
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop, revokeLink: _noop },
+  links: { getAll: () => Promise.resolve([]), rename: _noop, revoke: _noop },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
