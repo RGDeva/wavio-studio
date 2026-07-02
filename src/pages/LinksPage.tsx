@@ -113,7 +113,9 @@ export function LinksPage({ visible }: { visible?: boolean }) {
           <div>
             <h1 className="text-xl font-bold text-white">Links</h1>
             <p className="text-xs text-white/30 mt-0.5">
-              Every link you've shared from this computer. Revoking a link stops it working for everyone immediately.
+              Links created on this computer. Status reflects actions taken here — links created or revoked
+              on wavi.stream or another device appear once cloud link sync arrives. Revoking here stops the
+              link working for everyone immediately.
             </p>
           </div>
           <button onClick={refresh} title="Refresh"
@@ -212,7 +214,7 @@ export function LinksPage({ visible }: { visible?: boolean }) {
                         <p className="text-sm font-medium text-white/85 truncate">{linkDisplayName(link)}</p>
                         <button
                           onClick={() => { setEditing(link.tracking_id); setEditValue(link.label ?? ''); }}
-                          title="Rename internal label"
+                          title="Rename internal label (stored on this computer)"
                           className="text-white/20 hover:text-white/60 flex-shrink-0"
                         >
                           <Pencil className="w-3 h-3" />
@@ -223,7 +225,7 @@ export function LinksPage({ visible }: { visible?: boolean }) {
 
                     {/* Badges */}
                     <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${STATUS_STYLES[status].cls}`}>{STATUS_STYLES[status].label}</span>
+                      <span title="As last seen from this device — the server is authoritative for live access" className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${STATUS_STYLES[status].cls}`}>{STATUS_STYLES[status].label}</span>
                       <span className="px-1.5 py-0.5 rounded text-[10px] bg-cyan-500/10 text-cyan-400/80">
                         {link.kind === 'project' ? 'Project Link' : 'Listen Link'}
                       </span>
