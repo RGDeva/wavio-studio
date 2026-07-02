@@ -132,6 +132,29 @@ function repairStalledQueue(db: any): { recovered: number; deduped: number } {
     db.prepare(`DELETE FROM sync_queue WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
     deduped = ids.length;
   }
+
+  // Pass 3 (mirrors db.ts): prune active rows with a dangling file_id when a
+  // valid row exists for the same work item (legacy watcher enqueue bug).
+  const danglingDupes = db.prepare(`
+    SELECT q.id FROM sync_queue q
+    WHERE q.status IN ('pending', 'retrying')
+      AND q.file_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM files f WHERE f.id = q.file_id)
+      AND EXISTS (
+        SELECT 1 FROM sync_queue q2
+        JOIN files f2 ON f2.id = q2.file_id
+        WHERE q2.id != q.id
+          AND q2.status IN ('pending', 'uploading', 'retrying')
+          AND q2.type = q.type
+          AND q2.project_id = q.project_id
+          AND COALESCE(q2.file_name, '') = COALESCE(q.file_name, '')
+      )
+  `).all() as { id: string }[];
+  if (danglingDupes.length > 0) {
+    const ids = danglingDupes.map((r) => r.id);
+    db.prepare(`DELETE FROM sync_queue WHERE id IN (${ids.map(() => '?').join(',')})`).run(...ids);
+    deduped += ids.length;
+  }
   return { recovered, deduped };
 }
 
@@ -306,6 +329,30 @@ maybeDescribe('Startup crash recovery + dedup (repairStalledQueue, real arm64 sq
     const before = db.prepare('SELECT COUNT(*) c FROM sync_queue').get().c;
     repairStalledQueue(db);
     expect(db.prepare('SELECT COUNT(*) c FROM sync_queue').get().c).toBe(before);
+  });
+
+  it('prunes a dangling-file_id duplicate when a valid row exists for the same work item (legacy watcher bug)', () => {
+    db.prepare(`INSERT INTO files (id, file_path, file_name, file_type, file_size, created_at, modified_at)
+      VALUES ('real-fid', '/fake/a.wav', 'a.wav', 'wav', 10, ?, ?)`).run(iso(), iso());
+    // Valid row from the fixed enqueue path
+    db.prepare(`INSERT INTO sync_queue (id, project_id, file_id, file_name, type, status, priority, created_at)
+      VALUES ('valid', '__standalone__', 'real-fid', 'a.wav', 'dependency_upload', 'pending', 3, ?)`).run(iso());
+    // Dangling row the old watcher bug left behind (file_id never persisted)
+    db.prepare(`INSERT INTO sync_queue (id, project_id, file_id, file_name, type, status, priority, created_at)
+      VALUES ('dangling', '__standalone__', 'ghost-fid', 'a.wav', 'dependency_upload', 'pending', 3, ?)`).run(iso());
+
+    const result = repairStalledQueue(db);
+    expect(result.deduped).toBe(1);
+    const remaining = db.prepare("SELECT id FROM sync_queue").all();
+    expect(remaining).toEqual([{ id: 'valid' }]);
+  });
+
+  it('keeps a solitary dangling-file_id row (file_name fallback still syncs it)', () => {
+    db.prepare(`INSERT INTO sync_queue (id, project_id, file_id, file_name, type, status, priority, created_at)
+      VALUES ('solo', '__standalone__', 'ghost-fid', 'b.wav', 'dependency_upload', 'pending', 3, ?)`).run(iso());
+    const result = repairStalledQueue(db);
+    expect(result.deduped).toBe(0);
+    expect(db.prepare('SELECT COUNT(*) c FROM sync_queue').get().c).toBe(1);
   });
 });
 
