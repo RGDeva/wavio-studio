@@ -25,6 +25,7 @@ export default defineConfig({
       'electron/restore.security.test.ts',
       'electron/config.test.ts',
       'electron/syncScalability.test.ts',
+      'electron/adapters/adapters.test.ts',
       'src/lib/folderAddFlow.test.ts',
     ],
     environment: 'node',
