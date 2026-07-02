@@ -1044,6 +1044,17 @@ ipcMain.handle('share:createLink', async (_e, opts: {
       const { updateProjectShareInfo } = require('./db');
       updateProjectShareInfo(opts.projectId, data.shareUrl, data.trackingId);
     }
+    // Links registry (Links page): remember what we created so the creator
+    // can label/duplicate/revoke it later without a server list endpoint.
+    try {
+      const { recordLink } = require('./db');
+      recordLink({
+        tracking_id: data.trackingId, kind: 'listen',
+        project_id: opts.projectId ?? null, asset_id: opts.assetId,
+        url: data.shareUrl, allow_download: opts.allowDownload ?? true,
+        expires_at: opts.expiresAt ?? null,
+      });
+    } catch (e) { mainLog(`[links] record listen link failed: ${(e as any)?.message}`); }
     return { shareUrl: data.shareUrl, trackingId: data.trackingId, reused: data.reused };
   } catch (e: any) {
     captureException(e);
@@ -1087,6 +1098,7 @@ ipcMain.handle('share:revokeLink', async (_e, opts: { trackingId: string; projec
       const { updateProjectShareInfo } = require('./db');
       updateProjectShareInfo(opts.projectId, null, null);
     }
+    try { require('./db').markLinkRevoked(opts.trackingId); } catch { /* registry best-effort */ }
     return { success: true };
   } catch (e: any) {
     captureException(e);
@@ -1385,6 +1397,18 @@ ipcMain.handle('project:createLink', async (_e, opts: {
   // regardless of what WAVI_PUBLIC_URL is set to on the Vercel side.
   if (result && !(result as any).error && (result as any).trackingId) {
     (result as any).linkUrl = `${WEB_BASE}/project-link/${(result as any).trackingId}`;
+    // Links registry (Links page)
+    try {
+      const { recordLink } = require('./db');
+      recordLink({
+        tracking_id: (result as any).trackingId, kind: 'project',
+        project_id: opts.projectId, version_id: versionId,
+        url: (result as any).linkUrl,
+        allow_download: opts.allowDownload ?? true,
+        collaborator_mode: opts.collaboratorMode ?? 'view',
+        expires_at: opts.expiresAt ?? null,
+      });
+    } catch (e) { mainLog(`[links] record project link failed: ${(e as any)?.message}`); }
   }
   return result;
 });
@@ -1392,7 +1416,42 @@ ipcMain.handle('project:createLink', async (_e, opts: {
 ipcMain.handle('project:revokeLink', async (_e, opts: { trackingId: string }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
-  return desktopApiPost(token, 'revoke-project-link', { trackingId: opts.trackingId });
+  const result = await desktopApiPost(token, 'revoke-project-link', { trackingId: opts.trackingId });
+  if (result && !(result as any).error) {
+    try { require('./db').markLinkRevoked(opts.trackingId); } catch { /* registry best-effort */ }
+  }
+  return result;
+});
+
+// ── Links registry (Links page, Phase C) ─────────────────────────────────────
+// Reads/labels come from the local registry; revocation dispatches to the
+// existing server actions by kind — the server stays authoritative.
+ipcMain.handle('links:getAll', () => {
+  try { return require('./db').getLinks(); } catch { return []; }
+});
+
+ipcMain.handle('links:rename', (_e, opts: { trackingId: string; label: string | null }) => {
+  try { return { success: require('./db').renameLink(opts.trackingId, opts.label) }; }
+  catch (e: any) { return { error: e?.message ?? 'Rename failed' }; }
+});
+
+ipcMain.handle('links:revoke', async (_e, opts: { trackingId: string }) => {
+  const { getLinkByTrackingId, markLinkRevoked: markRevoked } = require('./db');
+  const link = getLinkByTrackingId(opts.trackingId);
+  if (!link) return { error: 'Link not found' };
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+  const action = link.kind === 'project' ? 'revoke-project-link' : 'revoke-share-link';
+  const result = await desktopApiPost(token, action, { trackingId: opts.trackingId });
+  if (result && !(result as any).error) {
+    markRevoked(opts.trackingId);
+    if (link.kind === 'listen' && link.project_id) {
+      const { updateProjectShareInfo } = require('./db');
+      updateProjectShareInfo(link.project_id, null, null);
+    }
+    logActivity({ id: crypto.randomUUID(), type: 'share_link_revoked', message: `Revoked link: ${opts.trackingId}` });
+  }
+  return result;
 });
 
 ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: string }) => {

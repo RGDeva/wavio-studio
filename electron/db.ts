@@ -214,6 +214,37 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   // instead of the non-downloadable cloud_version_id fingerprint.
   try { db.exec('ALTER TABLE projects ADD COLUMN project_asset_id TEXT'); } catch { /* already exists */ }
 
+  // Local registry of links this desktop created (Links page, Phase C).
+  // Purely additive; the server remains authoritative for permissions and
+  // resolution — this table exists so the creator can see, label, duplicate
+  // and revoke their links without a server list endpoint. Analytics columns
+  // intentionally absent until the canonical-link server layer lands.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS links (
+      tracking_id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL CHECK (kind IN ('listen', 'project')),
+      project_id TEXT,
+      asset_id TEXT,
+      version_id TEXT,
+      url TEXT NOT NULL,
+      label TEXT,
+      allow_download INTEGER DEFAULT 1,
+      collaborator_mode TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      revoked_at TEXT
+    )
+  `);
+  // Backfill: legacy listen links recorded only as projects.share_url/tracking_id.
+  try {
+    db.exec(`
+      INSERT OR IGNORE INTO links (tracking_id, kind, project_id, url, created_at)
+      SELECT tracking_id, 'listen', id, share_url, COALESCE(modified_at, created_at)
+      FROM projects
+      WHERE tracking_id IS NOT NULL AND share_url IS NOT NULL
+    `);
+  } catch { /* backfill is best-effort */ }
+
   // ── Restored projects — recipient-side Project Link restore tracking ─────
   // Stores every project that was received via a Project Link share.
   // Never overwrites the owner's original version — collaboration is one-way
@@ -440,6 +471,82 @@ export function updateProjectSyncStatus(
 
 export function updateProjectShareInfo(id: string, shareUrl: string | null, trackingId: string | null) {
   db.prepare('UPDATE projects SET share_url = ?, tracking_id = ? WHERE id = ?').run(shareUrl, trackingId, id);
+}
+
+// ── Links registry (Phase C) ─────────────────────────────────────────────────
+
+export interface LinkRecord {
+  tracking_id: string;
+  kind: 'listen' | 'project';
+  project_id: string | null;
+  asset_id: string | null;
+  version_id: string | null;
+  url: string;
+  label: string | null;
+  allow_download: number;
+  collaborator_mode: string | null;
+  expires_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+/** Records (or refreshes — server may return a reused link) a created link. */
+export function recordLink(link: {
+  tracking_id: string;
+  kind: 'listen' | 'project';
+  project_id?: string | null;
+  asset_id?: string | null;
+  version_id?: string | null;
+  url: string;
+  label?: string | null;
+  allow_download?: boolean;
+  collaborator_mode?: string | null;
+  expires_at?: string | null;
+}) {
+  db.prepare(`
+    INSERT INTO links (tracking_id, kind, project_id, asset_id, version_id, url, label, allow_download, collaborator_mode, expires_at, created_at)
+    VALUES (@tracking_id, @kind, @project_id, @asset_id, @version_id, @url, @label, @allow_download, @collaborator_mode, @expires_at, @created_at)
+    ON CONFLICT(tracking_id) DO UPDATE SET
+      url = excluded.url,
+      allow_download = excluded.allow_download,
+      collaborator_mode = excluded.collaborator_mode,
+      expires_at = excluded.expires_at,
+      revoked_at = NULL
+  `).run({
+    tracking_id: link.tracking_id,
+    kind: link.kind,
+    project_id: link.project_id ?? null,
+    asset_id: link.asset_id ?? null,
+    version_id: link.version_id ?? null,
+    url: link.url,
+    label: link.label ?? null,
+    allow_download: link.allow_download === false ? 0 : 1,
+    collaborator_mode: link.collaborator_mode ?? null,
+    expires_at: link.expires_at ?? null,
+    created_at: new Date().toISOString(),
+  });
+}
+
+/** All locally-known links, newest first, with the project's display name. */
+export function getLinks(): Array<LinkRecord & { project_name: string | null }> {
+  return db.prepare(`
+    SELECT l.*, p.project_name
+    FROM links l LEFT JOIN projects p ON p.id = l.project_id
+    ORDER BY l.created_at DESC
+  `).all() as Array<LinkRecord & { project_name: string | null }>;
+}
+
+export function renameLink(trackingId: string, label: string | null): boolean {
+  return db.prepare('UPDATE links SET label = ? WHERE tracking_id = ?').run(label, trackingId).changes > 0;
+}
+
+export function markLinkRevoked(trackingId: string) {
+  db.prepare('UPDATE links SET revoked_at = ? WHERE tracking_id = ? AND revoked_at IS NULL')
+    .run(new Date().toISOString(), trackingId);
+}
+
+export function getLinkByTrackingId(trackingId: string): LinkRecord | undefined {
+  return db.prepare('SELECT * FROM links WHERE tracking_id = ?').get(trackingId) as LinkRecord | undefined;
 }
 
 /** Stores the cloud asset_id for the project's own DAW file (.als/.ptx/etc) so
