@@ -211,6 +211,18 @@ export function getToolByName(name: string): RegisteredTool | undefined {
   return TOOL_REGISTRY.find((t) => t.name === name);
 }
 
+/**
+ * Registers the Phase H project tools (search_files, open_in_daw,
+ * inspect_sync_status, sync_project, publish_version). Called once from
+ * main.ts after the sync agent exists; deps are injected to avoid circular
+ * imports and to keep the tool modules testable. Idempotent.
+ */
+export function registerProjectTools(tools: RegisteredTool[]) {
+  for (const tool of tools) {
+    if (!TOOL_REGISTRY.some((t) => t.name === tool.name)) TOOL_REGISTRY.push(tool);
+  }
+}
+
 // ── LLM Agent Loop ────────────────────────────────────────────────────────────
 
 const API_BASE = 'https://wavi.stream/api';
@@ -342,6 +354,7 @@ function buildSystemPrompt(context: ProjectContext | null): string {
     lines.push(`Versions: ${context.versionCount}`);
     lines.push(`Files in project: ${context.files?.length ?? 0}`);
     if (context.lastSyncedAt) lines.push(`Last synced: ${context.lastSyncedAt}`);
+    if (context.versionId) lines.push(`Selected version: ${context.versionId}`);
   }
   return lines.join('\n');
 }

@@ -3,6 +3,8 @@
 
 export interface ProjectContext {
   projectId: string | null;
+  /** Immutable version currently selected in the renderer, when applicable. */
+  versionId?: string | null;
   projectName: string | null;
   dawType: string | null;
   filePath: string | null;

@@ -448,6 +448,41 @@ app.whenReady().then(async () => {
     mainLog('[sync] restored user pause from settings');
   }
   syncAgent.start();
+  // Phase H: Copilot project tools — deps injected here to avoid circular
+  // imports; every invocation is audit-logged to activity_log.
+  {
+    const { buildProjectTools } = require('./copilotTools');
+    const { registerProjectTools } = require('./agentLoop');
+    const dbMod = require('./db');
+    registerProjectTools(buildProjectTools({
+      isAuthenticated: () => !!getDecryptedToken(),
+      logAudit: (entry: { tool: string; params: Record<string, unknown>; outcome: string }) => {
+        try {
+          logActivity({
+            id: crypto.randomUUID(), type: 'copilot_tool',
+            message: `Copilot tool ${entry.tool}: ${entry.outcome}`,
+            metadata: { tool: entry.tool, params: entry.params, outcome: entry.outcome },
+          });
+        } catch { /* audit must never break the tool */ }
+      },
+      searchFiles: (q: string, limit: number) => dbMod.searchFiles(q, limit) as any[],
+      openPath: (p: string) => { void shell.openPath(p); },
+      fileExists: (p: string) => fs.existsSync(p),
+      getSyncStatus: () => syncAgent?.getStatus() ?? 'idle',
+      getQueueCounts: () => dbMod.getSyncQueueCounts(),
+      prioritizeProject: (projectId: string, force?: boolean) => {
+        // Same contract as the sync:prioritizeProject IPC handler: large
+        // failed-retry batches need explicit confirmation before running.
+        if (!syncAgent) return { needsConfirmation: false as const, bumped: 0, requeued: 0, blockedPermanent: 0, skippedMissing: 0 };
+        if (!force) {
+          const { retryable } = classifyFailedRowsForProject(projectId);
+          if (retryable.length > RETRY_CONFIRM_THRESHOLD) return { needsConfirmation: true as const, retryCount: retryable.length };
+        }
+        return { needsConfirmation: false as const, ...syncAgent.prioritizeProject(projectId) };
+      },
+      publishVersion: async (localProjectId: string) => (await doPublishVersion({ localProjectId })) as any,
+    }));
+  }
   initCopilot(store);
   registerAbletonHandlers();
   startBridgeServer();
@@ -1182,9 +1217,7 @@ function findPreviewCandidate(syncedFiles: any[], projectRoot: string): any | nu
   return null;
 }
 
-ipcMain.handle('project:publishVersion', async (_e, opts: {
-  localProjectId: string;  // local SQLite project id
-}) => {
+async function doPublishVersion(opts: { localProjectId: string }) {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
 
@@ -1273,7 +1306,9 @@ ipcMain.handle('project:publishVersion', async (_e, opts: {
   });
 
   return result;
-});
+}
+
+ipcMain.handle('project:publishVersion', (_e, opts: { localProjectId: string }) => doPublishVersion(opts));
 
 ipcMain.handle('project:createLink', async (_e, opts: {
   projectId: string;           // local SQLite project id
