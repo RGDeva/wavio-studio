@@ -99,6 +99,7 @@ export class SyncAgent {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private activeUploads = new Set<string>();
   private activeControllers = new Map<string, AbortController>();
+  private retryTimers = new Set<ReturnType<typeof setTimeout>>();
   private maxConcurrent = DEFAULT_MAX_CONCURRENT;
 
   constructor(db: Database.Database, onProgress: (progress: SyncProgress) => void) {
@@ -146,6 +147,12 @@ export class SyncAgent {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
+    // Clear scheduled retry timers so a stopped agent can't wake later (and
+    // headless harness processes aren't kept alive by dangling timeouts).
+    // In-flight uploads are deliberately left to finish; if the process dies
+    // first, their 'uploading' rows are recovered by repairStalledQueue().
+    for (const t of this.retryTimers) clearTimeout(t);
+    this.retryTimers.clear();
   }
 
   /** User-initiated pause — distinct from the system 'auth'/'limit' pauses so
@@ -214,6 +221,9 @@ export class SyncAgent {
   }
 
   private async _tick() {
+    // Hardening: tick() is reachable from IPC handlers, retry timers, and
+    // completion callbacks — none of which may start work on a stopped agent.
+    if (!this.running) return;
     if (!this.authToken) return;
     if (this.pausedReason !== null) return;
     if (this.activeUploads.size >= this.maxConcurrent) return;
@@ -334,9 +344,15 @@ export class SyncAgent {
         metadata: { itemId: item.id, retries },
       });
 
-      // Schedule in-memory retry tick (belt-and-suspenders alongside next_retry_at DB gate)
+      // Schedule in-memory retry tick (belt-and-suspenders alongside
+      // next_retry_at DB gate). Tracked so stop() can cancel it — _tick()'s
+      // running guard is the second layer of the same defense.
       if (!failed) {
-        setTimeout(() => this.tick(), delay);
+        const timer = setTimeout(() => {
+          this.retryTimers.delete(timer);
+          this.tick();
+        }, delay);
+        this.retryTimers.add(timer);
       }
     }
   }

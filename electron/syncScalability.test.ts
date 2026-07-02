@@ -520,10 +520,13 @@ const MAX_ALLOWED_CONCURRENT = 8;
 class MirrorScheduler {
   maxConcurrent = DEFAULT_MAX_CONCURRENT;
   pausedReason: 'auth' | 'limit' | 'user' | null = null;
+  running = true; // mirrors SyncAgent.running (tests construct it "started")
   activeUploads = new Set<string>();
   activeControllers = new Map<string, AbortController>();
   completedOrder: string[] = [];
   queue: { id: string; run: () => Promise<void> }[] = [];
+
+  stop() { this.running = false; }
 
   setMaxConcurrent(n: number) {
     const floored = Number.isFinite(n) ? Math.floor(n) : DEFAULT_MAX_CONCURRENT;
@@ -543,6 +546,7 @@ class MirrorScheduler {
   }
 
   tick() {
+    if (!this.running) return; // hardening: no work starts on a stopped agent
     if (this.pausedReason !== null) return;
     if (this.activeUploads.size >= this.maxConcurrent) return;
     const slots = this.maxConcurrent - this.activeUploads.size;
@@ -577,6 +581,32 @@ describe('SyncAgent scheduler mirror — immediate refill (core throughput fix)'
     await new Promise((r) => setTimeout(r, 20));
     expect(started).toBe(N);
     expect(sched.completedOrder.length).toBe(N);
+  });
+
+  it('stop() mid-drain: completion refills start no further work (shutdown hardening)', async () => {
+    const sched = new MirrorScheduler();
+    sched.maxConcurrent = 1;
+    let started = 0;
+    for (let i = 0; i < 5; i++) {
+      sched.queue.push({
+        id: `item-${i}`,
+        run: async () => { started++; await new Promise((r) => setTimeout(r, 10)); },
+      });
+    }
+    sched.tick();          // starts item-0
+    sched.stop();          // stop while item-0 is in flight
+    await new Promise((r) => setTimeout(r, 80));
+    expect(started).toBe(1);              // the in-flight item finished, nothing else started
+    expect(sched.queue.length).toBe(4);   // rest of the queue untouched for next launch
+  });
+
+  it('tick() after stop() is a no-op (IPC/retry-timer path)', () => {
+    const sched = new MirrorScheduler();
+    let started = false;
+    sched.queue.push({ id: 'x', run: () => { started = true; return Promise.resolve(); } });
+    sched.stop();
+    sched.tick(); // e.g. a stale retry timer or sync:now arriving post-shutdown
+    expect(started).toBe(false);
   });
 
   it('never runs more than maxConcurrent items at once', async () => {
