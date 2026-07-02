@@ -3,6 +3,7 @@ import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, P
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { DawLogo } from '../components/DawLogo';
+import { ProjectDetail } from '../components/ProjectDetail';
 import { formatBytes, formatRelativeTime, getDawColor, truncatePath } from '../lib/utils';
 import type { Project, SyncQueueItem, SyncProgress } from '../types';
 
@@ -33,6 +34,7 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
   const [syncing, setSyncing] = useState(false);
   const [pendingAssociations, setPendingAssociations] = useState(0);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [importStatus, setImportStatus] = useState<string | null>(null);
 
   const mountedRef = useRef(true);
@@ -153,6 +155,14 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {selectedProject && (
+        <ProjectDetail
+          project={selectedProject}
+          onClose={() => { setSelectedProject(null); refresh(); }}
+          onNavigate={onNavigate}
+        />
+      )}
+
       {/* Drag overlay */}
       {isDragOver && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-cyan-500/10 backdrop-blur-sm border-2 border-dashed border-cyan-400/50">
@@ -339,6 +349,7 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
                   key={project.id}
                   project={project}
                   progress={Object.values(syncProgresses).find(p => p.projectId === project.id)}
+                  onOpen={() => setSelectedProject(project)}
                 />
               ))}
             </div>
@@ -359,26 +370,14 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
   );
 }
 
-function ProjectRow({ project, progress }: { project: Project; progress?: SyncProgress }) {
+function ProjectRow({ project, progress, onOpen }: { project: Project; progress?: SyncProgress; onOpen: () => void }) {
   const dawColor = getDawColor(project.daw_type);
   const pct = progress?.percentage;
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
   const [loadingVersions, setLoadingVersions] = useState(false);
-  const [shareUrl, setShareUrl] = useState<string | null>(project.share_url ?? null);
-  const [trackingId, setTrackingId] = useState<string | null>(project.tracking_id ?? null);
-  useEffect(() => {
-    if (project.share_url && !shareUrl) setShareUrl(project.share_url);
-    if (project.tracking_id && !trackingId) setTrackingId(project.tracking_id);
-  }, [project.share_url, project.tracking_id]);
-  const [shareLoading, setShareLoading] = useState(false);
-  const [revokeLoading, setRevokeLoading] = useState(false);
-  const [shareError, setShareError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
-  const [showPermissions, setShowPermissions] = useState(false);
   const [prioritizing, setPrioritizing] = useState(false);
   const [prioritizeNote, setPrioritizeNote] = useState<string | null>(null);
-  const [allowDownload, setAllowDownload] = useState(true);
 
   const handlePrioritize = async () => {
     setPrioritizing(true);
@@ -406,115 +405,6 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
       setPrioritizing(false);
     }
   };
-  const [expiry, setExpiry] = useState<'never' | '24h' | '7d' | '30d'>('never');
-  // Project link state
-  const [projectLinkUrl, setProjectLinkUrl] = useState<string | null>(null);
-  const [projectLinkLoading, setProjectLinkLoading] = useState(false);
-  const [projectLinkCopied, setProjectLinkCopied] = useState(false);
-  const [projectLinkError, setProjectLinkError] = useState<string | null>(null);
-
-  function expiryToDate(e: typeof expiry): string | undefined {
-    if (e === 'never') return undefined;
-    const ms = { '24h': 86400000, '7d': 604800000, '30d': 2592000000 }[e];
-    return new Date(Date.now() + ms).toISOString();
-  }
-
-  const createProjectLink = async () => {
-    if (!project.cloud_id || projectLinkLoading) return;
-    if (projectLinkUrl) {
-      navigator.clipboard.writeText(projectLinkUrl).then(() => {
-        setProjectLinkCopied(true);
-        setTimeout(() => setProjectLinkCopied(false), 2000);
-      });
-      return;
-    }
-    setProjectLinkLoading(true);
-    setProjectLinkError(null);
-    try {
-      const result = await api.project.createLink({ projectId: project.id, cloudProjectId: project.cloud_id });
-      if ((result as any).error) {
-        setProjectLinkError((result as any).error);
-      } else if ((result as any).linkUrl) {
-        setProjectLinkUrl((result as any).linkUrl);
-        navigator.clipboard.writeText((result as any).linkUrl).then(() => {
-          setProjectLinkCopied(true);
-          setTimeout(() => setProjectLinkCopied(false), 2000);
-        });
-      }
-    } catch (e: any) {
-      setProjectLinkError(e?.message ?? 'Failed to create project link');
-    }
-    setProjectLinkLoading(false);
-  };
-
-  const createShareLink = async () => {
-    if (shareLoading) return;
-    // If we already have a URL, just copy it again
-    if (shareUrl) {
-      navigator.clipboard.writeText(shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
-      setShowPermissions(false);
-      return;
-    }
-    setShareLoading(true);
-    setShareError(null);
-    try {
-      const files = await api.files.getByProject(project.id);
-      const synced = (files as any[]).filter((f: any) => f.sync_status === 'synced' && f.cloud_url);
-      const best = synced.find((f: any) => f.role === 'master' || f.role === 'mix')
-        ?? synced.find((f: any) => ['wav','mp3','flac','aiff','aif'].includes(f.file_type))
-        ?? synced[0];
-
-      if (!best) {
-        setShareError('No synced files yet — wait for the upload to complete.');
-        setShareLoading(false);
-        return;
-      }
-
-      const assetId = best.cloud_asset_id ?? best.cloud_id ?? null;
-      if (!assetId) {
-        setShareError('Asset not yet registered with Wavi. Sync the project first.');
-        setShareLoading(false);
-        return;
-      }
-
-      const result = await api.share.createLink({
-        assetId,
-        projectId: project.id,
-        allowDownload,
-        expiresAt: expiryToDate(expiry),
-      });
-      if (result.error) {
-        setShareError(result.error);
-      } else if (result.shareUrl) {
-        setShareUrl(result.shareUrl);
-        if (result.trackingId) setTrackingId(result.trackingId);
-        navigator.clipboard.writeText(result.shareUrl).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
-        setShowPermissions(false);
-      }
-    } catch (e: any) {
-      setShareError(e?.message ?? 'Failed to create link');
-    }
-    setShareLoading(false);
-  };
-
-  const revokeShareLink = async () => {
-    if (!trackingId || revokeLoading) return;
-    setRevokeLoading(true);
-    setShareError(null);
-    try {
-      const result = await api.share.revokeLink({ trackingId, projectId: project.id });
-      if (result.error) {
-        setShareError(result.error);
-      } else {
-        setShareUrl(null);
-        setTrackingId(null);
-      }
-    } catch (e: any) {
-      setShareError(e?.message ?? 'Failed to revoke link');
-    }
-    setRevokeLoading(false);
-  };
-
   const toggleVersions = async () => {
     if (expanded) { setExpanded(false); return; }
     setExpanded(true);
@@ -539,7 +429,7 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
     <div className="bg-[#111] border border-[#1a1a1a] hover:border-[#2a2a2a] rounded-xl overflow-hidden transition-colors">
       <div className="flex items-center gap-3 p-4">
         <DawLogo daw={project.daw_type} size={34} />
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 cursor-pointer" onClick={onOpen} title="Open project details">
           <div className="flex items-center gap-2 mb-0.5">
             <span className="text-sm font-semibold text-white truncate">{project.project_name}</span>
           </div>
@@ -586,120 +476,15 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
               )}
             </div>
           )}
-          {/* Share link controls — visible when project is synced */}
-          {project.sync_status === 'synced' && (
-            <div className="mt-2 flex flex-col items-end gap-1">
-              {/* Primary action button */}
-              <button
-                onClick={() => shareUrl ? createShareLink() : setShowPermissions(v => !v)}
-                disabled={shareLoading}
-                className="flex items-center gap-1 text-[10px] font-medium text-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
-                title={shareUrl ? 'Copy link' : 'Create Wavi link'}
-              >
-                {shareLoading
-                  ? <div className="w-2.5 h-2.5 border border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                  : copied
-                  ? <Check className="w-2.5 h-2.5 text-green-400" />
-                  : shareUrl
-                  ? <Copy className="w-2.5 h-2.5" />
-                  : <Link className="w-2.5 h-2.5" />
-                }
-                {shareLoading ? 'Creating…' : copied ? 'Copied!' : shareUrl ? 'Copy link' : 'Create link'}
-              </button>
-
-              {/* Permissions panel — shown before creating a new link */}
-              {showPermissions && !shareUrl && (
-                <div className="mt-1 p-2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg flex flex-col gap-2 w-44">
-                  {/* Allow download toggle */}
-                  <label className="flex items-center justify-between cursor-pointer">
-                    <span className="text-[10px] text-white/50">Allow download</span>
-                    <button
-                      type="button"
-                      onClick={() => setAllowDownload(v => !v)}
-                      className={`w-7 h-4 rounded-full transition-colors relative ${allowDownload ? 'bg-cyan-600' : 'bg-white/10'}`}
-                    >
-                      <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-all ${allowDownload ? 'left-3.5' : 'left-0.5'}`} />
-                    </button>
-                  </label>
-
-                  {/* Expiry selector */}
-                  <div className="flex flex-col gap-1">
-                    <span className="text-[10px] text-white/50">Expires</span>
-                    <div className="grid grid-cols-2 gap-1">
-                      {(['never', '24h', '7d', '30d'] as const).map(opt => (
-                        <button
-                          key={opt}
-                          type="button"
-                          onClick={() => setExpiry(opt)}
-                          className={`text-[9px] py-0.5 rounded transition-colors ${expiry === opt ? 'bg-cyan-600 text-white' : 'bg-white/5 text-white/40 hover:bg-white/10'}`}
-                        >
-                          {opt === 'never' ? 'Never' : opt === '24h' ? '24 hours' : opt === '7d' ? '7 days' : '30 days'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Create button */}
-                  <button
-                    onClick={createShareLink}
-                    disabled={shareLoading}
-                    className="w-full py-1 rounded text-[10px] font-medium bg-cyan-600 hover:bg-cyan-500 text-white transition-colors disabled:opacity-40"
-                  >
-                    {shareLoading ? 'Creating…' : 'Create link'}
-                  </button>
-                </div>
-              )}
-
-              {shareError && <p className="text-[9px] text-red-400 text-right max-w-[160px]">{shareError}</p>}
-              {shareUrl && !copied && (
-                <a
-                  href="#"
-                  onClick={(e) => { e.preventDefault(); api.shell.openExternal(shareUrl); }}
-                  className="text-[9px] text-white/20 hover:text-white/40 transition-colors"
-                >
-                  Open ↗
-                </a>
-              )}
-              {trackingId && (
-                <button
-                  onClick={revokeShareLink}
-                  disabled={revokeLoading}
-                  className="text-[9px] text-red-400/50 hover:text-red-400 transition-colors"
-                >
-                  {revokeLoading ? 'Revoking…' : 'Revoke'}
-                </button>
-              )}
-
-              {/* Project Link — for sharing the full DAW project (ZIP + Open in Wavi Studio) */}
-              {project.cloud_id && (
-                <div className="mt-1 pt-1 border-t border-white/5">
-                  <button
-                    onClick={createProjectLink}
-                    disabled={projectLinkLoading}
-                    className="flex items-center gap-1 text-[10px] font-medium text-purple-400 hover:text-purple-300 transition-colors disabled:opacity-40"
-                    title={projectLinkUrl ? 'Copy project link' : 'Create project link (ZIP download + Open in DAW)'}
-                  >
-                    {projectLinkLoading
-                      ? <div className="w-2.5 h-2.5 border border-purple-400 border-t-transparent rounded-full animate-spin" />
-                      : projectLinkCopied
-                      ? <Check className="w-2.5 h-2.5 text-green-400" />
-                      : projectLinkUrl
-                      ? <Copy className="w-2.5 h-2.5" />
-                      : <Package className="w-2.5 h-2.5" />
-                    }
-                    {projectLinkLoading ? 'Creating…' : projectLinkCopied ? 'Copied!' : projectLinkUrl ? 'Copy project link' : 'Share project'}
-                  </button>
-                  {projectLinkError && <p className="text-[9px] text-red-400 mt-0.5">{projectLinkError}</p>}
-                  {projectLinkUrl && !projectLinkCopied && (
-                    <a href="#" onClick={(e) => { e.preventDefault(); api.shell.openExternal(projectLinkUrl); }}
-                      className="text-[9px] text-white/20 hover:text-white/40 transition-colors">
-                      Open ↗
-                    </a>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
+          {/* Sharing, publishing and file management moved to Project Detail —
+              the row stays focused on status and quick sync actions. */}
+          <button
+            onClick={onOpen}
+            className="flex items-center gap-1 text-[10px] font-medium text-white/30 hover:text-cyan-400 transition-colors"
+            title="Open project details — play, publish, share and manage files"
+          >
+            Open project <ChevronRight className="w-2.5 h-2.5" />
+          </button>
         </div>
       </div>
 
