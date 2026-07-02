@@ -32,6 +32,15 @@ export interface FieldSpec {
   required?: boolean;
 }
 
+export interface ToolInvokeOptions {
+  /**
+   * Set ONLY by the renderer's confirmation card via copilot:confirmTool.
+   * Model-generated tool arguments can never set this — any `confirmed` key
+   * inside params is stripped before the gate is evaluated.
+   */
+  confirmedOutOfBand?: boolean;
+}
+
 export interface EnvelopeDeps {
   /** True when a signed-in session exists (cloud tools require it). */
   isAuthenticated: () => boolean;
@@ -48,7 +57,7 @@ export interface CopilotToolSpec {
   requiresConfirmation?: boolean;
   /** Builds the confirmation-card text when gated. */
   confirmationSummary?: (params: Record<string, unknown>, ctx: unknown) => string;
-  run: (params: Record<string, unknown>, ctx: unknown) => Promise<CopilotToolResult>;
+  run: (params: Record<string, unknown>, ctx: unknown, opts?: ToolInvokeOptions) => Promise<CopilotToolResult>;
 }
 
 /** Only primitives, truncated — never file contents, paths kept short, no tokens. */
@@ -83,8 +92,11 @@ export function validateParams(
  * The returned handler NEVER throws.
  */
 export function wrapTool(spec: CopilotToolSpec, deps: EnvelopeDeps) {
-  return async (rawParams: Record<string, unknown>, ctx: unknown): Promise<CopilotToolResult> => {
-    const params = rawParams ?? {};
+  return async (rawParams: Record<string, unknown>, ctx: unknown, opts?: ToolInvokeOptions): Promise<CopilotToolResult> => {
+    const params = { ...(rawParams ?? {}) };
+    // Security: confirmation is out-of-band. A model that emits
+    // `confirmed: true` in its arguments must NOT bypass the gate.
+    delete (params as Record<string, unknown>).confirmed;
     const audit = (outcome: string) =>
       deps.logAudit({ tool: spec.name, params: sanitizeArgs(params), outcome });
 
@@ -102,8 +114,10 @@ export function wrapTool(spec: CopilotToolSpec, deps: EnvelopeDeps) {
         return { status: 'error', error: 'Sign in to Wavi to use this action. Local search and sync inspection still work offline.' };
       }
 
-      // 3. Confirmation gate — enforced HERE so no caller can skip it
-      if (spec.requiresConfirmation && params.confirmed !== true) {
+      // 3. Confirmation gate — enforced HERE so no caller can skip it.
+      // Only the renderer's confirmation card (copilot:confirmTool) sets
+      // confirmedOutOfBand; tool arguments cannot.
+      if (spec.requiresConfirmation && opts?.confirmedOutOfBand !== true) {
         audit('confirmation_requested');
         return {
           status: 'needs_confirmation',
@@ -113,7 +127,7 @@ export function wrapTool(spec: CopilotToolSpec, deps: EnvelopeDeps) {
       }
 
       // 4. Execute with failure containment
-      const result = await spec.run(params, ctx);
+      const result = await spec.run(params, ctx, opts);
       audit(result.status);
       return result;
     } catch (e) {

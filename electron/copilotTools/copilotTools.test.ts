@@ -70,9 +70,16 @@ describe('envelope: permission + confirmation', () => {
     expect(publishVersion).not.toHaveBeenCalled();
     expect(deps.auditLog.at(-1).outcome).toBe('confirmation_requested');
   });
-  it('publish_version with confirmed:true runs and reports the new version', async () => {
-    const deps = fakeDeps();
+  it('SECURITY: model-supplied confirmed:true is ignored — still needs_confirmation, no side effect', async () => {
+    const publishVersion = vi.fn();
+    const deps = fakeDeps({ publishVersion: publishVersion as any });
     const result = await tool(deps, 'publish_version').handler({ confirmed: true }, ctxWithProject);
+    expect(result.status).toBe('needs_confirmation');
+    expect(publishVersion).not.toHaveBeenCalled();
+  });
+  it('publish_version runs only via the out-of-band confirmation (renderer card path)', async () => {
+    const deps = fakeDeps();
+    const result = await tool(deps, 'publish_version').handler({}, ctxWithProject, { confirmedOutOfBand: true });
     expect(result.status).toBe('done');
     expect(result.message).toContain('v3');
     expect(deps.auditLog.at(-1).outcome).toBe('done');
@@ -145,6 +152,13 @@ describe('tool behaviors', () => {
     const r = await tool(deps, 'sync_project').handler({}, ctxWithProject);
     expect(r.status).toBe('needs_confirmation');
     expect(r.confirmationSummary).toContain('60 failed uploads');
+  });
+  it('sync_project passes force=true only on the out-of-band confirm path', async () => {
+    const calls: any[] = [];
+    const deps = fakeDeps({ prioritizeProject: ((id: string, force?: boolean) => { calls.push(force); return { needsConfirmation: false, bumped: 2, requeued: 1, blockedPermanent: 0, skippedMissing: 0 }; }) as any });
+    await tool(deps, 'sync_project').handler({}, ctxWithProject);
+    await tool(deps, 'sync_project').handler({}, ctxWithProject, { confirmedOutOfBand: true });
+    expect(calls).toEqual([false, true]);
   });
   it('sync_project explains missing-file and blocked outcomes honestly', async () => {
     const deps = fakeDeps({ prioritizeProject: () => ({ needsConfirmation: false, bumped: 0, requeued: 0, blockedPermanent: 0, skippedMissing: 3 }) });

@@ -103,10 +103,10 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): CopilotToolSpec[] 
       description: 'Move the selected project to the front of the sync queue and retry transient failures. Works offline (queued work uploads when back online).',
       parameters: {},
       execution: 'local',
-      run: async (_params, ctx): Promise<CopilotToolResult> => {
+      run: async (_params, ctx, opts): Promise<CopilotToolResult> => {
         const project = requireProject(ctx);
         if (!project) return { status: 'error', error: 'No project selected — open a project first.' };
-        const result = deps.prioritizeProject(project.id);
+        const result = deps.prioritizeProject(project.id, opts?.confirmedOutOfBand === true);
         if (result.needsConfirmation) {
           return {
             status: 'needs_confirmation',
@@ -125,9 +125,7 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): CopilotToolSpec[] 
     {
       name: 'publish_version',
       description: 'Publish an immutable version of the selected project to Wavi. Requires sign-in; asks for your confirmation first.',
-      parameters: {
-        confirmed: { type: 'boolean', description: 'Set by the confirmation card in the app — never by the assistant', required: false },
-      },
+      parameters: {},
       execution: 'cloud',
       requiresConfirmation: true,
       confirmationSummary: (_params, ctx) => {

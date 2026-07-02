@@ -36,6 +36,8 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
   const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null);
   const [newKey, setNewKey] = useState('');
   const [newVal, setNewVal] = useState('');
+  const [pendingConfirm, setPendingConfirm] = useState<{ tool: string; params: Record<string, unknown>; summary: string; ctx: any } | null>(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -65,14 +67,45 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
     try {
       const ctx = await api.copilot.getContext().catch(() => null);
       const history = [...messages, userMsg].map(m => ({ role: m.role as 'user'|'assistant', content: m.content }));
-      const reply = await api.copilot.chat(history, ctx).catch(() => 'Copilot unavailable — ensure you are signed in.');
-      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: reply, ts: new Date().toISOString() }]);
+      const reply = await api.copilot.chat(history, ctx).catch(() => 'Copilot unavailable — ensure you are signed in.' as const);
+      if (typeof reply === 'object' && reply !== null && 'pendingConfirmation' in reply) {
+        // Gated tool: show the confirmation card. Nothing has executed yet —
+        // the envelope enforces this in the main process.
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: reply.content, ts: new Date().toISOString() }]);
+        setPendingConfirm({ ...reply.pendingConfirmation, ctx });
+      } else {
+        setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: reply as string, ts: new Date().toISOString() }]);
+      }
       await api.memory.set('last_chat', content, 'context').catch(() => {});
     } catch {
       setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: 'Error reaching Copilot. Check your connection.', ts: new Date().toISOString() }]);
     }
     setLoading(false);
   }, [input, loading, messages]);
+
+  const handleConfirm = async () => {
+    if (!pendingConfirm || confirmBusy) return;
+    setConfirmBusy(true);
+    try {
+      const r = await api.copilot.confirmTool(pendingConfirm.tool, pendingConfirm.params, pendingConfirm.ctx);
+      setMessages(prev => [...prev, {
+        id: crypto.randomUUID(), role: 'assistant',
+        content: r.message ?? r.error ?? (r.status === 'done' ? 'Done.' : 'Something went wrong.'),
+        ts: new Date().toISOString(),
+      }]);
+    } catch (e) {
+      setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: `Error: ${(e as Error)?.message ?? 'unknown'}`, ts: new Date().toISOString() }]);
+    } finally {
+      setPendingConfirm(null);
+      setConfirmBusy(false);
+    }
+  };
+
+  const handleCancelConfirm = () => {
+    // Explicit cancel: the gated action never runs.
+    setPendingConfirm(null);
+    setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: 'Cancelled — no action was taken.', ts: new Date().toISOString() }]);
+  };
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
@@ -202,6 +235,32 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
             <div className="flex justify-start">
               <div className="bg-white/5 px-4 py-3 rounded-2xl rounded-bl-sm flex gap-1">
                 {[0,1,2].map(i => <span key={i} className="w-1.5 h-1.5 bg-white/30 rounded-full animate-bounce" style={{animationDelay:`${i*0.15}s`}} />)}
+              </div>
+            </div>
+          )}
+          {pendingConfirm && (
+            <div className="mx-1 my-2 bg-amber-500/5 border border-amber-500/30 rounded-xl p-4 space-y-3" role="alertdialog" aria-label="Confirm Copilot action">
+              <p className="text-xs font-semibold text-amber-300">
+                Copilot wants to run: <span className="font-mono">{pendingConfirm.tool.replace(/_/g, ' ')}</span>
+              </p>
+              <p className="text-xs text-white/70 leading-relaxed">{pendingConfirm.summary}</p>
+              <div className="text-[10px] text-white/35 space-y-0.5">
+                {pendingConfirm.ctx?.projectName && <p>Project: {pendingConfirm.ctx.projectName}</p>}
+                {typeof pendingConfirm.ctx?.files?.length === 'number' && <p>Files in project: {pendingConfirm.ctx.files.length}</p>}
+                {pendingConfirm.ctx?.versionId && <p>Selected version: {pendingConfirm.ctx.versionId}</p>}
+                <p>{pendingConfirm.tool === 'publish_version'
+                  ? 'Publishing uploads a snapshot to your Wavi account.'
+                  : 'This may use significant network bandwidth.'}</p>
+              </div>
+              <div className="flex items-center justify-end gap-2">
+                <button onClick={handleCancelConfirm} disabled={confirmBusy}
+                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-white/60 hover:text-white/90 border border-white/10">
+                  Cancel
+                </button>
+                <button onClick={handleConfirm} disabled={confirmBusy}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 disabled:opacity-40">
+                  {confirmBusy ? 'Running…' : 'Confirm'}
+                </button>
               </div>
             </div>
           )}

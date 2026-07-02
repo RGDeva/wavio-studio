@@ -159,6 +159,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
     toggle:     () => ipcRenderer.invoke('copilot:toggle'),
     getContext: () => ipcRenderer.invoke('copilot:getContext'),
     chat:       (messages: unknown[], context: unknown) => ipcRenderer.invoke('copilot:chat', messages, context),
+    confirmTool: (toolName: string, params: Record<string, unknown>, context: unknown) => ipcRenderer.invoke('copilot:confirmTool', toolName, params, context),
   },
 
   // Ableton DAW Companion
