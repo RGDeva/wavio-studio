@@ -26,6 +26,8 @@ export default defineConfig({
       'electron/config.test.ts',
       'electron/syncScalability.test.ts',
       'src/lib/folderAddFlow.test.ts',
+      'src/lib/linksView.test.ts',
+      'electron/links.test.ts',
     ],
     environment: 'node',
   },
