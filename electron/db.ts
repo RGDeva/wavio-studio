@@ -739,6 +739,69 @@ export function bumpProjectPriority(projectId: string, priority: number): number
   return result.changes;
 }
 
+// Errors that retrying cannot fix: auth, permission, and not-found failures.
+// Everything else (timeouts, 5xx, network drops) is considered transient.
+const PERMANENT_SYNC_ERROR = /\b(401|403|404)\b|INVALID_TOKEN|PLAN_LIMIT|UNAUTHORIZED|FORBIDDEN|PERMISSION|NOT_FOUND/i;
+
+export function isPermanentSyncError(message: string | null | undefined): boolean {
+  return !!message && PERMANENT_SYNC_ERROR.test(message);
+}
+
+/**
+ * Splits a project's failed queue rows into what "Sync This Project" may
+ * safely retry vs what must stay blocked:
+ *  - permanent: auth/permission/not-found errors — retrying can't fix them
+ *  - missing:   the local file is gone from disk — retrying would just re-fail
+ *  - retryable: everything else (transient network/server failures)
+ */
+export function classifyFailedRowsForProject(projectId: string): {
+  retryable: string[];
+  permanent: string[];
+  missing: string[];
+} {
+  const rows = db.prepare(`
+    SELECT q.id, q.error_message, f.local_status AS file_local_status, f.sync_status AS file_sync_status
+    FROM sync_queue q
+    LEFT JOIN files f ON f.id = q.file_id
+    WHERE q.project_id = ? AND q.status = 'failed'
+  `).all(projectId) as Array<{ id: string; error_message: string | null; file_local_status: string | null; file_sync_status: string | null }>;
+
+  const retryable: string[] = [];
+  const permanent: string[] = [];
+  const missing: string[] = [];
+  for (const row of rows) {
+    if (row.file_local_status === 'missing' || row.file_sync_status === 'missing') missing.push(row.id);
+    else if (isPermanentSyncError(row.error_message)) permanent.push(row.id);
+    else retryable.push(row.id);
+  }
+  return { retryable, permanent, missing };
+}
+
+export interface ProjectRetrySummary {
+  requeued: number;
+  blockedPermanent: number;
+  skippedMissing: number;
+}
+
+/**
+ * Moves a project's transiently-failed rows back to pending at the given
+ * priority. Pure UPDATE — never inserts, so it can't create duplicate queue
+ * rows, and the status='failed' guard makes repeated invocation idempotent.
+ * Permanent failures and missing-file rows are intentionally left untouched.
+ */
+export function requeueFailedForProject(projectId: string, priority: number): ProjectRetrySummary {
+  const { retryable, permanent, missing } = classifyFailedRowsForProject(projectId);
+  if (retryable.length > 0) {
+    const placeholders = retryable.map(() => '?').join(',');
+    db.prepare(`
+      UPDATE sync_queue
+      SET status = 'pending', retries = 0, error_message = NULL, next_retry_at = NULL, priority = ?
+      WHERE id IN (${placeholders}) AND status = 'failed'
+    `).run(priority, ...retryable);
+  }
+  return { requeued: retryable.length, blockedPermanent: permanent.length, skippedMissing: missing.length };
+}
+
 export function updateSyncItem(id: string, updates: Record<string, unknown>) {
   const keys = Object.keys(updates);
   const setClause = keys.map((k) => `${k} = ?`).join(', ');

@@ -72,6 +72,8 @@ function buildSchema(Database: any) {
       type TEXT NOT NULL,
       status TEXT DEFAULT 'pending',
       priority INTEGER DEFAULT 5,
+      retries INTEGER DEFAULT 0,
+      error_message TEXT,
       next_retry_at TEXT,
       created_at TEXT NOT NULL,
       started_at TEXT
@@ -149,6 +151,42 @@ function bumpProjectPriority(db: any, projectId: string, priority: number): numb
   return db.prepare(`
     UPDATE sync_queue SET priority = ? WHERE project_id = ? AND status IN ('pending', 'retrying')
   `).run(priority, projectId).changes;
+}
+
+// Exact logic from electron/db.ts classifyFailedRowsForProject / requeueFailedForProject (D3).
+const PERMANENT_SYNC_ERROR = /\b(401|403|404)\b|INVALID_TOKEN|PLAN_LIMIT|UNAUTHORIZED|FORBIDDEN|PERMISSION|NOT_FOUND/i;
+function classifyFailedRowsForProject(db: any, projectId: string) {
+  const rows = db.prepare(`
+    SELECT q.id, q.error_message, f.local_status AS file_local_status, f.sync_status AS file_sync_status
+    FROM sync_queue q
+    LEFT JOIN files f ON f.id = q.file_id
+    WHERE q.project_id = ? AND q.status = 'failed'
+  `).all(projectId) as Array<{ id: string; error_message: string | null; file_local_status: string | null; file_sync_status: string | null }>;
+  const retryable: string[] = []; const permanent: string[] = []; const missing: string[] = [];
+  for (const row of rows) {
+    if (row.file_local_status === 'missing' || row.file_sync_status === 'missing') missing.push(row.id);
+    else if (row.error_message && PERMANENT_SYNC_ERROR.test(row.error_message)) permanent.push(row.id);
+    else retryable.push(row.id);
+  }
+  return { retryable, permanent, missing };
+}
+function requeueFailedForProject(db: any, projectId: string, priority: number) {
+  const { retryable, permanent, missing } = classifyFailedRowsForProject(db, projectId);
+  if (retryable.length > 0) {
+    const ph = retryable.map(() => '?').join(',');
+    db.prepare(`
+      UPDATE sync_queue
+      SET status = 'pending', retries = 0, error_message = NULL, next_retry_at = NULL, priority = ?
+      WHERE id IN (${ph}) AND status = 'failed'
+    `).run(priority, ...retryable);
+  }
+  return { requeued: retryable.length, blockedPermanent: permanent.length, skippedMissing: missing.length };
+}
+// Mirrors syncAgent.prioritizeProject: requeue failed, then bump active rows.
+function prioritizeProject(db: any, projectId: string, priority = 10) {
+  const retry = requeueFailedForProject(db, projectId, priority);
+  const bumped = bumpProjectPriority(db, projectId, priority);
+  return { bumped, ...retry };
 }
 
 // Exact SQL from electron/db.ts markFileMissing / reconcileMovedFile.
@@ -314,6 +352,109 @@ maybeDescribe('Sync This Project — priority bump (real arm64 sqlite)', () => {
     const row = db.prepare("SELECT status, priority FROM sync_queue WHERE id='r1'").get();
     expect(row).toEqual({ status: 'retrying', priority: 10 });
     expect(db.prepare('SELECT COUNT(*) c FROM sync_queue').get().c).toBe(1);
+  });
+});
+
+maybeDescribe('Sync This Project — failed-row recovery (D3, real arm64 sqlite)', () => {
+  let Database: any;
+  let db: any;
+
+  beforeEach(async () => {
+    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    db = buildSchema(Database);
+  });
+  afterEach(() => db.close());
+
+  function insertFile(id: string, opts: { localStatus?: string; syncStatus?: string } = {}) {
+    db.prepare(`INSERT INTO files (id, file_path, file_name, file_type, file_size, sync_status, local_status, created_at, modified_at)
+      VALUES (?, ?, ?, 'wav', 100, ?, ?, ?, ?)`)
+      .run(id, `/fake/${id}.wav`, `${id}.wav`, opts.syncStatus ?? 'pending', opts.localStatus ?? 'present', iso(), iso());
+  }
+  function insertQueueRow(id: string, projectId: string, fileId: string | null, status: string, errorMessage: string | null = null) {
+    db.prepare(`INSERT INTO sync_queue (id, project_id, file_id, type, status, priority, error_message, created_at)
+      VALUES (?, ?, ?, 'dependency_upload', ?, 3, ?, ?)`)
+      .run(id, projectId, fileId, status, errorMessage, iso());
+  }
+
+  it('pending project: rows are bumped, nothing requeued', () => {
+    insertFile('f1');
+    insertQueueRow('q1', 'p1', 'f1', 'pending');
+    const s = prioritizeProject(db, 'p1');
+    expect(s).toEqual({ bumped: 1, requeued: 0, blockedPermanent: 0, skippedMissing: 0 });
+    expect(db.prepare("SELECT priority FROM sync_queue WHERE id='q1'").get().priority).toBe(10);
+  });
+
+  it('retrying project: rows are bumped without status reset', () => {
+    insertFile('f1');
+    insertQueueRow('q1', 'p1', 'f1', 'retrying', 'Request timeout after 60000ms');
+    const s = prioritizeProject(db, 'p1');
+    expect(s.bumped).toBe(1);
+    expect(db.prepare("SELECT status FROM sync_queue WHERE id='q1'").get().status).toBe('retrying');
+  });
+
+  it('transient failed upload: requeued as pending at high priority with cleared retry state', () => {
+    insertFile('f1');
+    insertQueueRow('q1', 'p1', 'f1', 'failed', 'fetch failed [ETIMEDOUT]');
+    db.prepare("UPDATE sync_queue SET retries=4, next_retry_at='2026-01-01T00:00:00Z' WHERE id='q1'").run();
+    const s = prioritizeProject(db, 'p1');
+    expect(s.requeued).toBe(1);
+    const row = db.prepare("SELECT status, priority, retries, error_message, next_retry_at FROM sync_queue WHERE id='q1'").get();
+    expect(row).toEqual({ status: 'pending', priority: 10, retries: 0, error_message: null, next_retry_at: null });
+  });
+
+  it('permanent failure (403) stays blocked and is reported', () => {
+    insertFile('f1');
+    insertQueueRow('q1', 'p1', 'f1', 'failed', 'Presign failed: 403 FORBIDDEN');
+    const s = prioritizeProject(db, 'p1');
+    expect(s.requeued).toBe(0);
+    expect(s.blockedPermanent).toBe(1);
+    expect(db.prepare("SELECT status FROM sync_queue WHERE id='q1'").get().status).toBe('failed');
+  });
+
+  it('missing local file is not blindly retried', () => {
+    insertFile('f1', { localStatus: 'missing' });
+    insertQueueRow('q1', 'p1', 'f1', 'failed', 'fetch failed [ECONNRESET]');
+    const s = prioritizeProject(db, 'p1');
+    expect(s.requeued).toBe(0);
+    expect(s.skippedMissing).toBe(1);
+    expect(db.prepare("SELECT status FROM sync_queue WHERE id='q1'").get().status).toBe('failed');
+  });
+
+  it('mixed-status project: each row gets the right treatment', () => {
+    insertFile('f-pend'); insertFile('f-retry'); insertFile('f-trans');
+    insertFile('f-perm'); insertFile('f-miss', { localStatus: 'missing' });
+    insertQueueRow('q-pend', 'p1', 'f-pend', 'pending');
+    insertQueueRow('q-retry', 'p1', 'f-retry', 'retrying', 'timeout');
+    insertQueueRow('q-trans', 'p1', 'f-trans', 'failed', '500 Internal Server Error');
+    insertQueueRow('q-perm', 'p1', 'f-perm', 'failed', '404 NOT_FOUND');
+    insertQueueRow('q-miss', 'p1', 'f-miss', 'failed', 'ENOENT');
+    const s = prioritizeProject(db, 'p1');
+    expect(s).toEqual({ bumped: 3, requeued: 1, blockedPermanent: 1, skippedMissing: 1 }); // bumped = pend + retry + newly-requeued trans
+    expect(db.prepare("SELECT status FROM sync_queue WHERE id='q-trans'").get().status).toBe('pending');
+    expect(db.prepare("SELECT status FROM sync_queue WHERE id='q-perm'").get().status).toBe('failed');
+    expect(db.prepare("SELECT status FROM sync_queue WHERE id='q-miss'").get().status).toBe('failed');
+  });
+
+  it('unrelated projects are completely unaffected', () => {
+    insertFile('f1'); insertFile('f2');
+    insertQueueRow('q1', 'p1', 'f1', 'failed', 'timeout');
+    insertQueueRow('q2', 'p2', 'f2', 'failed', 'timeout');
+    insertQueueRow('q3', 'p2', 'f2b', 'pending');
+    prioritizeProject(db, 'p1');
+    expect(db.prepare("SELECT status, priority FROM sync_queue WHERE id='q2'").get()).toEqual({ status: 'failed', priority: 3 });
+    expect(db.prepare("SELECT priority FROM sync_queue WHERE id='q3'").get().priority).toBe(3);
+  });
+
+  it('duplicate invocation is idempotent — no duplicate rows, stable state', () => {
+    insertFile('f1');
+    insertQueueRow('q1', 'p1', 'f1', 'failed', 'timeout');
+    const first = prioritizeProject(db, 'p1');
+    const second = prioritizeProject(db, 'p1');
+    expect(first.requeued).toBe(1);
+    expect(second.requeued).toBe(0);       // already pending — nothing left to requeue
+    expect(second.bumped).toBe(1);          // bump is a no-op-safe UPDATE of the same row
+    expect(db.prepare('SELECT COUNT(*) c FROM sync_queue').get().c).toBe(1);
+    expect(db.prepare("SELECT status, priority FROM sync_queue WHERE id='q1'").get()).toEqual({ status: 'pending', priority: 10 });
   });
 });
 

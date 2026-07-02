@@ -15,6 +15,7 @@ import {
   repairStalledQueue,
   updateProjectAssetId,
   bumpProjectPriority,
+  requeueFailedForProject,
 } from './db';
 import { fileChecksum } from './watcher';
 import crypto from 'crypto';
@@ -166,14 +167,20 @@ export class SyncAgent {
     return this.pausedReason === 'user';
   }
 
-  /** Bumps every active (pending/retrying) queue row for a project to
-   *  HIGH_PRIORITY so it's picked up ahead of the rest of the backlog on
-   *  the very next tick, without touching any other project's rows or
-   *  resetting/duplicating anything. */
-  prioritizeProject(projectId: string) {
-    const changed = bumpProjectPriority(projectId, HIGH_PRIORITY);
+  /** "Sync This Project": bumps the project's pending/retrying rows to
+   *  HIGH_PRIORITY AND moves its transiently-failed rows back to pending at
+   *  that priority (D3 — previously failed rows were untouched, making the
+   *  button a no-op for failed projects). Permanent auth/permission/not-found
+   *  failures and missing-file rows stay blocked, reported in the summary so
+   *  the UI can say why. Pure UPDATEs — no duplicate rows, no other project
+   *  affected, safe to invoke repeatedly. */
+  prioritizeProject(projectId: string): {
+    bumped: number; requeued: number; blockedPermanent: number; skippedMissing: number;
+  } {
+    const retry = requeueFailedForProject(projectId, HIGH_PRIORITY);
+    const bumped = bumpProjectPriority(projectId, HIGH_PRIORITY);
     this._tick();
-    return changed;
+    return { bumped, ...retry };
   }
 
   /** Cancels an in-flight upload (no-op if the item isn't currently active).

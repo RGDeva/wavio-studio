@@ -377,7 +377,35 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
   const [copied, setCopied] = useState(false);
   const [showPermissions, setShowPermissions] = useState(false);
   const [prioritizing, setPrioritizing] = useState(false);
+  const [prioritizeNote, setPrioritizeNote] = useState<string | null>(null);
   const [allowDownload, setAllowDownload] = useState(true);
+
+  const handlePrioritize = async () => {
+    setPrioritizing(true);
+    setPrioritizeNote(null);
+    try {
+      let result = await api.sync.prioritizeProject(project.id);
+      if (result.needsConfirmation) {
+        // Large retry batches can use significant bandwidth — confirm first.
+        const ok = window.confirm(
+          `Retry ${result.retryCount} failed uploads for “${project.project_name}”?\n\n` +
+          `This may use significant network bandwidth. Uploads run in the background and can be paused from Settings.`
+        );
+        if (!ok) return;
+        result = await api.sync.prioritizeProject(project.id, { force: true });
+      }
+      if (!result.needsConfirmation && result.bumped + result.requeued === 0) {
+        // The click must never look like it worked when nothing could be done.
+        if (result.skippedMissing > 0) setPrioritizeNote('Local files are missing on disk — nothing to retry.');
+        else if (result.blockedPermanent > 0) setPrioritizeNote('Uploads are blocked by permission or not-found errors — see Activity.');
+        else setPrioritizeNote('Nothing is queued for this project.');
+      }
+    } catch (e) {
+      setPrioritizeNote(`Could not prioritize: ${(e as Error)?.message ?? 'unknown error'}`);
+    } finally {
+      setPrioritizing(false);
+    }
+  };
   const [expiry, setExpiry] = useState<'never' | '24h' | '7d' | '30d'>('never');
   // Project link state
   const [projectLinkUrl, setProjectLinkUrl] = useState<string | null>(null);
@@ -541,17 +569,22 @@ function ProjectRow({ project, progress }: { project: Project; progress?: SyncPr
             <span>{formatRelativeTime(project.modified_at)}</span>
           </div>
           {(project.sync_status === 'pending' || project.sync_status === 'failed') && (
-            <button
-              onClick={async () => { setPrioritizing(true); await api.sync.prioritizeProject(project.id); setPrioritizing(false); }}
-              disabled={prioritizing}
-              className="flex items-center gap-1 text-[10px] font-medium text-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
-              title="Jump this project ahead of the rest of the sync queue"
-            >
-              {prioritizing
-                ? <div className="w-2.5 h-2.5 border border-cyan-500 border-t-transparent rounded-full animate-spin" />
-                : <Zap className="w-2.5 h-2.5" />}
-              {prioritizing ? 'Prioritizing…' : 'Sync This Project'}
-            </button>
+            <div className="flex flex-col items-end gap-0.5">
+              <button
+                onClick={handlePrioritize}
+                disabled={prioritizing}
+                className="flex items-center gap-1 text-[10px] font-medium text-cyan-500 hover:text-cyan-400 transition-colors disabled:opacity-40"
+                title="Jump this project ahead of the rest of the sync queue (retries failed uploads too)"
+              >
+                {prioritizing
+                  ? <div className="w-2.5 h-2.5 border border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                  : <Zap className="w-2.5 h-2.5" />}
+                {prioritizing ? 'Prioritizing…' : 'Sync This Project'}
+              </button>
+              {prioritizeNote && (
+                <p className="text-[9px] text-amber-400/70 max-w-[180px] text-right">{prioritizeNote}</p>
+              )}
+            </div>
           )}
           {/* Share link controls — visible when project is synced */}
           {project.sync_status === 'synced' && (

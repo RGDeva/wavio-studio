@@ -74,7 +74,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
     pause: () => ipcRenderer.invoke('sync:pause'),
     resume: () => ipcRenderer.invoke('sync:resume'),
     isPausedByUser: () => ipcRenderer.invoke('sync:isPausedByUser'),
-    prioritizeProject: (projectId: string) => ipcRenderer.invoke('sync:prioritizeProject', projectId),
+    prioritizeProject: (projectId: string, opts?: { force?: boolean }) => ipcRenderer.invoke('sync:prioritizeProject', projectId, opts),
     cancelItem: (itemId: string) => ipcRenderer.invoke('sync:cancelItem', itemId),
   },
 

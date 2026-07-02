@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByShare, touchRestoredProject } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -2058,7 +2058,23 @@ ipcMain.handle('sync:resume', () => {
   return syncAgent?.getStatus() ?? 'idle';
 });
 ipcMain.handle('sync:isPausedByUser', () => syncAgent?.isPausedByUser() ?? false);
-ipcMain.handle('sync:prioritizeProject', (_e, projectId: string) => syncAgent?.prioritizeProject(projectId) ?? 0);
+// "Sync This Project" (D3). Requeues transiently-failed rows + bumps priority.
+// If the retry would push a lot of uploads onto the network, require an
+// explicit confirmation from the renderer first (force: true on the retry).
+const RETRY_CONFIRM_THRESHOLD = 25;
+ipcMain.handle('sync:prioritizeProject', (_e, projectId: string, opts?: { force?: boolean }) => {
+  if (!syncAgent) {
+    return { needsConfirmation: false, bumped: 0, requeued: 0, blockedPermanent: 0, skippedMissing: 0 };
+  }
+  if (!opts?.force) {
+    const { retryable } = classifyFailedRowsForProject(projectId);
+    if (retryable.length > RETRY_CONFIRM_THRESHOLD) {
+      return { needsConfirmation: true, retryCount: retryable.length };
+    }
+  }
+  const summary = syncAgent.prioritizeProject(projectId);
+  return { needsConfirmation: false, ...summary };
+});
 ipcMain.handle('sync:cancelItem', (_e, itemId: string) => syncAgent?.cancelItem(itemId) ?? false);
 
 // Activity
