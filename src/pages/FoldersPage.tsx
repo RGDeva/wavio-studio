@@ -1,19 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { FolderPlus, Trash2, FolderOpen, ExternalLink, Sparkles, Plus, Check, RefreshCw, Clock, FileAudio, ChevronDown, ChevronRight, Ban, Loader2, X, AlertTriangle } from 'lucide-react';
+import { FolderPlus, Trash2, FolderOpen, ExternalLink, Sparkles, Plus, RefreshCw, Clock, FileAudio, ChevronDown, ChevronRight, Ban, Loader2, X, AlertTriangle } from 'lucide-react';
 import { api, FolderClassification } from '../lib/api';
 import { interpretFolderAddResult, confirmationCopy, completeAmbiguousAdd } from '../lib/folderAddFlow';
 import { DawLogo } from '../components/DawLogo';
-
-const DAW_FOLDER_HINTS: Record<string, string> = {
-  'FL Studio': 'Image-Line/FL Studio',
-  'Pro Tools': 'Pro Tools',
-  'Ableton': 'Ableton',
-  'Logic': 'Logic',
-  'Reaper': 'REAPER Media',
-  'GarageBand': 'GarageBand',
-  'Cubase': 'Cubase Projects',
-  'Studio One': 'Studio One',
-};
 
 function guessDaw(folderPath: string): string {
   const lower = folderPath.toLowerCase();
@@ -61,7 +50,6 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
   const [rescanning, setRescanning] = useState<string | null>(null);
   const [rescanResult, setRescanResult] = useState<{ folder: string; result: RescanResult } | null>(null);
   const [expandedExcludes, setExpandedExcludes] = useState<Set<string>>(new Set());
-  const [excludingFolder, setExcludingFolder] = useState<string | null>(null);
   const [progress, setProgress] = useState<DiscoveryProgress | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<FolderClassification | null>(null);
   const [confirming, setConfirming] = useState(false);
@@ -185,19 +173,6 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
   const handleCancelRescan = async () => {
     await api.files.discoverCancel();
-  };
-
-  const handleExcludeSubfolder = async (folder: string) => {
-    const result = await (window as any).showDirectoryPicker?.().catch(() => null);
-    if (!result) {
-      // Fallback: use native dialog via api (we'll just call folders:add but capture path only)
-      // Since we don't have a subfolder picker, show an input prompt
-      const sub = prompt(`Enter subfolder path to exclude (must be inside ${folder}):`);
-      if (!sub || !sub.startsWith(folder)) return;
-      await api.folders.excludePath(sub);
-      await refresh();
-      return;
-    }
   };
 
   const handleUnexclude = async (subPath: string) => {

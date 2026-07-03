@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2, Link, Copy, Check, Package, ExternalLink } from 'lucide-react';
+import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
 import { DawLogo } from '../components/DawLogo';
 import { ProjectDetail } from '../components/ProjectDetail';
-import { formatBytes, formatRelativeTime, getDawColor, truncatePath } from '../lib/utils';
+import { formatBytes, formatRelativeTime, truncatePath } from '../lib/utils';
 import type { Project, SyncQueueItem, SyncProgress } from '../types';
 
 interface Version {
@@ -371,7 +371,6 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
 }
 
 function ProjectRow({ project, progress, onOpen }: { project: Project; progress?: SyncProgress; onOpen: () => void }) {
-  const dawColor = getDawColor(project.daw_type);
   const pct = progress?.percentage;
   const [expanded, setExpanded] = useState(false);
   const [versions, setVersions] = useState<Version[]>([]);
