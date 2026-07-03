@@ -1,0 +1,2 @@
+# WS-021 · Wire or remove Dashboard importStatus (from WS-015 blocker)
+Dashboard.tsx `importStatus` state is set throughout handleDrop (drag-drop import progress/errors) but never rendered. Decide: render a small status toast near the drop overlay (preferred — it's user feedback that was clearly intended) or delete the state + setters. Small packet; Builder; reviewer Builder. Zero risk either way; do not change import logic.

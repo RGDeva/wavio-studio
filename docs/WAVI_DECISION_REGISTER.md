@@ -1,0 +1,21 @@
+# Wavi Decision Register
+
+Binding architecture/process decisions. Workers must not contradict these;
+propose changes via a new entry marked PROPOSED for architect+founder review.
+
+| ID | Decision | Status | Rationale / notes |
+|---|---|---|---|
+| DR-001 | **Server is authoritative for public link state.** Desktop may cache/registry server records; it must never invent revocation, expiry, permission or analytics truth. UI presenting local-only state must say so. | BINDING | Enforced in Links page (this-device scoping copy, status tooltip, revoke-fails-stays-active behavior verified in smoke). |
+| DR-002 | **Copilot confirmation is out-of-band.** Gated tools proceed only via `confirmedOutOfBand` set by the renderer confirmation card IPC (`copilot:confirmTool`). Model-supplied args can never confirm; envelope strips `confirmed`. Every new gated tool must use this channel. | BINDING | Closed a real bypass (model emitting confirmed:true). Chain-proven headlessly. |
+| DR-003 | **One canonical Link model, additive.** New link kinds are rows/capabilities in the unified model (see CANONICAL_PROJECT_MODEL §5), never new tables or routes. Legacy Listen/Project/Codex links keep resolving via compat routes ≥2 releases. | BINDING | Prevents a 4th parallel link system. |
+| DR-004 | `main` reconciliation with the trunk branch | **FOUNDER** | 70+ commits drift. Options: ff main, or rename trunk. Affects CI/deploy assumptions. |
+| DR-005 | **QA bundle identity stays `stream.wavi.studio.qa` / `wavi-qa://`**, production `com.wavi.studio` / `wavi://`. Never "normalize". | BINDING | Keychain-corruption incident history in main.ts. |
+| DR-006 | **Versions are immutable; corrections are child versions.** Every published version carries a hash manifest; restore verifies required hashes. Cloud never learns absolute local paths. | BINDING | Core product promise + privacy invariant. |
+| DR-007 | Delete `integration/overnight-review` ref; drop merged branch refs | **FOUNDER** | Housekeeping only; zero risk after trunk verification. |
+| DR-008 | **DAW-specific behavior goes behind adapters** (electron/adapters). No new Ableton/FL conditionals in main.ts/services when an adapter method exists or is trivial to add. Server keeps only defensive copies of exclusion rules, generated not hand-copied. | BINDING | Adapter branch held on E2E, but the interface is the committed direction. |
+| DR-009 | **Worktrees live in `~/wavi-worktrees/`**, never /tmp. Anything durable is committed+pushed the moment it's coherent. | BINDING | /tmp wipe destroyed worktrees/screenshots/test binaries mid-project. |
+| DR-010 | Bounce playback via `file://` audio element is dev-blocked; ship either packaged-only playback or a custom `wavi-media://` safe protocol (registerFileProtocol, path-validated against indexed files). | PROPOSED → packet WS-005 | Confirmed dev-origin console error; graceful fallback already in UI. |
+| DR-011 | Leaked `.env.vercel-prod-temp` credentials must be rotated before any public beta. Agents may not rotate. | **FOUNDER (urgent)** | Stripe/Supabase-service/Resend/RoEx/Replicate/Google OAuth/cron. |
+| DR-012 | Real-network sync throughput numbers come only from `scripts/validate-sync-scalability/real-network-test.js` with a founder-supplied `WAVI_AUTH_TOKEN`; mocked scheduler numbers are never quoted as product performance. | BINDING | |
+| DR-013 | Publishing excludes `^Backups$` while the scanner skips Ableton's `Backup/`. Align? (likely publish should exclude both singular and plural) | **FOUNDER** (low risk, tiny diff) | Pre-existing quirk found during adapter extraction. |
+| DR-014 | The language model never gets unrestricted shell/computer control. DAW automation follows the layered strategy in WAVI_DAW_AGENT_ARCHITECTURE (native API → adapter → plugin → accessibility → screen-fallback), each layer permission-gated and audited. | BINDING | |
