@@ -1,5 +1,16 @@
 # Wavi Cross-DAW Interoperability — Portable Session
 
+> **SUPERSEDED (v1 schema) — see WAVI_CROSS_DAW_ARCHITECTURE_V2.md + DR-015.**
+> The v1 `session.json` JSON schema in §2 is replaced by the DAWproject
+> superset: Portable Session v2 IS a valid `.dawproject` ZIP plus a `wavi/`
+> sidecar. Musical fields move into `project.xml` (higher fidelity — warps,
+> sends, nested tracks, fades, plugin state, tempo automation are now all
+> representable per WAVI_DAWPROJECT_FIELD_MAPPING.md), Wavi-only fields move to
+> `wavi/session.json` (WAVI_SESSION_IR_SPEC §4). The three compatibility
+> levels, the "never promise native conversion" positioning, and the beat-0
+> render-alignment rule are retained. Kept for history; do not build against
+> the v1 schema below.
+
 Positioning rule: **never promise native conversion.** Wavi promises that collaborators in different DAWs can work on the same music with explicit, visible fidelity levels.
 
 ## 1. Three compatibility levels
