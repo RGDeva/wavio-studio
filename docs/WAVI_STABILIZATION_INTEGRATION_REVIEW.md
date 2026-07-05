@@ -343,3 +343,71 @@ be performed without founder direction, and were NOT performed:
 
 Recommended: option 1 — true isolation, disposable, closest to the requested
 "staging only".
+
+---
+
+## 14. Preview-branch validation results (2026-07-05)
+
+**Managed Supabase preview branch: BLOCKED** — branching requires the Pro
+plan; the Wavi org is not on it (`PaymentRequiredException`). No branch was
+provisioned, no cost incurred, production untouched.
+
+**Alternative executed — isolated local Postgres 17 (Docker, torn down):**
+a synthetic baseline mirroring the introspected production schema (assets,
+user_plans w/ the real CHECK, plan_limits w/ `desktop_sync NOT NULL DEFAULT
+true`) + synthetic seed (fake DIDs/emails only: 1 admin-style acct w/ 1,000
+assets + 74 projects, 2 Free + 1 Pro + 1 Studio, NULL-placeholder rows).
+No production data copied.
+
+| Objective | Result |
+|---|---|
+| Apply M1 → M2 | ✓ both apply clean on real engine |
+| `assets.file_url` nullable after M1 | ✓ YES; existing 1,000 URLs unchanged, 0 nulled |
+| NULL-placeholder upload row inserts post-M1 | ✓ |
+| `user_roles` created, RLS enabled, **0 policies** (service-role only) | ✓ |
+| `internal_unlimited` satisfies widened CHECK | ✓ `CHECK (plan IN free,pro,studio,internal_unlimited)` |
+| `plan_limits.desktop_sync` default applied to new row | ✓ `true` (omitted col → default) |
+| founder-style DID → admin + internal_unlimited (-1/-1/-1) | ✓ |
+| Free/Pro/Studio limits intact | ✓ free:26, pro:-1, studio:-1 |
+| Idempotent reapply (both) | ✓ no errors, no dup rows |
+| Rollback → original schema restored | ✓ file_url NOT NULL, old CHECK, user_roles dropped, plan removed; synthetic data intact |
+| Reapply after rollback | ✓ founder admin/internal_unlimited restored |
+| Automated gates on 933777e | ✓ tsc clean, 262 tests, `vite build` OK |
+
+**Still BLOCKED (need a real preview env / founder auth):** live preview
+deploy, founder browser smoke, live cross-account API probes. Entitlement
+resolution + cross-account RLS are covered at unit level (entitlements.test.ts
+8, collaborationRls.test.ts 6) but not against a deployed instance.
+
+## 15. Exact production migration checklist (when approved)
+1. Backup / snapshot the Wavi project (Supabase dashboard → Database → Backups).
+2. Apply `20260704090000_assets_file_url_nullable.sql`.
+3. Apply `20260704091500_internal_unlimited_plan.sql`.
+4. Verify: `assets.file_url` nullable; `SELECT role FROM user_roles WHERE user_id='did:privy:cml15rbvv015al40cdvfmb1cm'` = admin; `SELECT plan FROM user_plans WHERE user_id='did:privy:cml15rbvv015al40cdvfmb1cm'` = internal_unlimited; `SELECT count(*) FROM plan_limits WHERE plan='internal_unlimited'` = 1.
+5. Deploy `stabilize/product-core-v1` @ 933777e.
+6. Founder browser smoke (§8) + Free smoke (§9).
+
+## 16. Exact production rollback commands
+```sql
+-- migration 2
+DELETE FROM public.user_plans  WHERE user_id='did:privy:cml15rbvv015al40cdvfmb1cm' AND plan='internal_unlimited';
+DELETE FROM public.user_roles  WHERE user_id='did:privy:cml15rbvv015al40cdvfmb1cm';
+DELETE FROM public.plan_limits WHERE plan='internal_unlimited';
+DROP TABLE IF EXISTS public.user_roles;
+ALTER TABLE public.user_plans DROP CONSTRAINT IF EXISTS user_plans_plan_check;
+ALTER TABLE public.user_plans ADD CONSTRAINT user_plans_plan_check CHECK (plan IN ('free','pro','studio'));
+-- migration 1 (only if reverting it too)
+UPDATE public.assets SET file_url='' WHERE file_url IS NULL;
+ALTER TABLE public.assets ALTER COLUMN file_url SET NOT NULL;
+```
+(After a prod rollback of migration 2, entitlement code auto-falls back to
+the `ADMIN_EMAILS` allowlist — founder keeps admin, no code change.)
+
+## 17. Production application readiness
+Migrations are **validated apply/rollback/reapply-clean on a real Postgres
+engine** and confirmed compatible with the live schema (read-only). They are
+additive + reversible. **Remaining gate before "reasonably safe": a real
+preview deploy + founder browser smoke** — which needs either a Pro-plan
+Supabase branch or a dedicated staging project. Recommend enabling Supabase
+Pro (branching) OR standing up a staging project; then repeat §8/§9 against a
+deployed instance before production.
