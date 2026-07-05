@@ -31,16 +31,22 @@ read-only; not committed as an identifier anywhere in code).
 Conclusion: files were never lost; no identity/ownership repair migration is
 needed. P0-B closed.
 
-## Integration status (2026-07-05)
+## Integration status (2026-07-05, final)
 
-All six P0s are integrated on **`stabilize/product-core-v1`** (b49f4ac +
-vault-library-recovery + upload-persistence + founder-entitlements), merged
-with zero conflicts, tsc clean, 26 files / 245 tests green. `paywall.test.ts`
-verified **green (6/6)** — not a pre-existing failure. Full review, migration
-staging/rollback plan, and smoke checklists: WAVI_STABILIZATION_INTEGRATION_REVIEW.md.
-`fix/subscription-remove-client-admin-email` is on the wrong base (needs
-rebase onto b49f4ac before it can be the 4th merge). DAWproject spike
-complete on `spike/dawproject-adoption` (DR-015 = Option B).
+All P0s + the corrected subscription fix are integrated on
+**`stabilize/product-core-v1` @ `933777e`** (b49f4ac + vault-library-recovery
++ upload-persistence + founder-entitlements + subscription-server-entitlements-v2).
+Merged with zero conflicts, **tsc clean, 29 files / 262 tests green,
+production `vite build` succeeds (29.7s)**. Founder email absent from shipped
+client source AND the built `dist/` bundle (verified by grep + a
+build-failing guard test `noFounderEmailInClient.test.ts`). `paywall.test.ts`
+green (6/6). The two older subscription branches
+(`fix/subscription-remove-client-admin-email`, `fix/subscription-server-entitlements`)
+are **superseded — do not merge** (wrong ancestry). DAWproject: docs on
+control-tower trunk `65656610`; prototype `fa41f692` stays isolated on
+`spike/dawproject-adoption`; WS-023 on hold until zero P0/P1. Two migrations
+remain UNAPPLIED. Full review + smoke checklists:
+WAVI_STABILIZATION_INTEGRATION_REVIEW.md.
 
 ## Pending verifications
 
