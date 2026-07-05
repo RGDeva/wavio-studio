@@ -293,3 +293,53 @@ session so each is self-contained.)
 > zero P0/P1. (5) The founder must run the §8 and §9 smoke checklists after
 > staging; surface blockers, don't work around them. Do not touch Codex's
 > uncommitted `src/lib/vaultAssetAudioActions.ts` in ~/CascadeProjects/wavio.
+
+---
+
+## 13. Staging verification phase — findings & blockers (2026-07-05)
+
+### Migration preconditions verified READ-ONLY against the live DB
+(SELECT-only introspection; no writes.)
+
+| Precondition | Live state | Verdict |
+|---|---|---|
+| `assets.file_url` nullable | `NO` (currently NOT NULL) | migration 1 flips to nullable ✓ |
+| `user_plans_plan_check` | `CHECK (plan = ANY('free','pro','studio'))` | matches assumption; migration 2 widening required & correct ✓ |
+| `plan_limits` exists | YES | ✓ |
+| `user_roles` exists | NO | migration 2 creates it ✓ |
+| `internal_unlimited` plan row | absent | will INSERT ✓ |
+| founder `user_plans` row | NONE | confirms founder is on Free fallback today (root of P0-C); will INSERT ✓ |
+| `user_plans` columns | include user_id,plan,status,period_end,updated_at | migration INSERT/ON CONFLICT columns all valid ✓ |
+| `plan_limits` columns | 14 cols incl. **`desktop_sync`** (NOT the 13 the INSERT lists) | **resolved:** `desktop_sync` is NOT NULL **DEFAULT true**, so the omitted column takes its default — INSERT succeeds. P1-4 (schema-mismatch risk) is **cleared.** |
+
+**Net: both migrations will apply cleanly to this schema. No further code change needed before apply.**
+
+### BLOCKER — no staging environment exists (founder action required)
+The Supabase account has exactly **one** Wavi project (`bbjfaqzbbjrlhpzdxnlm`,
+ACTIVE_HEALTHY) and it is **production** (the DB holding the 791 founder
+assets). There is **no separate staging/preview Wavi Supabase project.**
+Consequently the following steps in the staging-verification request cannot
+be performed without founder direction, and were NOT performed:
+
+- **Deploy to staging** — no staging Supabase to point at; a Vercel preview
+  would still run its functions against production data. (Vercel MCP auth is
+  also unavailable in this session.)
+- **Apply migrations "to staging only"** — the only reachable Wavi DB is
+  production, which the founder explicitly forbade writing to. Applying via
+  `apply_migration` would hit production. **Not done.**
+- **Founder browser smoke** — requires signing in as the founder account;
+  agents cannot authenticate as the founder. **Not done** (not fabricated).
+
+### Options for the founder to unblock (pick one)
+1. **Create an isolated Supabase preview branch** of the Wavi project (the
+   MCP `create_branch` makes a copy DB; it is cost-gated and a create action,
+   so it needs your explicit go-ahead). Apply both migrations there, deploy a
+   Vercel preview pointed at the branch, then run the smoke checklists.
+2. **Stand up a dedicated staging Supabase project** + staging env vars, then
+   the same apply/deploy/smoke.
+3. If you accept prod-first with the safety that both migrations are additive
+   + reversible and verified above: **you** apply them to production (agents
+   won't), then run the §8/§9 smokes yourself.
+
+Recommended: option 1 — true isolation, disposable, closest to the requested
+"staging only".
