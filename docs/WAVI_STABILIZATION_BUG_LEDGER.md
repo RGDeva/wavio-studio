@@ -31,6 +31,17 @@ read-only; not committed as an identifier anywhere in code).
 Conclusion: files were never lost; no identity/ownership repair migration is
 needed. P0-B closed.
 
+## Integration status (2026-07-05)
+
+All six P0s are integrated on **`stabilize/product-core-v1`** (b49f4ac +
+vault-library-recovery + upload-persistence + founder-entitlements), merged
+with zero conflicts, tsc clean, 26 files / 245 tests green. `paywall.test.ts`
+verified **green (6/6)** — not a pre-existing failure. Full review, migration
+staging/rollback plan, and smoke checklists: WAVI_STABILIZATION_INTEGRATION_REVIEW.md.
+`fix/subscription-remove-client-admin-email` is on the wrong base (needs
+rebase onto b49f4ac before it can be the 4th merge). DAWproject spike
+complete on `spike/dawproject-adoption` (DR-015 = Option B).
+
 ## Pending verifications
 
 - Founder-account clean-browser smoke of Library/player/insights (blocked on
