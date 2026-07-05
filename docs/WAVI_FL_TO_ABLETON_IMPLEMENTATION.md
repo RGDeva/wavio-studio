@@ -4,6 +4,16 @@ Implementation-grade companion to WAVI_CROSS_DAW_PORTABLE_SESSION.md (schema
 v1 lives there). Target packets: WS-008 (FLP inspection), WS-012 (schema
 package), WS-013 (.als generator), then the assembly proof.
 
+> **UPDATED for DAWproject adoption (DR-015).** The output format is no longer
+> the v1 `session.json` JSON — it is a `.dawproject` superset (see
+> WAVI_CROSS_DAW_ARCHITECTURE_V2.md). The FL extraction and classification in
+> this doc are unchanged and still correct; only the *target container*
+> changes: extraction now populates the Session IR (WAVI_SESSION_IR_SPEC.md),
+> the `.als` generation in §5 is driven by that IR, and the fidelity report in
+> §6 becomes the typed `wavi/fidelity.json`. Packet mapping: WS-012 →
+> WS-023/WS-024; the FL→Ableton proof splits into WS-025 (FL→dawproject) +
+> WS-026 (dawproject→Ableton). `session.json` → `wavi/session.json`.
+
 ## 1. FLP inspection strategy (WS-008)
 
 `.flp` is a TLV event stream: 4-byte magic "FLhd" header (format, nChannels,

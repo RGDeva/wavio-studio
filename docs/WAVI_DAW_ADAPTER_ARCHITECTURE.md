@@ -33,9 +33,12 @@ export interface DawAdapter {
   launch(projectFilePath: string): Promise<void>;                 // open in the DAW
   versionCompatibility(manifest: Manifest, installation: DawInstallation): CompatibilityReport;
 
-  // Interop (Phase 5 of cross-DAW doc; optional per adapter)
-  exportPortableSession?(projectRoot: string): Promise<PortableSession>;
-  importPortableSession?(session: PortableSession, destDir: string): Promise<string>; // returns generated project file
+  // Interop (cross-DAW; optional per adapter). Retyped to the Session IR per
+  // DR-015 / WAVI_CROSS_DAW_ARCHITECTURE_V2.md — the v1 PortableSession JSON
+  // type is superseded. The DAWproject reader/writer is itself an adapter
+  // pair producing/consuming SessionIR (WS-023/WS-024).
+  exportPortableSession?(projectRoot: string): Promise<SessionIR>;
+  importPortableSession?(ir: SessionIR, destDir: string): Promise<string>; // returns generated project file
 }
 ```
 

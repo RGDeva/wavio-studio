@@ -33,10 +33,18 @@ active. Detailed packets: `tasks/ready/`. Routing: WAVI_MODEL_ROUTING.
 **Exit:** an FL user and an Ableton user can each share natively; a collaborator can restore and publish a child version the owner sees.
 
 ## Days 55–80 — Cross-DAW proof + Copilot depth
-- WS-012 portable-session schema package (shared, versioned).
-- WS-013 minimal `.als` generator (Architect).
-- FL→Ableton proof per WAVI_FL_TO_ABLETON_IMPLEMENTATION.md acceptance
-  (8-track fixture opens in Live, in time, MIDI editable, honest fidelity report).
+> **Revised by DR-015 (DAWproject adoption).** WS-012 and the standalone
+> `.als`/JSON-schema plan are replaced by the DAWproject superset track:
+> **WS-023** (dawproject TS reader/writer + security), **WS-024** (Session IR
+> + adapter migration), **WS-025** (FL→dawproject), **WS-026**
+> (dawproject→Ableton). WS-008 (FLP inspection) and WS-013 (`.als` generator)
+> survive as the parser/writer internals, retargeted to the Session IR.
+- WS-023 DAWproject reader/writer (Architect + Builder).
+- WS-024 Session IR + adapter contract migration (no Ableton behavior change).
+- WS-025 FL→dawproject; WS-026 dawproject→Ableton.
+- FL→Ableton proof per WAVI_FL_TO_ABLETON_IMPLEMENTATION.md acceptance, now
+  routed through the DAWproject IR (8-track fixture opens in Live, in time,
+  MIDI editable, honest `wavi/fidelity.json`).
 - Copilot: `create_project_link`, `compare_versions`, `summarize_project_activity`
   through the same envelope; context enriched from canonical link/version data.
 **Exit:** the demo — publish FL project, collaborator opens generated Ableton session — works on fixtures.
