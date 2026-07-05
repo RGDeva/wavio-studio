@@ -411,3 +411,63 @@ preview deploy + founder browser smoke** — which needs either a Pro-plan
 Supabase branch or a dedicated staging project. Recommend enabling Supabase
 Pro (branching) OR standing up a staging project; then repeat §8/§9 against a
 deployed instance before production.
+
+---
+
+## 18. Dedicated staging project — validation (2026-07-05)
+
+**`wavi-staging` created and KEPT** (durable per instruction). Redacted env map:
+
+| Item | Value |
+|---|---|
+| staging project ref | `qjhzrxgiomctzxdzywhu` (≠ prod `bbjfaqzbbjrlhpzdxnlm` ✓) |
+| staging Supabase URL | `https://qjhzrxgiomctzxdzywhu.supabase.co` |
+| anon / publishable key | `sb_publishable_q3Hukj…ChY` (redacted; public-by-design) |
+| service-role key location | Supabase dashboard → wavi-staging → Settings → API → `service_role` (never fetched/printed) |
+| DB host | `db.qjhzrxgiomctzxdzywhu.supabase.co` |
+| region | us-west-1 · status ACTIVE_HEALTHY · cost $0/mo |
+
+**Schema drift handling:** repo migration history (59 files, 27 depending on
+`auth`/`storage` schemas) was NOT blindly replayed. Per the sanctioned
+fallback, an **explicit staging baseline migration**
+(`staging_baseline_from_prod_schema`) was authored to mirror the
+read-only-introspected production shapes of assets/projects/user_plans/
+plan_limits/share_links/wavi_link_events (real NOT NULL constraints, the real
+`user_plans_plan_check`, `plan_limits.desktop_sync NOT NULL DEFAULT true`,
+owner-scoped RLS). Then the two stabilization migrations applied on top.
+Migration history (`list_migrations`) records all three, in order.
+
+**Real-Supabase verification results (synthetic data only — no production
+data copied):**
+
+| Check | Result |
+|---|---|
+| `assets.file_url` nullable | ✓ YES |
+| placeholder NULL-`file_url` insert | ✓ (2 rows) |
+| placeholder → finalized (NULL→URL) | ✓ |
+| second placeholder stays in-flight | ✓ NULL |
+| `user_roles` exists, RLS on, **0 policies** | ✓ service-role only |
+| client (authenticated role) reads `user_roles` | ✓ **0 rows (denied)** |
+| CHECK allows `internal_unlimited` | ✓ |
+| `internal_unlimited` desktop_sync default / limits | ✓ true / −1/−1/−1 |
+| founder DID → admin + internal_unlimited | ✓ |
+| Free / Pro / Studio resolve | ✓ free / pro / studio |
+| unknown user → no row (Free fallback) | ✓ |
+| Free/Pro/Studio limits intact | ✓ 26 / −1 / −1 |
+| large library (1,000+ assets, 74 projects) | ✓ seeded & queried |
+| analytics 850 distinct ids via 150-chunk IN() | ✓ 6 chunks, 850 matched, no oversized IN() |
+| cross-account: client sees other users' assets | ✓ **0 (RLS blocks)** |
+| migrations recorded in history | ✓ 3 |
+| tsc / vitest / build / bundle founder-email scan / `git diff --check` | ✓ clean / 262 / OK / none / clean |
+
+**BLOCKED (Vercel auth unavailable this session):** the Vercel preview
+deployment (step 3) and therefore the interactive browser smoke (step 12:
+Chrome/Incognito/mobile) and the *live HTTP* entitlement/vault/upload/
+playback/analytics probes. The DB layer and the unit-test layer for all of
+these are green; the HTTP/browser layer needs a deployed preview pointed at
+`wavi-staging`. Env values above are ready to paste into a Vercel
+**Preview**-scoped variable set (do not overwrite Production scope):
+`VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` (publishable), and the
+server `SUPABASE_SERVICE_ROLE_KEY` from the staging dashboard.
+
+Production Supabase re-verified untouched after all staging work.
