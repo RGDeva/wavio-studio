@@ -105,6 +105,13 @@ contextBridge.exposeInMainWorld('waviAPI', {
       ipcRenderer.invoke('share:revokeLink', opts),
   },
 
+  // Links registry (Links page)
+  links: {
+    getAll: () => ipcRenderer.invoke('links:getAll'),
+    rename: (opts: { trackingId: string; label: string | null }) => ipcRenderer.invoke('links:rename', opts),
+    revoke: (opts: { trackingId: string }) => ipcRenderer.invoke('links:revoke', opts),
+  },
+
   // Project Links
   project: {
     publishVersion: (opts: { localProjectId: string }) => ipcRenderer.invoke('project:publishVersion', opts),
@@ -159,6 +166,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
     toggle:     () => ipcRenderer.invoke('copilot:toggle'),
     getContext: () => ipcRenderer.invoke('copilot:getContext'),
     chat:       (messages: unknown[], context: unknown) => ipcRenderer.invoke('copilot:chat', messages, context),
+    confirmTool: (toolName: string, params: Record<string, unknown>, context: unknown) => ipcRenderer.invoke('copilot:confirmTool', toolName, params, context),
   },
 
   // Ableton DAW Companion

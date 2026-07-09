@@ -12,6 +12,30 @@ export interface FolderClassification {
   reason: 'name_match' | 'high_audio_ratio' | 'none';
 }
 
+/** A locally-known link from the desktop links registry (Links page). */
+export interface LinkListItem {
+  tracking_id: string;
+  kind: 'listen' | 'project';
+  project_id: string | null;
+  project_name: string | null;
+  asset_id: string | null;
+  version_id: string | null;
+  url: string;
+  label: string | null;
+  allow_download: number;
+  collaborator_mode: string | null;
+  expires_at: string | null;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+/** Reply from copilot chat: plain text, or text plus a pending confirmation
+ *  that the renderer must surface as a card (the model cannot self-confirm). */
+export type CopilotChatReply = string | {
+  content: string;
+  pendingConfirmation: { tool: string; params: Record<string, unknown>; summary: string };
+};
+
 /** Result of sync:prioritizeProject ("Sync This Project", D3). */
 export type PrioritizeResult =
   | { needsConfirmation: true; retryCount: number }
@@ -26,7 +50,9 @@ export interface WaviAPI {
   copilot: {
     toggle:     () => Promise<void>;
     getContext: () => Promise<any>;
-    chat:       (messages: Array<{role:string;content:string}>, context: any) => Promise<string>;
+    chat:       (messages: Array<{role:string;content:string}>, context: any) => Promise<CopilotChatReply>;
+    confirmTool: (toolName: string, params: Record<string, unknown>, context: any) =>
+      Promise<{ status: string; message?: string; error?: string }>;
   };
   folders: {
     getAll: () => Promise<string[]>;
@@ -90,6 +116,11 @@ export interface WaviAPI {
     }) => Promise<{ shareUrl?: string; trackingId?: string; reused?: boolean; error?: string }>;
     revokeLink: (opts: { trackingId: string; projectId?: string }) =>
       Promise<{ success?: boolean; error?: string }>;
+  };
+  links: {
+    getAll: () => Promise<LinkListItem[]>;
+    rename: (opts: { trackingId: string; label: string | null }) => Promise<{ success?: boolean; error?: string }>;
+    revoke: (opts: { trackingId: string }) => Promise<{ success?: boolean; error?: string }>;
   };
   project: {
     publishVersion: (opts: { localProjectId: string }) => Promise<{ versionId?: string; versionNumber?: number; fileCount?: number; created?: boolean; skipped?: boolean; error?: string }>;
@@ -185,7 +216,7 @@ export interface WaviAPI {
 const _noop = () => Promise.resolve(null as any);
 const _stub: WaviAPI = {
   auth: { getToken: _noop, setToken: _noop, clearToken: _noop },
-  copilot: { toggle: _noop, getContext: _noop, chat: _noop },
+  copilot: { toggle: _noop, getContext: _noop, chat: _noop, confirmTool: _noop },
   folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop, confirmAmbiguous: _noop, rescan: _noop, scanMeta: () => Promise.resolve({}), fileCounts: () => Promise.resolve({}), excludePath: _noop, getExcluded: () => Promise.resolve([]), unexcludePath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
   files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]), discoverAll: () => Promise.resolve({ found: 0, imported: 0, duplicates: 0, scanned: 0, permissionErrors: 0, durationMs: 0, cancelled: false, limitReached: false }), discoverCancel: _noop, defaultDiscoveryRoots: () => Promise.resolve([]) },
@@ -193,6 +224,7 @@ const _stub: WaviAPI = {
   activity: { getAll: () => Promise.resolve([]) },
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop, revokeLink: _noop },
+  links: { getAll: () => Promise.resolve([]), rename: _noop, revoke: _noop },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },

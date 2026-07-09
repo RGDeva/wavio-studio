@@ -1,4 +1,4 @@
-import { LayoutDashboard, Music, FolderOpen, Activity, Settings, Zap, SlidersHorizontal, Wand2, Search, Music2, Stethoscope } from 'lucide-react';
+import { LayoutDashboard, Link2, Music, FolderOpen, Activity, Settings, Zap, SlidersHorizontal, Wand2, Search, Music2, Stethoscope } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { api } from '../lib/api';
 import type { Page } from '../types';
@@ -15,6 +15,7 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.FC<{ className?: string 
   { id: 'studio', label: 'Studio Sync', icon: SlidersHorizontal },
   { id: 'ableton', label: 'DAW Sync', icon: Music2 },
   { id: 'library', label: 'Library', icon: Music },
+  { id: 'links', label: 'Links', icon: Link2 },
   { id: 'folders', label: 'Folders', icon: FolderOpen },
   { id: 'review', label: 'File Review', icon: Wand2 },
   { id: 'activity', label: 'Activity', icon: Activity },

@@ -21,6 +21,7 @@ import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_N
 import { getAdapterForProject } from './adapters';
 import { safeRelativePath, classifyFileRole, findPreviewCandidate, ManifestEntry } from './adapters/common';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS, classifyFolderForImport, FolderClassification } from './discovery';
+import { registerWaviMediaPrivileges, registerWaviMediaProtocol } from './mediaProtocolRegister';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -356,6 +357,11 @@ try {
   // commandLine may not be available in all contexts - continue without
 }
 
+// wavi-media:// must be declared privileged before the app becomes ready.
+// (Module scope executes before app.whenReady() resolves.) The request handler
+// itself is installed after the DB is initialized, inside whenReady below.
+registerWaviMediaPrivileges();
+
 app.whenReady().then(async () => {
   mainLog('--- main process started ---');
   logApiEnvironment();
@@ -388,6 +394,15 @@ app.whenReady().then(async () => {
   const t0 = Date.now();
   const db = initDatabase({ dbName: process.env.WAVI_E2E === '1' ? 'wavio-studio-e2e.db' : 'wavio-studio.db' });
   mainLog(`Database initialized in ${Date.now() - t0}ms`);
+
+  // Secure local bounce playback (wavi-media://asset/{projectId}/{assetId}).
+  // Authorization source is the local files table; approved roots are the
+  // user's watched folders. Works in dev and packaged builds.
+  registerWaviMediaProtocol({
+    db,
+    getApprovedRoots: () => (store.get('watchedFolders', []) as string[]),
+    log: (event, data) => authLog(event, data),
+  });
 
   // Step 4: Initialize watcher manager with safe IPC sender
   watcherManager = new WatcherManager(db, (event) => {
@@ -450,6 +465,41 @@ app.whenReady().then(async () => {
     mainLog('[sync] restored user pause from settings');
   }
   syncAgent.start();
+  // Phase H: Copilot project tools — deps injected here to avoid circular
+  // imports; every invocation is audit-logged to activity_log.
+  {
+    const { buildProjectTools } = require('./copilotTools');
+    const { registerProjectTools } = require('./agentLoop');
+    const dbMod = require('./db');
+    registerProjectTools(buildProjectTools({
+      isAuthenticated: () => !!getDecryptedToken(),
+      logAudit: (entry: { tool: string; params: Record<string, unknown>; outcome: string }) => {
+        try {
+          logActivity({
+            id: crypto.randomUUID(), type: 'copilot_tool',
+            message: `Copilot tool ${entry.tool}: ${entry.outcome}`,
+            metadata: { tool: entry.tool, params: entry.params, outcome: entry.outcome },
+          });
+        } catch { /* audit must never break the tool */ }
+      },
+      searchFiles: (q: string, limit: number) => dbMod.searchFiles(q, limit) as any[],
+      openPath: (p: string) => { void shell.openPath(p); },
+      fileExists: (p: string) => fs.existsSync(p),
+      getSyncStatus: () => syncAgent?.getStatus() ?? 'idle',
+      getQueueCounts: () => dbMod.getSyncQueueCounts(),
+      prioritizeProject: (projectId: string, force?: boolean) => {
+        // Same contract as the sync:prioritizeProject IPC handler: large
+        // failed-retry batches need explicit confirmation before running.
+        if (!syncAgent) return { needsConfirmation: false as const, bumped: 0, requeued: 0, blockedPermanent: 0, skippedMissing: 0 };
+        if (!force) {
+          const { retryable } = classifyFailedRowsForProject(projectId);
+          if (retryable.length > RETRY_CONFIRM_THRESHOLD) return { needsConfirmation: true as const, retryCount: retryable.length };
+        }
+        return { needsConfirmation: false as const, ...syncAgent.prioritizeProject(projectId) };
+      },
+      publishVersion: async (localProjectId: string) => (await doPublishVersion({ localProjectId })) as any,
+    }));
+  }
   initCopilot(store);
   registerAbletonHandlers();
   startBridgeServer();
@@ -1011,6 +1061,17 @@ ipcMain.handle('share:createLink', async (_e, opts: {
       const { updateProjectShareInfo } = require('./db');
       updateProjectShareInfo(opts.projectId, data.shareUrl, data.trackingId);
     }
+    // Links registry (Links page): remember what we created so the creator
+    // can label/duplicate/revoke it later without a server list endpoint.
+    try {
+      const { recordLink } = require('./db');
+      recordLink({
+        tracking_id: data.trackingId, kind: 'listen',
+        project_id: opts.projectId ?? null, asset_id: opts.assetId,
+        url: data.shareUrl, allow_download: opts.allowDownload ?? true,
+        expires_at: opts.expiresAt ?? null,
+      });
+    } catch (e) { mainLog(`[links] record listen link failed: ${(e as any)?.message}`); }
     return { shareUrl: data.shareUrl, trackingId: data.trackingId, reused: data.reused };
   } catch (e: any) {
     captureException(e);
@@ -1054,6 +1115,7 @@ ipcMain.handle('share:revokeLink', async (_e, opts: { trackingId: string; projec
       const { updateProjectShareInfo } = require('./db');
       updateProjectShareInfo(opts.projectId, null, null);
     }
+    try { require('./db').markLinkRevoked(opts.trackingId); } catch { /* registry best-effort */ }
     return { success: true };
   } catch (e: any) {
     captureException(e);
@@ -1106,9 +1168,7 @@ function getDecryptedToken(): string | null {
 // reproduces the exact pre-extraction behavior for non-Ableton projects.
 
 
-ipcMain.handle('project:publishVersion', async (_e, opts: {
-  localProjectId: string;  // local SQLite project id
-}) => {
+async function doPublishVersion(opts: { localProjectId: string }) {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
 
@@ -1197,7 +1257,9 @@ ipcMain.handle('project:publishVersion', async (_e, opts: {
   });
 
   return result;
-});
+}
+
+ipcMain.handle('project:publishVersion', (_e, opts: { localProjectId: string }) => doPublishVersion(opts));
 
 ipcMain.handle('project:createLink', async (_e, opts: {
   projectId: string;           // local SQLite project id
@@ -1274,6 +1336,18 @@ ipcMain.handle('project:createLink', async (_e, opts: {
   // regardless of what WAVI_PUBLIC_URL is set to on the Vercel side.
   if (result && !(result as any).error && (result as any).trackingId) {
     (result as any).linkUrl = `${WEB_BASE}/project-link/${(result as any).trackingId}`;
+    // Links registry (Links page)
+    try {
+      const { recordLink } = require('./db');
+      recordLink({
+        tracking_id: (result as any).trackingId, kind: 'project',
+        project_id: opts.projectId, version_id: versionId,
+        url: (result as any).linkUrl,
+        allow_download: opts.allowDownload ?? true,
+        collaborator_mode: opts.collaboratorMode ?? 'view',
+        expires_at: opts.expiresAt ?? null,
+      });
+    } catch (e) { mainLog(`[links] record project link failed: ${(e as any)?.message}`); }
   }
   return result;
 });
@@ -1281,7 +1355,42 @@ ipcMain.handle('project:createLink', async (_e, opts: {
 ipcMain.handle('project:revokeLink', async (_e, opts: { trackingId: string }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
-  return desktopApiPost(token, 'revoke-project-link', { trackingId: opts.trackingId });
+  const result = await desktopApiPost(token, 'revoke-project-link', { trackingId: opts.trackingId });
+  if (result && !(result as any).error) {
+    try { require('./db').markLinkRevoked(opts.trackingId); } catch { /* registry best-effort */ }
+  }
+  return result;
+});
+
+// ── Links registry (Links page, Phase C) ─────────────────────────────────────
+// Reads/labels come from the local registry; revocation dispatches to the
+// existing server actions by kind — the server stays authoritative.
+ipcMain.handle('links:getAll', () => {
+  try { return require('./db').getLinks(); } catch { return []; }
+});
+
+ipcMain.handle('links:rename', (_e, opts: { trackingId: string; label: string | null }) => {
+  try { return { success: require('./db').renameLink(opts.trackingId, opts.label) }; }
+  catch (e: any) { return { error: e?.message ?? 'Rename failed' }; }
+});
+
+ipcMain.handle('links:revoke', async (_e, opts: { trackingId: string }) => {
+  const { getLinkByTrackingId, markLinkRevoked: markRevoked } = require('./db');
+  const link = getLinkByTrackingId(opts.trackingId);
+  if (!link) return { error: 'Link not found' };
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+  const action = link.kind === 'project' ? 'revoke-project-link' : 'revoke-share-link';
+  const result = await desktopApiPost(token, action, { trackingId: opts.trackingId });
+  if (result && !(result as any).error) {
+    markRevoked(opts.trackingId);
+    if (link.kind === 'listen' && link.project_id) {
+      const { updateProjectShareInfo } = require('./db');
+      updateProjectShareInfo(link.project_id, null, null);
+    }
+    logActivity({ id: crypto.randomUUID(), type: 'share_link_revoked', message: `Revoked link: ${opts.trackingId}` });
+  }
+  return result;
 });
 
 ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: string }) => {

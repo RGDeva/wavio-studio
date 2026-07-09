@@ -18,7 +18,7 @@ export interface RegisteredTool {
   description: string;
   parameters: Record<string, { type: string; description: string; required?: boolean }>;
   confirmationRequired: boolean;
-  handler: (params: Record<string, unknown>, context: ProjectContext | null) => Promise<ToolResult>;
+  handler: (params: Record<string, unknown>, context: ProjectContext | null, opts?: { confirmedOutOfBand?: boolean }) => Promise<ToolResult & { status?: string; confirmationSummary?: string }>;
 }
 
 export const TOOL_REGISTRY: RegisteredTool[] = [
@@ -211,15 +211,34 @@ export function getToolByName(name: string): RegisteredTool | undefined {
   return TOOL_REGISTRY.find((t) => t.name === name);
 }
 
+/**
+ * Registers the Phase H project tools (search_files, open_in_daw,
+ * inspect_sync_status, sync_project, publish_version). Called once from
+ * main.ts after the sync agent exists; deps are injected to avoid circular
+ * imports and to keep the tool modules testable. Idempotent.
+ */
+export function registerProjectTools(tools: RegisteredTool[]) {
+  for (const tool of tools) {
+    if (!TOOL_REGISTRY.some((t) => t.name === tool.name)) TOOL_REGISTRY.push(tool);
+  }
+}
+
 // ── LLM Agent Loop ────────────────────────────────────────────────────────────
 
 const API_BASE = 'https://wavi.stream/api';
+
+export interface PendingToolConfirmation {
+  tool: string;
+  params: Record<string, unknown>;
+  summary: string;
+}
+export type AgentChatReply = string | { content: string; pendingConfirmation: PendingToolConfirmation };
 
 export async function runAgentChat(
   messages: Array<{ role: string; content: string }>,
   context: ProjectContext | null,
   authToken: string | null
-): Promise<string> {
+): Promise<AgentChatReply> {
   // Local intent detection first — handles find/open/reveal without LLM round-trip
   const localResult = await tryLocalIntent(messages, context);
   if (localResult !== null) return localResult;
@@ -269,7 +288,18 @@ export async function runAgentChat(
           if (tool) {
             let params: Record<string, unknown> = {};
             try { params = JSON.parse(tc.function.arguments ?? '{}'); } catch {}
+            // Note: no opts passed — the model can never confirm its own call.
             const result = await tool.handler(params, context);
+            if ((result as any).status === 'needs_confirmation') {
+              return {
+                content: result.message ?? 'This action needs your confirmation.',
+                pendingConfirmation: {
+                  tool: tool.name,
+                  params,
+                  summary: (result as any).confirmationSummary ?? `Confirm: ${tool.name}`,
+                },
+              };
+            }
             return result.message ?? result.error ?? 'Done.';
           }
         }
@@ -342,6 +372,7 @@ function buildSystemPrompt(context: ProjectContext | null): string {
     lines.push(`Versions: ${context.versionCount}`);
     lines.push(`Files in project: ${context.files?.length ?? 0}`);
     if (context.lastSyncedAt) lines.push(`Last synced: ${context.lastSyncedAt}`);
+    if (context.versionId) lines.push(`Selected version: ${context.versionId}`);
   }
   return lines.join('\n');
 }

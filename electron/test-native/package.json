@@ -1,0 +1,9 @@
+{
+  "name": "wavi-test-native",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Test-only, Node-ABI build of better-sqlite3 for the desktop Vitest suites. Kept separate from the root install (which is Electron-ABI for the app) so the two ABIs never clobber each other. Pinned to the SAME version as the app.",
+  "dependencies": {
+    "better-sqlite3": "11.9.1"
+  }
+}

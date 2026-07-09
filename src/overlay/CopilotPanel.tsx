@@ -169,10 +169,13 @@ export function CopilotPanel() {
         responseText = out.description || '';
       } else {
         // Free-form: send to LLM (or fallback)
-        responseText = await copilot.chat(
+        const reply = await copilot.chat(
           [...messages, userMsg].map((m) => ({ role: m.role, content: m.content })),
           context
         );
+        responseText = typeof reply === 'string'
+          ? reply
+          : `${(reply as any)?.content ?? ''}\n\nOpen the Copilot page in Wavi Studio to confirm this action.`;
       }
 
       setMessages((prev) =>

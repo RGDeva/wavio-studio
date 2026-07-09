@@ -16,8 +16,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { existsSync } from 'fs';
 
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 // The exact migration line from electron/db.ts _initDatabaseAtPath, reproduced
@@ -56,7 +55,7 @@ maybeDescribe('local_status column migration', () => {
   let Database: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
   });
 
   it('a fresh database that already has the column survives a redundant migration run', () => {
@@ -129,11 +128,11 @@ maybeDescribe('local_status column migration', () => {
   });
 });
 
-describe('regression: ALTER-before-CREATE ordering bug (root cause of the recurring error)', () => {
+maybeDescribe('regression: ALTER-before-CREATE ordering bug (root cause of the recurring error)', () => {
   let Database: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
   });
 
   // Reproduces the exact bug: electron/db.ts _initDatabaseAtPath used to run

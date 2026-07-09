@@ -246,6 +246,15 @@ function registerIpcHandlers() {
     return runAgentChat(messages, context, token);
   });
 
+  // Confirmation card path (Phase H). This is the ONLY caller that passes
+  // confirmedOutOfBand — it runs in response to a real click on the native
+  // confirmation card, never from model output.
+  ipcMain.handle('copilot:confirmTool', async (_e, toolName: string, params: Record<string, unknown>, context: ProjectContext | null) => {
+    const tool = getToolByName(toolName);
+    if (!tool) return { status: 'error', error: `Unknown tool: ${toolName}` };
+    return tool.handler(params ?? {}, context ?? null, { confirmedOutOfBand: true });
+  });
+
   ipcMain.handle('copilot:toggle', () => {
     toggleOverlay();
   });

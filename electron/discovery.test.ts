@@ -3,7 +3,7 @@
  *
  * Covers §3 (import idempotency), §4 (search field clarity), §6 (DAW path validation).
  *
- * Uses real better-sqlite3 via the arm64 Node-compatible binary at /tmp/wavio-sqlite-test/.
+ * Uses real better-sqlite3 resolved from the project's node_modules.
  * Run: npx vitest run electron/discovery.test.ts
  *
  * What is proved here:
@@ -27,8 +27,7 @@ import { join, tmpdir } from 'path';
 import { shouldSkipDirTest, AUDIO_EXTS } from './discovery.test.helpers';
 
 // ── ARM64 Node-compatible binary ──────────────────────────────────────────────
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 // ── Inline schema (mirrors electron/db.ts) ────────────────────────────────────
