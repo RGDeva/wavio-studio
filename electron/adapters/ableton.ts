@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import crypto from 'crypto';
 import type { DawAdapter, ManifestEntry } from './types';
-import { safeRelativePath, classifyFileRole, findPreviewCandidate } from './common';
+import { safeRelativePath, classifyFileRole, findPreviewCandidate, locateProjectFile } from './common';
 
 /**
  * Ableton Live adapter — Phase F extraction. All logic moved verbatim from
@@ -203,4 +203,12 @@ export const abletonAdapter: DawAdapter = {
   manifestExtras: abletonManifestExtras,
   findPreviewCandidate,
   extractMetadata: parseAbletonLiveSet,
+  // Ableton is the reference DAW: native detect, package (with the Project Info
+  // marker), restore, and same-DAW open all work today. Cross-DAW / plugin scan
+  // / fidelity reporting are not implemented yet — reported honestly as false.
+  capabilities: () => ({
+    detect: true, packageNative: true, restore: true, sameDawOpen: true,
+    crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
+  }),
+  locateProjectFile,
 };

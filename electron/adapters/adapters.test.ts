@@ -11,7 +11,7 @@ import * as zlib from 'zlib';
 
 import { abletonAdapter, getAdapterForFile, getAdapterForProject, getAdapterById, genericAdapter, KNOWN_DAW_PROJECT_EXTENSIONS } from './index';
 import { parseAbletonLiveSet, abletonManifestExtras, scanAbletonFolder } from './ableton';
-import { safeRelativePath, classifyFileRole, findPreviewCandidate, PUBLISH_EXCLUDE } from './common';
+import { safeRelativePath, classifyFileRole, findPreviewCandidate, PUBLISH_EXCLUDE, locateProjectFile, RESTORE_PROJECT_EXTENSIONS } from './common';
 
 let tmp: string;
 
@@ -159,5 +159,61 @@ describe('ableton adapter', () => {
     expect(abletonAdapter.projectExtensions).toEqual(['.als']);
     expect(abletonAdapter.classifyFileRole).toBe(classifyFileRole);
     expect(abletonAdapter.safeRelativePath).toBe(safeRelativePath);
+  });
+});
+
+describe('capability reporting', () => {
+  it('Ableton reports native detect/package/restore/same-DAW open; no cross-DAW/scan/fidelity yet', () => {
+    expect(abletonAdapter.capabilities()).toEqual({
+      detect: true, packageNative: true, restore: true, sameDawOpen: true,
+      crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
+    });
+  });
+  it('generic DAW reports restore only', () => {
+    expect(genericAdapter.capabilities()).toEqual({
+      detect: false, packageNative: false, restore: true, sameDawOpen: false,
+      crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
+    });
+  });
+  it('capabilities are honest booleans (no true for unimplemented features)', () => {
+    for (const a of [abletonAdapter, genericAdapter]) {
+      const c = a.capabilities();
+      expect(c.crossDawReconstruct).toBe(false);
+      expect(c.scanPlugins).toBe(false);
+      expect(c.fidelityReport).toBe(false);
+    }
+  });
+});
+
+describe('restore project-file location (behavior-preserving extraction)', () => {
+  it('RESTORE_PROJECT_EXTENSIONS is exactly the pre-extraction set', () => {
+    // Must match the inline list restore:start used, in order — DR-013/WS-006.
+    expect([...RESTORE_PROJECT_EXTENSIONS]).toEqual(['.als', '.ptx', '.logic', '.flp', '.cpr', '.npr']);
+  });
+
+  it('locates a nested DAW project file (recursive, case-insensitive ext)', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wavi-restore-loc-'));
+    fs.mkdirSync(path.join(d, 'inner'), { recursive: true });
+    fs.writeFileSync(path.join(d, 'inner', 'Song.ALS'), Buffer.from('x'));
+    expect(locateProjectFile(d)).toBe(path.join(d, 'inner', 'Song.ALS'));
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('returns null when no project file is present, and both adapters delegate to it', () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'wavi-restore-none-'));
+    fs.writeFileSync(path.join(d, 'notes.txt'), Buffer.from('x'));
+    fs.writeFileSync(path.join(d, 'kick.wav'), Buffer.from('x'));
+    expect(locateProjectFile(d)).toBeNull();
+    // Adapters expose the same behavior through the contract method.
+    expect(abletonAdapter.locateProjectFile(d)).toBeNull();
+    expect(genericAdapter.locateProjectFile(d)).toBeNull();
+    const wav = path.join(d, 'x.flp');
+    fs.writeFileSync(wav, Buffer.from('x'));
+    expect(abletonAdapter.locateProjectFile(d)).toBe(wav); // restore is DAW-agnostic
+    fs.rmSync(d, { recursive: true, force: true });
+  });
+
+  it('missing directory returns null (no throw)', () => {
+    expect(locateProjectFile(path.join(os.tmpdir(), 'wavi-does-not-exist-xyz'))).toBeNull();
   });
 });

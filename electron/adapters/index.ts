@@ -1,7 +1,7 @@
 import * as path from 'path';
 import type { DawAdapter, ManifestEntry } from './types';
 import { abletonAdapter } from './ableton';
-import { safeRelativePath, classifyFileRole, findPreviewCandidate } from './common';
+import { safeRelativePath, classifyFileRole, findPreviewCandidate, locateProjectFile } from './common';
 
 /**
  * DAW adapter registry (Phase F). Ableton is the first real adapter; every
@@ -20,6 +20,13 @@ export const genericAdapter: DawAdapter = {
   manifestExtras: () => [],
   findPreviewCandidate,
   extractMetadata: async () => ({ bpm: 0, key: '' }),
+  // Generic DAWs: restore works (DAW-agnostic), but no native detection,
+  // packaging extras, guaranteed same-DAW open, plugin scan, or fidelity yet.
+  capabilities: () => ({
+    detect: false, packageNative: false, restore: true, sameDawOpen: false,
+    crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
+  }),
+  locateProjectFile,
 };
 
 const ADAPTERS: DawAdapter[] = [abletonAdapter];

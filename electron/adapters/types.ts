@@ -22,6 +22,22 @@ export interface ManifestEntry {
   assetId: string | null;
 }
 
+/**
+ * Honest capability report for the compatibility UI / assistant. Reflects what
+ * the app supports TODAY for this DAW — not aspirational. `sameDawOpen` means
+ * the native project restores and opens in its own DAW; cross-DAW / plugin scan
+ * / fidelity reporting stay false until actually implemented.
+ */
+export interface DawCapabilities {
+  detect: boolean;
+  packageNative: boolean;
+  restore: boolean;
+  sameDawOpen: boolean;
+  crossDawReconstruct: boolean;
+  scanPlugins: boolean;
+  fidelityReport: boolean;
+}
+
 export interface DawAdapter {
   id: 'ableton' | 'generic' | string;
   displayName: string;
@@ -53,4 +69,15 @@ export interface DawAdapter {
 
   /** Lightweight metadata from the project file itself (best-effort). */
   extractMetadata(projectFilePath: string): Promise<{ bpm: number; key: string }>;
+
+  /** Honest capability report (reflects today's support). */
+  capabilities(): DawCapabilities;
+
+  /**
+   * Locate the DAW project file inside a restored directory when no explicit
+   * role='project' manifest entry resolved on disk. Behavior-preserving
+   * fallback extracted from restore:start — same recursive walk and extension
+   * set the flow used inline.
+   */
+  locateProjectFile(restoredDir: string): string | null;
 }

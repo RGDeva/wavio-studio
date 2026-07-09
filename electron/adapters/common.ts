@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import type { ManifestEntry } from './types';
 
@@ -47,6 +48,33 @@ export function findPreviewCandidate(syncedFiles: Array<{ file_path: string }>, 
   for (const f of syncedFiles) {
     if (path.dirname(f.file_path) !== projectRoot) continue;
     if (PREVIEW_FILENAME_RE.test(path.basename(f.file_path))) return f;
+  }
+  return null;
+}
+
+/**
+ * DAW project-file extensions used by the restore fallback search. Extracted
+ * verbatim from restore:start in electron/main.ts — the set MUST stay identical
+ * (behavior-preserving; DR-013 / WS-006). Restore is DAW-agnostic here, so both
+ * the generic and Ableton adapters delegate to the same search.
+ */
+export const RESTORE_PROJECT_EXTENSIONS: readonly string[] = ['.als', '.ptx', '.logic', '.flp', '.cpr', '.npr'];
+
+/**
+ * Recursively find the first DAW project file under `restoredDir`. Identical
+ * traversal/extension logic to the previous inline `walk()` in restore:start.
+ */
+export function locateProjectFile(restoredDir: string): string | null {
+  let entries: fs.Dirent[];
+  try { entries = fs.readdirSync(restoredDir, { withFileTypes: true }); } catch { return null; }
+  for (const entry of entries) {
+    const full = path.join(restoredDir, entry.name);
+    if (entry.isDirectory()) {
+      const r = locateProjectFile(full);
+      if (r) return r;
+    } else if (RESTORE_PROJECT_EXTENSIONS.includes(path.extname(entry.name).toLowerCase())) {
+      return full;
+    }
   }
   return null;
 }

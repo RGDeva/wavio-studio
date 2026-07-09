@@ -1667,18 +1667,11 @@ ipcMain.handle('restore:start', async (_e, opts: {
       if (fs.existsSync(candidate)) { dawProjectPath = candidate; break; }
     }
   }
-  // Fallback: search for .als, .ptx, .logic, .flp
+  // Fallback: recursive search behind the adapter (behavior-preserving — same
+  // extension set and traversal as before; restore is DAW-agnostic so the
+  // adapter resolved from daw_type delegates to the shared locateProjectFile).
   if (!dawProjectPath) {
-    const DAW_EXTS = ['.als', '.ptx', '.logic', '.flp', '.cpr', '.npr'];
-    const walk = (dir: string): string | null => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) { const r = walk(full); if (r) return r; }
-        else if (DAW_EXTS.includes(path.extname(entry.name).toLowerCase())) return full;
-      }
-      return null;
-    };
-    dawProjectPath = walk(finalDir);
+    dawProjectPath = getAdapterForProject(dawType, null).locateProjectFile(finalDir);
   }
 
   if (!dawProjectPath) {
