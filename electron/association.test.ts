@@ -141,7 +141,7 @@ maybeDescribe('File-to-project auto-association', () => {
   let db: any;
 
   beforeEach(async () => {
-    Database = (await import(NATIVE_SQLITE_PATH)).default;
+    Database = require(NATIVE_SQLITE_PATH);
     db = buildDb(Database);
   });
 

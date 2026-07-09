@@ -144,7 +144,7 @@ maybeDescribe('pending-resync regression', () => {
 
   beforeEach(async () => {
     if (!Database) {
-      Database = (await import(NATIVE_SQLITE_PATH)).default;
+      Database = require(NATIVE_SQLITE_PATH);
     }
     db = buildSchema(Database);
   });

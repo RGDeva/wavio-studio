@@ -1,0 +1,41 @@
+name: desktop-tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pin Node to the version in .nvmrc (22). The test-native better-sqlite3
+      # prebuild targets this ABI (127); any other major fails check-test-node.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - name: Print runtime info
+        run: node -e "console.log('node', process.version, 'ABI', process.versions.modules)"
+
+      # Root install builds the Electron-ABI better-sqlite3 (via postinstall
+      # electron-rebuild) — the app binary. It is never used by the tests.
+      - name: Install root deps
+        run: npm ci
+
+      # Isolated Node-ABI better-sqlite3 for the tests. Separate node_modules,
+      # committed lockfile — never touches the root Electron-ABI binary.
+      - name: Set up test-native SQLite
+        run: npm run test:setup-native
+
+      - name: Electron TypeScript
+        run: npm run build:electron
+
+      - name: Renderer TypeScript
+        run: npx tsc -p tsconfig.json --noEmit
+
+      - name: Vitest (full suite)
+        run: npm test

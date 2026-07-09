@@ -76,7 +76,7 @@ maybeDescribe('links registry (real arm64 sqlite)', () => {
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());

@@ -233,7 +233,7 @@ maybeDescribe('5,000-file scale — enqueue + dedup correctness (real arm64 sqli
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());
@@ -294,7 +294,7 @@ maybeDescribe('Startup crash recovery + dedup (repairStalledQueue, real arm64 sq
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());
@@ -360,7 +360,7 @@ maybeDescribe('Sync This Project — priority bump (real arm64 sqlite)', () => {
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());
@@ -406,7 +406,7 @@ maybeDescribe('Sync This Project — failed-row recovery (D3, real arm64 sqlite)
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());
@@ -509,7 +509,7 @@ maybeDescribe('Missing local file / renamed / moved reconciliation (real arm64 s
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());

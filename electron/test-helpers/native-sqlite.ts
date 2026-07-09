@@ -1,51 +1,56 @@
 /**
- * Deterministic resolution of the installed `better-sqlite3` native module for
- * the test suites, replacing the previous hardcoded machine-specific path
- * `/tmp/wavio-sqlite-test/node_modules/better-sqlite3`.
+ * Deterministic, repo-owned resolution of a **Node-ABI** `better-sqlite3` for
+ * the desktop Vitest suites.
  *
- * That absolute path only existed on one developer machine, so on clean
- * worktrees and in CI every DB/discovery/security suite silently `describe.skip`ped
- * (the "broken harness"). `better-sqlite3` is a declared dependency installed
- * at the project root, so a bare specifier resolves it correctly from the
- * repo's node_modules in every environment (repo, worktree, CI, macOS tmp).
+ * Two problems this solves:
+ *  1. Suites previously hardcoded `/tmp/wavio-sqlite-test/...` (a machine path),
+ *     so on clean worktrees/CI every DB/discovery/security suite silently
+ *     `describe.skip`ped — the "broken harness".
+ *  2. The root `node_modules/better-sqlite3` is built for **Electron's ABI**
+ *     (the app), which cannot `dlopen` under the plain-Node runtime Vitest
+ *     uses. A single binary can't satisfy both ABIs.
+ *
+ * Fix: an isolated, Node-ABI install of the SAME version lives in
+ * `electron/test-native/` (its own package.json + committed lockfile;
+ * node_modules gitignored, populated by `npm run test:setup-native`). This
+ * helper resolves ONLY that copy — it never rebuilds or touches the root
+ * Electron-ABI binary. Missing/unloadable native SQLite is surfaced (not
+ * suppressed) and is turned into a HARD failure by `native-sqlite.guard.test.ts`.
  *
  * Test-only. Nothing in the production/main process imports this.
  */
+import * as path from 'path';
 
-/** Bare specifier — resolved from the project's node_modules by Node/Vitest. */
-export const NATIVE_SQLITE_PATH = 'better-sqlite3';
+/** Absolute path to the isolated Node-ABI better-sqlite3 (repo-relative, no machine path). */
+export const NATIVE_SQLITE_PATH = path.join(__dirname, '..', 'test-native', 'node_modules', 'better-sqlite3');
 
-/**
- * A REAL load check: actually loads the native module and opens an in-memory
- * database. This is deliberately stronger than `require.resolve` because the
- * module can resolve yet fail to `dlopen` (ABI mismatch) — e.g. the root copy
- * is built for Electron's ABI while Vitest runs under a different Node ABI.
- *
- * When it loads, every DB/discovery/security suite runs. When it genuinely
- * cannot load in this runtime, the suites skip with a clear reason
- * (`nativeSqliteLoadError`) instead of crashing every test with
- * ERR_DLOPEN_FAILED. Errors are surfaced, never suppressed.
- */
 let _db: any;
 export let nativeSqliteLoadError: string | undefined;
 
+/**
+ * REAL load check: require the isolated copy and open an in-memory database.
+ * Stronger than `require.resolve` because a module can resolve yet fail to
+ * `dlopen` (ABI mismatch). On failure the error is surfaced (never swallowed).
+ */
 export const nativeSqliteAvailable: boolean = (() => {
   try {
-    const Database = require('better-sqlite3');
+    const Database = require(NATIVE_SQLITE_PATH);
     const probe = new Database(':memory:');
     probe.close();
     _db = Database;
     return true;
   } catch (err: any) {
     nativeSqliteLoadError = err?.code || err?.message || String(err);
-    // Surfaced (not suppressed) so a skipped suite has an explained cause.
-    console.warn(`[test] better-sqlite3 unavailable in this runtime: ${nativeSqliteLoadError}`);
+    console.warn(
+      `[test] Node-ABI better-sqlite3 not loadable from electron/test-native: ${nativeSqliteLoadError}. ` +
+      `Run \`npm run test:setup-native\` under Node 22 (see .nvmrc).`,
+    );
     return false;
   }
 })();
 
 /** Returns the loaded better-sqlite3 constructor (only call when available). */
 export function loadBetterSqlite(): any {
-  if (!_db) _db = require('better-sqlite3');
+  if (!_db) _db = require(NATIVE_SQLITE_PATH);
   return _db;
 }

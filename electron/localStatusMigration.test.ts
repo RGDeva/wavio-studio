@@ -55,7 +55,7 @@ maybeDescribe('local_status column migration', () => {
   let Database: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
   });
 
   it('a fresh database that already has the column survives a redundant migration run', () => {
@@ -132,7 +132,7 @@ maybeDescribe('regression: ALTER-before-CREATE ordering bug (root cause of the r
   let Database: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
   });
 
   // Reproduces the exact bug: electron/db.ts _initDatabaseAtPath used to run
