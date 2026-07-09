@@ -11,7 +11,7 @@ import { DawLogo } from './DawLogo';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import {
   DetailFile, ROLE_LABELS, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, ROLE_ORDER,
-  buildBounceMediaUrl,
+  buildBounceMediaUrl, deriveProjectSummary, formatFileSize,
 } from '../lib/projectDetailView';
 import { deriveLinkStatus, linkDisplayName } from '../lib/linksView';
 import { deriveCompatibilityRows, compatibilityHeadline, DawCapabilityReport } from '../lib/compatibilityView';
@@ -147,6 +147,7 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
 
   const projectRoot = project.file_path ? project.file_path.split(/[/\\]/).slice(0, -1).join('/') + '/' : '';
   const groups = useMemo(() => groupFilesByRole(files), [files]);
+  const summary = useMemo(() => deriveProjectSummary(files), [files]);
   const bounce = useMemo(() => pickLatestBounce(files), [files]);
   // Opaque, id-only media URL — never a raw filesystem path. null → no playable
   // bounce, so we never hand the <audio> element an empty or file:// src.
@@ -331,6 +332,23 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Project summary — at-a-glance package facts (§6.2) */}
+          {!loading && summary.totalFiles > 0 && (
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/40">
+              <span className={summary.hasNativeProject ? 'text-white/60' : 'text-amber-400'}>
+                {summary.hasNativeProject ? 'Native project ✓' : 'No native project'}
+              </span>
+              <span>·</span><span>{summary.stemCount} stems</span>
+              <span>·</span><span>{summary.midiCount} MIDI</span>
+              <span>·</span><span>{formatFileSize(summary.totalSize)}</span>
+              {summary.missingCount > 0 && (<><span>·</span><span className="text-amber-400">{summary.missingCount} missing</span></>)}
+              <span>·</span>
+              <span className={summary.packageCompleteness === 100 ? 'text-emerald-400' : 'text-white/40'}>
+                {summary.packageCompleteness}% complete
+              </span>
             </div>
           )}
 
