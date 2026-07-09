@@ -13,8 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync } from 'fs';
 
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 // Constants must match db.ts

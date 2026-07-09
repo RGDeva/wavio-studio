@@ -14,7 +14,7 @@
  * (NODE_MODULE_VERSION mismatch). So:
  *   - DB-backed tests replicate the exact SQL from db.ts against a
  *     separately-installed arm64 Node-compatible better-sqlite3 binary at
- *     /tmp/wavio-sqlite-test/, skipping gracefully if that binary isn't set up.
+ *     the project's node_modules, skipping gracefully if it cannot be resolved.
  *   - SyncAgent concurrency/pause/cancel behavior is verified against a pure-JS
  *     mirror of the exact _tick()/pauseUser()/cancelItem() algorithm in
  *     electron/syncAgent.ts (same technique sync.test.ts uses for checksum/
@@ -32,8 +32,7 @@ vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp/wavi-scalability-test') },
 }));
 
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 // ── Inline schema + SQL mirrors (kept in sync with electron/db.ts) ───────────
