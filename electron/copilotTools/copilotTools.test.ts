@@ -130,20 +130,33 @@ describe('local tools work offline (unauthenticated)', () => {
 });
 
 describe('tool behaviors', () => {
-  it('open_in_daw uses the selected project when no query given', async () => {
+  it('open_in_daw is gated: no confirmation → needs_confirmation and NO app launch', async () => {
     const deps = fakeDeps();
     const r = await tool(deps, 'open_in_daw').handler({}, ctxWithProject);
+    expect(r.status).toBe('needs_confirmation');
+    expect(r.confirmationSummary).toContain('external DAW application');
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+  it('SECURITY: open_in_daw model-supplied confirmed:true is ignored — still gated, no launch', async () => {
+    const deps = fakeDeps();
+    const r = await tool(deps, 'open_in_daw').handler({ confirmed: true }, ctxWithProject);
+    expect(r.status).toBe('needs_confirmation');
+    expect(deps.openPath).not.toHaveBeenCalled();
+  });
+  it('open_in_daw uses the selected project when confirmed out-of-band', async () => {
+    const deps = fakeDeps();
+    const r = await tool(deps, 'open_in_daw').handler({}, ctxWithProject, { confirmedOutOfBand: true });
     expect(r.status).toBe('done');
     expect(deps.openPath).toHaveBeenCalledWith('/proj/My Song.als');
   });
-  it('open_in_daw errors clearly with no project and no query', async () => {
-    const r = await tool(fakeDeps(), 'open_in_daw').handler({}, null);
+  it('open_in_daw errors clearly with no project and no query (after confirm)', async () => {
+    const r = await tool(fakeDeps(), 'open_in_daw').handler({}, null, { confirmedOutOfBand: true });
     expect(r.status).toBe('error');
     expect(r.error).toContain('No project selected');
   });
-  it('open_in_daw refuses files missing on disk', async () => {
+  it('open_in_daw refuses files missing on disk (after confirm)', async () => {
     const deps = fakeDeps({ fileExists: () => false });
-    const r = await tool(deps, 'open_in_daw').handler({}, ctxWithProject);
+    const r = await tool(deps, 'open_in_daw').handler({}, ctxWithProject, { confirmedOutOfBand: true });
     expect(r.status).toBe('error');
     expect(r.error).toContain('moved or deleted');
   });
@@ -175,8 +188,8 @@ describe('registry integration', () => {
     for (const t of tools) await t.handler({ query: 'x' }, ctxWithProject);
     expect(deps.auditLog.length).toBe(tools.length);
   });
-  it('only publish_version is confirmation-required', () => {
+  it('external-app + cloud actions are confirmation-required; read-only ones are not', () => {
     const flags = Object.fromEntries(buildProjectTools(fakeDeps()).map((t) => [t.name, t.confirmationRequired]));
-    expect(flags).toEqual({ search_files: false, open_in_daw: false, inspect_sync_status: false, sync_project: false, publish_version: true });
+    expect(flags).toEqual({ search_files: false, open_in_daw: true, inspect_sync_status: false, sync_project: false, publish_version: true });
   });
 });

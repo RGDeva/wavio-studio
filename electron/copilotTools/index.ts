@@ -65,6 +65,18 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): CopilotToolSpec[] 
         query: { type: 'string', description: 'Project or file name — omit to open the selected project', required: false },
       },
       execution: 'local',
+      // Opening an external application is a side-effecting action the model must
+      // not perform unattended (safety list: "opening external applications";
+      // DR-014). Gated — only the renderer's confirmation card sets
+      // confirmedOutOfBand; a model-emitted `confirmed` is stripped by the envelope.
+      requiresConfirmation: true,
+      confirmationSummary: (params, ctx) => {
+        const c = ctx as ProjectContext | null;
+        const target = (typeof params.query === 'string' && params.query.trim())
+          ? `“${params.query}”`
+          : `“${c?.projectName ?? 'the selected project'}”`;
+        return `Open ${target} in an external DAW application?`;
+      },
       run: async (params, ctx): Promise<CopilotToolResult> => {
         let filePath: string | null = null;
         let label: string | null = null;
