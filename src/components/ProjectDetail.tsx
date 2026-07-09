@@ -14,6 +14,7 @@ import {
   buildBounceMediaUrl,
 } from '../lib/projectDetailView';
 import { deriveLinkStatus, linkDisplayName } from '../lib/linksView';
+import { deriveCompatibilityRows, compatibilityHeadline, DawCapabilityReport } from '../lib/compatibilityView';
 
 const ROLE_ICONS: Record<string, React.FC<any>> = {
   project: FolderOpen, audio: Music, stem: Music, sample: Music, midi: FileText,
@@ -95,6 +96,8 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [playError, setPlayError] = useState(false);
+  // DAW compatibility (adapter capability report)
+  const [compat, setCompat] = useState<DawCapabilityReport | null>(null);
 
   // Guards against stale async: a load() resolving after the user switched
   // projects must not paint the previous project's files (which would let the
@@ -131,6 +134,16 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
     setPlayError(false);
     load();
   }, [project.id, load]);
+
+  // DAW compatibility report for this project (stale-async guarded by project id).
+  useEffect(() => {
+    let active = true;
+    setCompat(null);
+    api.daw.getCapabilities({ dawType: project.daw_type, filePath: project.file_path })
+      .then((r) => { if (active) setCompat(r); })
+      .catch(() => { if (active) setCompat(null); });
+    return () => { active = false; };
+  }, [project.id, project.daw_type, project.file_path]);
 
   const projectRoot = project.file_path ? project.file_path.split(/[/\\]/).slice(0, -1).join('/') + '/' : '';
   const groups = useMemo(() => groupFilesByRole(files), [files]);
@@ -301,6 +314,25 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               <Link2 className="w-3 h-3" /> Listen Link
             </button>
           </div>
+
+          {/* Compatibility — honest capability report from the DAW adapter */}
+          {compat && (
+            <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+              <p className="text-[11px] font-semibold text-white/70 mb-2">{compatibilityHeadline(compat)}</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                {deriveCompatibilityRows(compat).map((row) => (
+                  <div key={row.label} className="flex items-center justify-between text-[11px]">
+                    <span className="text-white/40 truncate">{row.label}</span>
+                    <span className={
+                      row.tone === 'ok' ? 'text-emerald-400'
+                        : row.tone === 'warn' ? 'text-amber-400'
+                        : 'text-white/35'
+                    }>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Listen-link permissions mini-panel (relocated from Dashboard rows) */}
           {showListenPanel && (

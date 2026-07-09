@@ -73,6 +73,16 @@ export interface WaviAPI {
     getById: (id: string) => Promise<any>;
     getDemoStatus: (projectId: string) => Promise<any>;
   };
+  daw: {
+    getCapabilities: (opts: { dawType?: string | null; filePath?: string | null }) => Promise<{
+      id: string;
+      displayName: string;
+      capabilities: {
+        detect: boolean; packageNative: boolean; restore: boolean; sameDawOpen: boolean;
+        crossDawReconstruct: boolean; scanPlugins: boolean; fidelityReport: boolean;
+      };
+    }>;
+  };
   files: {
     getByProject: (projectId: string) => Promise<any[]>;
     getAll: (limit?: number, offset?: number) => Promise<any[]>;
@@ -219,6 +229,7 @@ const _stub: WaviAPI = {
   copilot: { toggle: _noop, getContext: _noop, chat: _noop, confirmTool: _noop },
   folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop, confirmAmbiguous: _noop, rescan: _noop, scanMeta: () => Promise.resolve({}), fileCounts: () => Promise.resolve({}), excludePath: _noop, getExcluded: () => Promise.resolve([]), unexcludePath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
+  daw: { getCapabilities: () => Promise.resolve({ id: 'generic', displayName: 'DAW project', capabilities: { detect: false, packageNative: false, restore: true, sameDawOpen: false, crossDawReconstruct: false, scanPlugins: false, fidelityReport: false } }) },
   files: { getByProject: () => Promise.resolve([]), getAll: () => Promise.resolve([]), search: () => Promise.resolve([]), stats: () => Promise.resolve({ totalFiles: 0, totalSize: 0, syncedFiles: 0, byType: [], byRole: [] }), import: () => Promise.resolve([]), addViaDialog: () => Promise.resolve([]), discoverAll: () => Promise.resolve({ found: 0, imported: 0, duplicates: 0, scanned: 0, permissionErrors: 0, durationMs: 0, cancelled: false, limitReached: false }), discoverCancel: _noop, defaultDiscoveryRoots: () => Promise.resolve([]) },
   sync: { getQueue: () => Promise.resolve([]), retryAll: _noop, getStatus: () => Promise.resolve('idle'), now: _noop, pause: () => Promise.resolve('idle'), resume: () => Promise.resolve('idle'), isPausedByUser: () => Promise.resolve(false), prioritizeProject: () => Promise.resolve({ needsConfirmation: false as const, bumped: 0, requeued: 0, blockedPermanent: 0, skippedMissing: 0 }), cancelItem: () => Promise.resolve(false) },
   activity: { getAll: () => Promise.resolve([]) },

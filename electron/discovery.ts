@@ -17,6 +17,7 @@ import { readdirSync, statSync, lstatSync } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
+import { KNOWN_DAW_PROJECT_EXTENSIONS } from './adapters';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -109,7 +110,9 @@ function shouldSkipDir(name: string, fullPath: string): boolean {
 // confirmation first (see files:confirmAmbiguousFolder in main.ts). Never
 // classifies on file count alone: the ratio to DAW project files is the
 // signal, since a real project folder with many stems/bounces is legitimate.
-const DAW_PROJECT_EXTS = new Set(['.flp', '.als', '.ptx', '.ptf', '.rpp', '.logic', '.band', '.npr', '.sesx', '.song', '.reason', '.bwproject', '.cpr']);
+// Derived from the DAW adapter registry (Phase F) — same membership as the
+// previous hardcoded list; adapters are the single source of truth now.
+const DAW_PROJECT_EXTS: ReadonlySet<string> = KNOWN_DAW_PROJECT_EXTENSIONS;
 const SAMPLE_LIBRARY_NAME_PATTERNS = [
   /splice/i, /loopmasters/i, /native instruments/i, /kontakt library/i,
   /output\s*(rev|arcade|portal)/i, /spitfire/i, /sample\s*pack/i,
