@@ -1947,6 +1947,14 @@ ipcMain.handle('projects:getDemoStatus', (_e, projectId: string) => {
   };
 });
 
+// DAW capability report for the Project Detail compatibility surface. Pure
+// adapter lookup — no canonical cloud state. Resolves by stored daw_type, then
+// by the project file path.
+ipcMain.handle('daw:getCapabilities', (_e, opts: { dawType?: string | null; filePath?: string | null }) => {
+  const adapter = getAdapterForProject(opts?.dawType ?? null, opts?.filePath ?? null);
+  return { id: adapter.id, displayName: adapter.displayName, capabilities: adapter.capabilities() };
+});
+
 // Files
 ipcMain.handle('files:getByProject', (_e, projectId: string) => getFilesByProject(projectId));
 ipcMain.handle('files:getAll', (_e, limit?: number, offset?: number) => getAllFiles(limit ?? 500, offset ?? 0));

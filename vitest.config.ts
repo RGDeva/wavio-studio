@@ -33,6 +33,7 @@ export default defineConfig({
       'electron/native-sqlite.guard.test.ts',
       'electron/mediaProtocol.test.ts',
       'electron/adapters/adapters.test.ts',
+      'src/lib/compatibilityView.test.ts',
     ],
     environment: 'node',
   },

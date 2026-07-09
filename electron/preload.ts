@@ -51,6 +51,12 @@ contextBridge.exposeInMainWorld('waviAPI', {
     getDemoStatus: (projectId: string) => ipcRenderer.invoke('projects:getDemoStatus', projectId),
   },
 
+  // DAW capability report (compatibility surface)
+  daw: {
+    getCapabilities: (opts: { dawType?: string | null; filePath?: string | null }) =>
+      ipcRenderer.invoke('daw:getCapabilities', opts),
+  },
+
   // Files
   files: {
     getByProject: (projectId: string) => ipcRenderer.invoke('files:getByProject', projectId),
