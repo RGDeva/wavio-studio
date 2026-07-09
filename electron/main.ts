@@ -19,6 +19,7 @@ import Store from 'electron-store';
 import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
 import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES, assertNotProductionUserDataDir } from './deepLinkValidator';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS, classifyFolderForImport, FolderClassification } from './discovery';
+import { registerWaviMediaPrivileges, registerWaviMediaProtocol } from './mediaProtocolRegister';
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -354,6 +355,11 @@ try {
   // commandLine may not be available in all contexts - continue without
 }
 
+// wavi-media:// must be declared privileged before the app becomes ready.
+// (Module scope executes before app.whenReady() resolves.) The request handler
+// itself is installed after the DB is initialized, inside whenReady below.
+registerWaviMediaPrivileges();
+
 app.whenReady().then(async () => {
   mainLog('--- main process started ---');
   logApiEnvironment();
@@ -386,6 +392,15 @@ app.whenReady().then(async () => {
   const t0 = Date.now();
   const db = initDatabase({ dbName: process.env.WAVI_E2E === '1' ? 'wavio-studio-e2e.db' : 'wavio-studio.db' });
   mainLog(`Database initialized in ${Date.now() - t0}ms`);
+
+  // Secure local bounce playback (wavi-media://asset/{projectId}/{assetId}).
+  // Authorization source is the local files table; approved roots are the
+  // user's watched folders. Works in dev and packaged builds.
+  registerWaviMediaProtocol({
+    db,
+    getApprovedRoots: () => (store.get('watchedFolders', []) as string[]),
+    log: (event, data) => authLog(event, data),
+  });
 
   // Step 4: Initialize watcher manager with safe IPC sender
   watcherManager = new WatcherManager(db, (event) => {

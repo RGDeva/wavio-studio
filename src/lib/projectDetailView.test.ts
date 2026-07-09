@@ -1,6 +1,6 @@
 /** Project Detail presentation logic (Phase D). */
 import { describe, it, expect } from 'vitest';
-import { deriveRole, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, DetailFile } from './projectDetailView';
+import { deriveRole, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, buildBounceMediaUrl, DetailFile } from './projectDetailView';
 
 function f(overrides: Partial<DetailFile> = {}): DetailFile {
   return {
@@ -10,6 +10,21 @@ function f(overrides: Partial<DetailFile> = {}): DetailFile {
     ...overrides,
   };
 }
+
+describe('buildBounceMediaUrl (renderer gets an opaque url, never a raw path)', () => {
+  it('builds an id-only wavi-media url', () => {
+    const url = buildBounceMediaUrl('proj-1', f({ id: 'asset-9', file_path: '/Users/me/Music/x.wav' }));
+    expect(url).toBe('wavi-media://asset/proj-1/asset-9');
+    expect(url).not.toContain('/Users');
+    expect(url).not.toContain('.wav');
+  });
+  it('returns null for missing bounce, missing-on-disk, or unsafe ids', () => {
+    expect(buildBounceMediaUrl('proj-1', null)).toBeNull();
+    expect(buildBounceMediaUrl('proj-1', f({ id: 'a', local_status: 'missing' }))).toBeNull();
+    expect(buildBounceMediaUrl('proj-1', f({ id: '../etc/passwd' }))).toBeNull();
+    expect(buildBounceMediaUrl(undefined, f({ id: 'a' }))).toBeNull();
+  });
+});
 
 describe('deriveRole', () => {
   it('missing beats everything', () => {

@@ -101,3 +101,20 @@ export function pickShareAsset(files: DetailFile[]): DetailFile | null {
     null
   );
 }
+
+/**
+ * Opaque media URL for secure local bounce playback (WS-005). Contains only
+ * ids — never a filesystem path — and is resolved by the main-process
+ * wavi-media:// handler through trusted local state. Returns null when the ids
+ * are missing or structurally unsafe, so the caller can avoid ever setting an
+ * empty or file:// audio src.
+ *
+ * Must stay in sync with the parser in electron/mediaProtocol.ts.
+ */
+const SAFE_MEDIA_ID = /^[A-Za-z0-9_-]+$/;
+export function buildBounceMediaUrl(projectId: string | undefined, file: DetailFile | null): string | null {
+  if (!file || !projectId) return null;
+  if (!SAFE_MEDIA_ID.test(projectId) || !SAFE_MEDIA_ID.test(file.id)) return null;
+  if (file.local_status === 'missing') return null;
+  return `wavi-media://asset/${projectId}/${file.id}`;
+}
