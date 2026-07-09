@@ -118,3 +118,67 @@ export function buildBounceMediaUrl(projectId: string | undefined, file: DetailF
   if (file.local_status === 'missing') return null;
   return `wavi-media://asset/${projectId}/${file.id}`;
 }
+
+export interface ProjectSummary {
+  hasNativeProject: boolean;
+  hasBounce: boolean;
+  stemCount: number;
+  midiCount: number;
+  artworkCount: number;
+  totalFiles: number;
+  missingCount: number;
+  syncedCount: number;
+  totalSize: number;
+  /** 0–100: share of files present on disk AND synced to cloud. */
+  packageCompleteness: number;
+}
+
+/**
+ * Pure Project-Detail summary (execution plan §6.2). Derives the at-a-glance
+ * package facts from the file list — no I/O — so it is unit-testable and the
+ * component stays declarative. Roles come from the same deriveRole used by the
+ * grouped view, so counts and groups never disagree.
+ */
+export function deriveProjectSummary(files: DetailFile[]): ProjectSummary {
+  let stemCount = 0, midiCount = 0, artworkCount = 0, missingCount = 0, syncedCount = 0, totalSize = 0;
+  let hasNativeProject = false;
+  const bounce = pickLatestBounce(files);
+
+  for (const f of files) {
+    const role = deriveRole(f);
+    if (role === 'project') hasNativeProject = true;
+    else if (role === 'stem') stemCount++;
+    else if (role === 'midi') midiCount++;
+    else if (role === 'artwork') artworkCount++;
+    if (f.local_status === 'missing') missingCount++;
+    if (f.sync_status === 'synced') syncedCount++;
+    totalSize += f.file_size ?? 0;
+  }
+
+  const totalFiles = files.length;
+  // Complete = present on disk (not missing) and synced. Empty project → 0.
+  const completeFiles = files.filter((f) => f.local_status !== 'missing' && f.sync_status === 'synced').length;
+  const packageCompleteness = totalFiles === 0 ? 0 : Math.round((completeFiles / totalFiles) * 100);
+
+  return {
+    hasNativeProject,
+    hasBounce: bounce !== null,
+    stemCount,
+    midiCount,
+    artworkCount,
+    totalFiles,
+    missingCount,
+    syncedCount,
+    totalSize,
+    packageCompleteness,
+  };
+}
+
+/** Human-readable byte size for the summary strip. */
+export function formatFileSize(bytes: number): string {
+  if (bytes <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
+  const n = bytes / Math.pow(1024, i);
+  return `${i === 0 ? n : n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
+}
