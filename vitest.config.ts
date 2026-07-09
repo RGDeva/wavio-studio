@@ -31,6 +31,7 @@ export default defineConfig({
       'src/lib/projectDetailView.test.ts',
       'electron/links.test.ts',
       'electron/native-sqlite.guard.test.ts',
+      'electron/mediaProtocol.test.ts',
     ],
     environment: 'node',
   },

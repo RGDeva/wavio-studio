@@ -11,6 +11,7 @@ import { DawLogo } from './DawLogo';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import {
   DetailFile, ROLE_LABELS, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, ROLE_ORDER,
+  buildBounceMediaUrl,
 } from '../lib/projectDetailView';
 import { deriveLinkStatus, linkDisplayName } from '../lib/linksView';
 
@@ -95,28 +96,48 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   const [playing, setPlaying] = useState(false);
   const [playError, setPlayError] = useState(false);
 
+  // Guards against stale async: a load() resolving after the user switched
+  // projects must not paint the previous project's files (which would let the
+  // media element load a bounce from the prior project).
+  const loadedProjectRef = useRef<string>(project.id);
+
   const load = useCallback(async () => {
+    const forProject = project.id;
     setLoading(true);
     try {
       const [f, v, l, a] = await Promise.all([
-        api.files.getByProject(project.id),
-        api.versions.getByProject(project.id).catch(() => []),
+        api.files.getByProject(forProject),
+        api.versions.getByProject(forProject).catch(() => []),
         api.links.getAll().catch(() => []),
         api.activity.getAll().catch(() => []),
       ]);
+      if (loadedProjectRef.current !== forProject) return; // switched away mid-flight
       setFiles(f as unknown as DetailFile[]);
       setVersions(Array.isArray(v) ? v : []);
-      setLinks((Array.isArray(l) ? l : []).filter((x: LinkListItem) => x.project_id === project.id));
-      setActivity((Array.isArray(a) ? a : []).filter((x: any) => x.project_id === project.id).slice(0, 50));
+      setLinks((Array.isArray(l) ? l : []).filter((x: LinkListItem) => x.project_id === forProject));
+      setActivity((Array.isArray(a) ? a : []).filter((x: any) => x.project_id === forProject).slice(0, 50));
     } catch { /* individual sections degrade */ }
-    setLoading(false);
+    if (loadedProjectRef.current === forProject) setLoading(false);
   }, [project.id]);
 
-  useEffect(() => { load(); }, [load]);
+  // On project switch: stop playback, clear the previous media source and
+  // player state, then reload for the new project.
+  useEffect(() => {
+    loadedProjectRef.current = project.id;
+    const el = audioRef.current;
+    if (el) { el.pause(); el.removeAttribute('src'); el.load(); }
+    setFiles([]);
+    setPlaying(false);
+    setPlayError(false);
+    load();
+  }, [project.id, load]);
 
   const projectRoot = project.file_path ? project.file_path.split(/[/\\]/).slice(0, -1).join('/') + '/' : '';
   const groups = useMemo(() => groupFilesByRole(files), [files]);
   const bounce = useMemo(() => pickLatestBounce(files), [files]);
+  // Opaque, id-only media URL — never a raw filesystem path. null → no playable
+  // bounce, so we never hand the <audio> element an empty or file:// src.
+  const bounceMediaUrl = useMemo(() => buildBounceMediaUrl(project.id, bounce), [project.id, bounce]);
   const totalSize = files.reduce((s, f) => s + (f.file_size ?? 0), 0);
   const syncedCount = files.filter((f) => f.sync_status === 'synced').length;
 
@@ -233,16 +254,24 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
         <div className="px-5 py-3 border-b border-white/5 space-y-2.5">
           {bounce && (
             <div className="flex items-center gap-3 bg-white/[0.03] rounded-lg px-3 py-2">
-              <button onClick={togglePlay} disabled={playError}
+              <button onClick={togglePlay} disabled={playError || !bounceMediaUrl}
                 className="w-8 h-8 rounded-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-30 text-black flex items-center justify-center flex-shrink-0 transition-colors">
                 {playing ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
               </button>
               <div className="flex-1 min-w-0">
                 <p className="text-xs text-white/70 truncate">{bounce.file_name}</p>
-                <p className="text-[10px] text-white/25">{playError ? "Couldn't play this file — use Open instead." : 'Latest bounce'}</p>
+                <p className="text-[10px] text-white/25">
+                  {!bounceMediaUrl ? 'Bounce unavailable — file is missing on disk.'
+                    : playError ? "Couldn't play this file — use Open instead."
+                    : 'Latest bounce'}
+                </p>
               </div>
-              <audio ref={audioRef} src={`file://${bounce.file_path}`}
-                onEnded={() => setPlaying(false)} onError={() => setPlayError(true)} />
+              {/* Opaque protocol URL only; never file://. Element omitted (no src="")
+                  when there is no playable bounce. */}
+              {bounceMediaUrl && (
+                <audio ref={audioRef} src={bounceMediaUrl}
+                  onEnded={() => setPlaying(false)} onError={() => setPlayError(true)} />
+              )}
             </div>
           )}
           <div className="flex items-center gap-2 flex-wrap">
