@@ -6,7 +6,7 @@
  *   2. findProjectForDirectory returns a project whose file lives in a given dir
  *   3. associateUnclaimedFilesInDirectory assigns standalone files to a project
  *
- * Uses an in-memory better-sqlite3 binary at /tmp/wavio-sqlite-test/ so tests
+ * Uses the better-sqlite3 module resolved from the project's node_modules so tests
  * run under arm64 Node without the Electron-ABI binary.
  *
  * Run: npx vitest run electron/association.test.ts
@@ -16,8 +16,8 @@ import { join, dirname, sep } from 'path';
 import { existsSync } from 'fs';
 import crypto from 'crypto';
 
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const available = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
+const available = nativeSqliteAvailable;
 const maybeDescribe = available ? describe : describe.skip;
 
 function uuid() { return crypto.randomUUID(); }
@@ -141,7 +141,7 @@ maybeDescribe('File-to-project auto-association', () => {
   let db: any;
 
   beforeEach(async () => {
-    Database = (await import(NATIVE_SQLITE_PATH)).default;
+    Database = require(NATIVE_SQLITE_PATH);
     db = buildDb(Database);
   });
 

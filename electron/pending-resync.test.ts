@@ -16,8 +16,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { existsSync } from 'fs';
 
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 function buildSchema(Database: any) {
@@ -145,7 +144,7 @@ maybeDescribe('pending-resync regression', () => {
 
   beforeEach(async () => {
     if (!Database) {
-      Database = (await import(NATIVE_SQLITE_PATH)).default;
+      Database = require(NATIVE_SQLITE_PATH);
     }
     db = buildSchema(Database);
   });

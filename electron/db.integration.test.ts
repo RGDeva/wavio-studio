@@ -2,7 +2,7 @@
  * Real SQLite integration tests for electron/db.ts logic.
  *
  * Uses a separately installed arm64 Node-compatible better-sqlite3 binary at
- * /tmp/wavio-sqlite-test/ — the project's Electron-built binary has x86_64 ABI
+ * the project's node_modules better-sqlite3 (Node ABI)
  * and cannot load under arm64 Node (NODE_MODULE_VERSION mismatch).
  *
  * Run: npx vitest run electron/db.integration.test.ts
@@ -21,11 +21,10 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 
 // ── ARM64 Node-compatible binary ──────────────────────────────────────────────
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 
 // If the arm64 binary isn't present, skip gracefully rather than fail CI.
-// Run `mkdir -p /tmp/wavio-sqlite-test && npm install better-sqlite3` there to enable.
+// Resolved automatically from the repo's node_modules via ./test-helpers/native-sqlite.
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 // ── Inline schema (mirrors electron/db.ts) ────────────────────────────────────

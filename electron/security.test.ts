@@ -74,8 +74,7 @@ function validateSafePathTest(
 }
 
 // ── SQLite setup (same pattern as discovery.test.ts) ─────────────────────────
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const nativeSqliteAvailable = existsSync(NATIVE_SQLITE_PATH);
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 function buildDb(Database: any) {

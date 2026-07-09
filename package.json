@@ -13,8 +13,13 @@
     "build:win": "npm run build && electron-builder --win",
     "build:linux": "npm run build && electron-builder --linux",
     "lint": "eslint . --ext ts,tsx",
+    "test:setup-native": "node scripts/check-test-node.mjs && npm --prefix electron/test-native ci",
+    "pretest": "node scripts/check-test-node.mjs",
     "test": "vitest run",
     "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
+  },
+  "engines": {
+    "node": ">=22.0.0 <23.0.0"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.2",

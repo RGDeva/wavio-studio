@@ -6,8 +6,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync } from 'fs';
 
-const NATIVE_SQLITE_PATH = '/tmp/wavio-sqlite-test/node_modules/better-sqlite3';
-const maybeDescribe = existsSync(NATIVE_SQLITE_PATH) ? describe : describe.skip;
+import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
+const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
 function buildSchema(Database: any) {
   const db = new Database(':memory:');
@@ -76,7 +76,7 @@ maybeDescribe('links registry (real arm64 sqlite)', () => {
   let db: any;
 
   beforeEach(async () => {
-    if (!Database) Database = (await import(NATIVE_SQLITE_PATH)).default;
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
     db = buildSchema(Database);
   });
   afterEach(() => db.close());
