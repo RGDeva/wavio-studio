@@ -8,6 +8,7 @@ import { ErrorState } from '../../components/ui/ErrorState';
 import { Button } from '../../components/ui/Button';
 import { StatusBadge } from '../../components/ui/StatusBadge';
 import { SyncStatusBadge } from '../../components/SyncStatusBadge';
+import ProjectDetailPreview from './ProjectDetailPreview';
 import {
   previewProjects, previewLinks, previewVersions, previewActivity,
   PREVIEW_STATES, type PreviewState,
@@ -29,12 +30,17 @@ const SURFACES = [
 export default function UiPreview() {
   const [state, setState] = useState<PreviewState>('populated');
   const offline = state === 'offline';
+  const [view, setView] = useState<'home' | 'project'>('home');
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface">
         <span className="font-brand font-bold text-sm">UI Preview</span>
         <span className="text-[11px] text-muted-fg">synthetic fixtures · dev-only</span>
+        <div className="flex items-center gap-1 ml-3">
+          <Button size="compact" variant={view === 'home' ? 'primary' : 'ghost'} onClick={() => setView('home')}>Home</Button>
+          <Button size="compact" variant={view === 'project' ? 'primary' : 'ghost'} onClick={() => setView('project')}>Project Detail</Button>
+        </div>
         <div className="ml-auto flex items-center gap-1">
           {PREVIEW_STATES.map((s) => (
             <Button key={s} size="compact" variant={s === state ? 'primary' : 'ghost'} onClick={() => setState(s)}>{s}</Button>
@@ -42,12 +48,19 @@ export default function UiPreview() {
         </div>
       </div>
 
-      {offline && (
+      {view === 'project' && (
+        <div className="flex-1 overflow-hidden bg-background flex justify-center py-4">
+          <ProjectDetailPreview state={state} />
+        </div>
+      )}
+
+      {view === 'home' && offline && (
         <div className="px-4 py-1.5 bg-warning/10 border-b border-warning/20 text-xs text-warning">
           You are offline — changes will sync when the connection returns.
         </div>
       )}
 
+      {view === 'home' && (
       <div className="flex flex-1 overflow-hidden">
         {/* Shell mock nav */}
         <nav aria-label="Preview navigation" className="w-52 flex-shrink-0 bg-background border-r border-border py-3 px-2 space-y-0.5">
@@ -165,6 +178,7 @@ export default function UiPreview() {
           </div>
         </main>
       </div>
+      )}
     </div>
   );
 }

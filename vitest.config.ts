@@ -35,6 +35,7 @@ export default defineConfig({
       'electron/adapters/adapters.test.ts',
       'src/lib/compatibilityView.test.ts',
       'src/dev/uiPreview/isPreviewEnabled.test.ts',
+      'src/components/ui/uiPrimitives.test.ts',
     ],
     environment: 'node',
   },

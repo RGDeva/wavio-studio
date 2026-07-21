@@ -1,6 +1,6 @@
 /** Project Detail presentation logic (Phase D). */
 import { describe, it, expect } from 'vitest';
-import { deriveRole, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, buildBounceMediaUrl, deriveProjectSummary, formatFileSize, DetailFile } from './projectDetailView';
+import { deriveRole, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, buildBounceMediaUrl, deriveProjectSummary, formatFileSize, deriveNextAction, DetailFile } from './projectDetailView';
 
 function f(overrides: Partial<DetailFile> = {}): DetailFile {
   return {
@@ -10,6 +10,27 @@ function f(overrides: Partial<DetailFile> = {}): DetailFile {
     ...overrides,
   };
 }
+
+describe('deriveNextAction (honest next step, precedence)', () => {
+  it('missing files take precedence (warn)', () => {
+    expect(deriveNextAction({ missingCount: 2, cloudReady: true, versionCount: 3, activeLinkCount: 1 }))
+      .toEqual({ text: expect.stringContaining('2 files missing'), tone: 'warn' });
+  });
+  it('not synced → sync (info)', () => {
+    expect(deriveNextAction({ missingCount: 0, cloudReady: false, versionCount: 0, activeLinkCount: 0 }).tone).toBe('info');
+  });
+  it('synced but no versions → publish (info)', () => {
+    expect(deriveNextAction({ missingCount: 0, cloudReady: true, versionCount: 0, activeLinkCount: 0 }))
+      .toMatchObject({ tone: 'info' });
+  });
+  it('versions but no active links → share (ok)', () => {
+    expect(deriveNextAction({ missingCount: 0, cloudReady: true, versionCount: 2, activeLinkCount: 0 }))
+      .toEqual({ text: expect.stringContaining('Ready to share'), tone: 'ok' });
+  });
+  it('fully shared → done (ok)', () => {
+    expect(deriveNextAction({ missingCount: 0, cloudReady: true, versionCount: 2, activeLinkCount: 1 }).tone).toBe('ok');
+  });
+});
 
 describe('deriveProjectSummary (§6.2 at-a-glance facts)', () => {
   it('counts roles, completeness, size from a mixed project', () => {

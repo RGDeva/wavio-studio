@@ -174,6 +174,27 @@ export function deriveProjectSummary(files: DetailFile[]): ProjectSummary {
   };
 }
 
+export interface NextAction { text: string; tone: 'warn' | 'info' | 'ok'; }
+
+/**
+ * The single most useful next step for a project, from present data only
+ * (no fabrication). Pure + unit-testable. Precedence: missing files → sync →
+ * publish → share → done.
+ */
+export function deriveNextAction(opts: {
+  missingCount: number;
+  cloudReady: boolean;
+  versionCount: number;
+  activeLinkCount: number;
+}): NextAction {
+  const { missingCount, cloudReady, versionCount, activeLinkCount } = opts;
+  if (missingCount > 0) return { text: `${missingCount} file${missingCount !== 1 ? 's' : ''} missing on disk — reconnect them before sharing.`, tone: 'warn' };
+  if (!cloudReady) return { text: 'Sync this project so it can be published and shared.', tone: 'info' };
+  if (versionCount === 0) return { text: 'Publish a version to create a shareable, restorable snapshot.', tone: 'info' };
+  if (activeLinkCount === 0) return { text: 'Ready to share — create a Project Link.', tone: 'ok' };
+  return { text: 'Up to date and shared.', tone: 'ok' };
+}
+
 /** Human-readable byte size for the summary strip. */
 export function formatFileSize(bytes: number): string {
   if (bytes <= 0) return '0 B';
