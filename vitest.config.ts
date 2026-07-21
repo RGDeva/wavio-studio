@@ -34,6 +34,7 @@ export default defineConfig({
       'electron/mediaProtocol.test.ts',
       'electron/adapters/adapters.test.ts',
       'src/lib/compatibilityView.test.ts',
+      'src/dev/uiPreview/isPreviewEnabled.test.ts',
     ],
     environment: 'node',
   },

@@ -2,6 +2,8 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, UploadCloud, FolderOpen, CheckCircle2, AlertCircle, Clock, PauseCircle, ChevronDown, ChevronRight, History, Zap, Globe, Wand2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { SyncStatusBadge } from '../components/SyncStatusBadge';
+import { Skeleton } from '../components/ui/Skeleton';
+import { EmptyState } from '../components/ui/EmptyState';
 import { DawLogo } from '../components/DawLogo';
 import { ProjectDetail } from '../components/ProjectDetail';
 import { formatBytes, formatRelativeTime, truncatePath } from '../lib/utils';
@@ -179,8 +181,8 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-white">Dashboard</h1>
-            <p className="text-xs text-white/30 mt-0.5">
+            <h1 className="font-brand text-lg font-bold text-foreground">Dashboard</h1>
+            <p className="text-xs text-muted-fg mt-0.5">
               {projects.length} project{projects.length !== 1 ? 's' : ''} detected
             </p>
           </div>
@@ -333,15 +335,17 @@ export function Dashboard({ syncProgresses, onNavigate }: DashboardProps) {
         <div>
           <h2 className="text-sm font-semibold text-white/50 mb-3 uppercase tracking-wider">Projects</h2>
           {loading ? (
-            <div className="flex items-center justify-center py-16">
-              <div className="w-5 h-5 border-2 border-white/20 border-t-cyan-500 rounded-full animate-spin" />
+            <div className="space-y-2 py-2">
+              <Skeleton className="h-14" />
+              <Skeleton className="h-14" />
+              <Skeleton className="h-14 w-2/3" />
             </div>
           ) : projects.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-16 text-center">
-              <FolderOpen className="w-10 h-10 text-white/10 mb-3" />
-              <p className="text-sm text-white/30">No projects detected yet</p>
-              <p className="text-xs text-white/20 mt-1">Add a folder to start monitoring</p>
-            </div>
+            <EmptyState
+              icon={FolderOpen}
+              title="No projects detected yet"
+              description="Add a watched folder and Wavi will detect your DAW projects automatically."
+            />
           ) : (
             <div className="space-y-2">
               {projects.map((project) => (

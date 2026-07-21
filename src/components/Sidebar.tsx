@@ -23,48 +23,53 @@ const NAV_ITEMS: { id: Page; label: string; icon: React.FC<{ className?: string 
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
+const navBtn =
+  'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors duration-fast ease-out ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background';
+
 export function Sidebar({ currentPage, onNavigate, pendingAssociations = 0 }: SidebarProps) {
   return (
-    <div className="w-52 flex-shrink-0 bg-black border-r border-[#1a1a1a] flex flex-col py-4">
-      <nav className="flex-1 px-2 space-y-0.5">
-        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => onNavigate(id)}
-            className={cn(
-              'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all',
-              currentPage === id
-                ? 'bg-white/8 text-white'
-                : 'text-white/40 hover:text-white/70 hover:bg-white/4'
-            )}
-          >
-            <Icon className={cn('w-4 h-4', currentPage === id ? 'text-primary' : '')} />
-            {label}
-            {id === 'review' && pendingAssociations > 0 && (
-              <span className="ml-auto flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-cyan-500 text-black text-[10px] font-bold">
-                {pendingAssociations > 99 ? '99+' : pendingAssociations}
-              </span>
-            )}
-          </button>
-        ))}
-      </nav>
+    <nav aria-label="Primary" className="w-52 flex-shrink-0 bg-background border-r border-border flex flex-col py-4">
+      <div className="flex-1 px-2 space-y-0.5">
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
+          const active = currentPage === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              onClick={() => onNavigate(id)}
+              aria-current={active ? 'page' : undefined}
+              className={cn(navBtn, active ? 'bg-white/[0.07] text-foreground' : 'text-white/45 hover:text-white/80 hover:bg-white/[0.04]')}
+            >
+              <Icon className={cn('w-4 h-4 shrink-0', active ? 'text-primary' : '')} />
+              {label}
+              {id === 'review' && pendingAssociations > 0 && (
+                <span className="ml-auto flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                  {pendingAssociations > 99 ? '99+' : pendingAssociations}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
 
       <div className="px-2 pb-2">
         <button
+          type="button"
           onClick={() => api.copilot.toggle()}
-          className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 border border-cyan-500/20 hover:border-cyan-500/40"
+          className={cn(navBtn, 'bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 hover:border-primary/40')}
         >
-          <Zap className="w-4 h-4" />
+          <Zap className="w-4 h-4 shrink-0" />
           Copilot
           <span className="ml-auto text-[10px] text-white/25">⌘⇧W</span>
         </button>
       </div>
-      <div className="px-4 pt-3 pb-2 border-t border-[#1a1a1a]">
+      <div className="px-4 pt-3 pb-2 border-t border-border">
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          <span className="text-xs text-white/30">Agent running</span>
+          <div className="w-2 h-2 rounded-full bg-success motion-safe:animate-pulse" />
+          <span className="text-xs text-muted-fg">Agent running</span>
         </div>
       </div>
-    </div>
+    </nav>
   );
 }
