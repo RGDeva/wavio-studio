@@ -14,6 +14,7 @@ import {
   buildBounceMediaUrl, deriveProjectSummary, formatFileSize,
 } from '../lib/projectDetailView';
 import { deriveLinkStatus, linkDisplayName } from '../lib/linksView';
+import { Button } from './ui/Button';
 import { deriveCompatibilityRows, compatibilityHeadline, DawCapabilityReport } from '../lib/compatibilityView';
 
 const ROLE_ICONS: Record<string, React.FC<any>> = {
@@ -289,31 +290,26 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
             </div>
           )}
           <div className="flex items-center gap-2 flex-wrap">
-            <button onClick={handleOpenInDaw}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-cyan-500 hover:bg-cyan-400 text-black rounded-lg transition-colors">
-              <ExternalLink className="w-3 h-3" /> Open in DAW
-            </button>
+            <Button variant="primary" onClick={handleOpenInDaw}>
+              <ExternalLink /> Open in DAW
+            </Button>
             {(project.sync_status === 'pending' || project.sync_status === 'failed') && (
-              <button onClick={handlePrioritize} disabled={prioritizing}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-white/8 hover:bg-white/12 text-white/70 rounded-lg transition-colors disabled:opacity-40">
-                {prioritizing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3" />} Sync This Project
-              </button>
+              <Button variant="secondary" onClick={handlePrioritize} loading={prioritizing}>
+                {!prioritizing && <Zap />} Sync This Project
+              </Button>
             )}
-            <button onClick={handlePublish} disabled={publishing || !cloudReady}
-              title={cloudReady ? 'Create an immutable version of this project' : 'Available once the project is synced'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-white/8 hover:bg-white/12 text-white/60 rounded-lg transition-colors disabled:opacity-40">
-              {publishing ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />} Publish Version
-            </button>
-            <button onClick={handleShareProject} disabled={sharingProject || !cloudReady}
-              title={cloudReady ? 'Share the full project (restore + open in DAW)' : 'Available once the project is synced'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-purple-600/80 hover:bg-purple-500/80 text-white rounded-lg transition-colors disabled:opacity-40">
-              {sharingProject ? <Loader2 className="w-3 h-3 animate-spin" /> : <Package className="w-3 h-3" />} Project Link
-            </button>
-            <button onClick={() => setShowListenPanel((v) => !v)} disabled={!cloudReady}
-              title={cloudReady ? 'Share a playable Listen Link' : 'Available once the project is synced'}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-white/8 hover:bg-white/12 text-white/60 rounded-lg transition-colors disabled:opacity-40">
-              <Link2 className="w-3 h-3" /> Listen Link
-            </button>
+            <Button variant="secondary" onClick={handlePublish} loading={publishing} disabled={!cloudReady}
+              title={cloudReady ? 'Create an immutable version of this project' : 'Available once the project is synced'}>
+              {!publishing && <RefreshCw />} Publish Version
+            </Button>
+            <Button variant="secondary" onClick={handleShareProject} loading={sharingProject} disabled={!cloudReady}
+              title={cloudReady ? 'Share the full project (restore + open in DAW)' : 'Available once the project is synced'}>
+              {!sharingProject && <Package />} Project Link
+            </Button>
+            <Button variant="ghost" onClick={() => setShowListenPanel((v) => !v)} disabled={!cloudReady}
+              title={cloudReady ? 'Share a playable Listen Link' : 'Available once the project is synced'}>
+              <Link2 /> Listen Link
+            </Button>
           </div>
 
           {/* Compatibility — honest capability report from the DAW adapter */}

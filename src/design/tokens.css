@@ -1,0 +1,97 @@
+/**
+ * Wavi Studio desktop design tokens (P3-1a).
+ *
+ * Semantic HSL variables (space-separated triplets so Tailwind can apply the
+ * `<alpha-value>` modifier: `hsl(var(--token) / <alpha-value>)`).
+ *
+ * Dark-first (the desktop app is a dark, dense, operational surface). A light
+ * override scaffold is included for future use but the app ships dark.
+ *
+ * Brand relation: the Wavi web app uses a pale cyan primary (187 92% 81%) on a
+ * light surface. The desktop keeps the same cyan hue family but denser and
+ * legible on near-black — it should feel related to web, not identical.
+ * Existing hex values (#000 / #0A0A0A / #1F1F1F / #06B6D4 / #8B5CF6) are encoded
+ * as tokens with matching output, so wiring them into Tailwind changes nothing
+ * visually while making the palette token-driven.
+ */
+
+:root {
+  /* ── Core surfaces ──────────────────────────────────────────────── */
+  --background: 0 0% 0%;          /* #000 */
+  --surface: 0 0% 4%;             /* #0A0A0A */
+  --surface-2: 0 0% 7%;           /* #111 — elevated */
+  --surface-3: 0 0% 10%;          /* #1A1A1A — overlay panels */
+  --foreground: 0 0% 100%;
+  --muted: 0 0% 12%;
+  --muted-foreground: 220 9% 55%; /* denser than #6B7280 for contrast */
+  --border: 0 0% 12%;             /* #1F1F1F */
+  --border-subtle: 0 0% 9%;
+  --input: 0 0% 8%;
+
+  /* ── Brand ──────────────────────────────────────────────────────── */
+  --primary: 189 94% 43%;         /* #06B6D4 — cyan, web hue family (187) */
+  --primary-foreground: 200 40% 6%;
+  --primary-muted: 189 60% 16%;
+  --accent: 258 90% 66%;          /* #8B5CF6 — reserved brand accent */
+  --accent-foreground: 0 0% 100%;
+  --secondary: 0 0% 13%;
+  --secondary-foreground: 0 0% 96%;
+
+  /* ── Semantic status ────────────────────────────────────────────── */
+  --destructive: 0 72% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --warning: 38 92% 55%;
+  --warning-foreground: 40 60% 8%;
+  --success: 152 55% 46%;
+  --success-foreground: 152 40% 7%;
+  --info: 213 90% 62%;
+  --info-foreground: 213 40% 8%;
+
+  /* ── Interaction ────────────────────────────────────────────────── */
+  --ring: 189 94% 55%;            /* focus ring = brighter primary */
+  --overlay: 0 0% 0%;             /* used with opacity for scrims */
+
+  /* ── Waveform / audio states ────────────────────────────────────── */
+  --waveform-played: 189 94% 55%;
+  --waveform-unplayed: 0 0% 28%;
+  --waveform-cursor: 0 0% 92%;
+
+  /* ── Radius scale ───────────────────────────────────────────────── */
+  --radius-sm: 0.375rem;
+  --radius: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-full: 9999px;
+
+  /* ── Spacing scale (desktop-dense; Tailwind spacing remains primary) */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+
+  /* ── Elevation (restrained — no glow) ───────────────────────────── */
+  --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.4);
+  --shadow-md: 0 4px 12px -2px hsl(0 0% 0% / 0.45);
+  --shadow-lg: 0 12px 32px -8px hsl(0 0% 0% / 0.55);
+
+  /* ── Motion ─────────────────────────────────────────────────────── */
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Light scaffold (not shipped; desktop is dark). Kept for future theming. */
+:root[data-theme='light'] {
+  --background: 210 25% 97%;
+  --surface: 0 0% 100%;
+  --surface-2: 210 20% 98%;
+  --surface-3: 210 20% 96%;
+  --foreground: 212 45% 10%;
+  --muted: 210 20% 94%;
+  --muted-foreground: 212 15% 40%;
+  --border: 210 20% 88%;
+  --border-subtle: 210 20% 92%;
+  --input: 210 20% 92%;
+  --primary: 187 92% 45%;
+  --primary-foreground: 0 0% 100%;
+}
