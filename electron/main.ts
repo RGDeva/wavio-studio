@@ -18,6 +18,8 @@ import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsa
 import Store from 'electron-store';
 import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
 import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES, assertNotProductionUserDataDir } from './deepLinkValidator';
+import { getAdapterForProject } from './adapters';
+import { safeRelativePath, classifyFileRole, findPreviewCandidate, ManifestEntry } from './adapters/common';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS, classifyFolderForImport, FolderClassification } from './discovery';
 import { registerWaviMediaPrivileges, registerWaviMediaProtocol } from './mediaProtocolRegister';
 // Sentry is loaded dynamically to avoid crash during module import
@@ -1160,89 +1162,11 @@ function getDecryptedToken(): string | null {
 // relative paths (never exposing absolute filesystem paths to the cloud),
 // and submits a complete transactional snapshot to publish-project-version.
 
-const PUBLISH_EXCLUDE = [
-  /\.DS_Store$/i, /Thumbs\.db$/i, /desktop\.ini$/i,
-  /\._[^/]+$/, /\.lck$/i, /\.lock$/i, /~\$/,
-  /Ableton Temp Files/i, /^Backups$/i,
-  /\.db$/, /\.log$/, /node_modules/,
-];
+// Manifest helpers moved to the DAW adapter layer (Phase F):
+// electron/adapters/common.ts (shared) + electron/adapters/ableton.ts.
+// getAdapterForProject() resolves the right adapter; the generic adapter
+// reproduces the exact pre-extraction behavior for non-Ableton projects.
 
-function safeRelativePath(absoluteFile: string, projectRoot: string): string | null {
-  const rel = absoluteFile.startsWith(projectRoot)
-    ? absoluteFile.slice(projectRoot.length).replace(/^[/\\]/, '')
-    : null;
-  if (!rel) return null;
-  const parts = rel.split(/[/\\]/);
-  if (parts.some(p => PUBLISH_EXCLUDE.some(rx => rx.test(p)))) return null;
-  return rel;
-}
-
-function classifyFileRole(fileName: string, classifierRole: string): string {
-  const ext = path.extname(fileName).toLowerCase();
-  if (['.als', '.ptx', '.flp', '.logic', '.logicx', '.nproject', '.cpr', '.rpp'].includes(ext)) return 'project';
-  if (classifierRole === 'stem') return 'stem';
-  if (classifierRole === 'sample') return 'sample';
-  if (ext === '.asd') return 'analysis';
-  if (['.wav', '.mp3', '.aiff', '.aif', '.flac', '.m4a', '.ogg', '.aac'].includes(ext)) return 'audio';
-  if (ext === '.mid' || ext === '.midi') return 'midi';
-  if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'].includes(ext)) return 'artwork';
-  if (['.pdf', '.txt', '.md', '.docx', '.rtf'].includes(ext)) return 'document';
-  if (['.zip', '.rar', '.tar', '.gz'].includes(ext)) return 'archive';
-  return 'other';
-}
-
-type ManifestEntry = {
-  relativePath: string; fileName: string; fileSize: number;
-  sha256: string | null; role: string; mimeType: string | null; assetId: string | null;
-};
-
-/**
- * Ableton Live projects need an `Ableton Project Info/` directory next to the
- * .als file for Ableton to recognize the extracted folder as a real Project
- * (required for RelativePathType="3" sample references to auto-resolve) —
- * otherwise Ableton treats it as a "Temp Project" and reports missing media
- * even when the referenced sample is present at the correct relative path.
- * Normal file-walk logic skips empty directories, so this directory is
- * special-cased into the manifest even when it has no contents.
- *
- * Backup/ (auto-save history) and Icon (macOS resource-fork marker) are
- * intentionally NOT included — see PUBLISH_EXCLUDE / watcher ignore rules.
- */
-function getAbletonManifestExtras(daw: string | null | undefined, projectFilePath: string, projectRoot: string): ManifestEntry[] {
-  const isAbleton = daw === 'ableton' || daw === 'Ableton Live' || projectFilePath.toLowerCase().endsWith('.als');
-  if (!isAbleton) return [];
-
-  const extras: ManifestEntry[] = [];
-  const infoDirAbs = path.join(projectRoot, 'Ableton Project Info');
-  if (fs.existsSync(infoDirAbs) && fs.statSync(infoDirAbs).isDirectory()) {
-    // Directory marker — represented with a trailing slash and no asset, so the
-    // ZIP builder creates the folder even when it's empty on disk.
-    extras.push({
-      relativePath: 'Ableton Project Info/',
-      fileName: 'Ableton Project Info',
-      fileSize: 0,
-      sha256: null,
-      role: 'directory',
-      mimeType: null,
-      assetId: null,
-    });
-  }
-  return extras;
-}
-
-// Convention for a dedicated preview bounce: a full-arrangement render placed
-// at the project root (never inside Samples/ or a stems folder), named
-// preview.<ext> or bounce.<ext>. No prior convention existed in the codebase
-// for this — this is the one we're introducing.
-const PREVIEW_FILENAME_RE = /^(preview|bounce)\.(wav|mp3|aiff|aif|flac|m4a)$/i;
-
-function findPreviewCandidate(syncedFiles: any[], projectRoot: string): any | null {
-  for (const f of syncedFiles) {
-    if (path.dirname(f.file_path) !== projectRoot) continue; // must be at project root, not a stem/sample subfolder
-    if (PREVIEW_FILENAME_RE.test(path.basename(f.file_path))) return f;
-  }
-  return null;
-}
 
 async function doPublishVersion(opts: { localProjectId: string }) {
   const token = getDecryptedToken();
@@ -1295,7 +1219,7 @@ async function doPublishVersion(opts: { localProjectId: string }) {
 
   // Ableton: always include the (possibly empty) "Ableton Project Info" directory
   // marker so restored packs are recognized as a real Project, not a Temp Project.
-  fileManifest.push(...getAbletonManifestExtras(project.daw_type, projectFilePath, projectRoot));
+  fileManifest.push(...getAdapterForProject(project.daw_type, projectFilePath).manifestExtras(projectFilePath, projectRoot));
 
   if (!fileManifest.length) return { error: 'No eligible files to publish in this project version' };
 
@@ -1371,8 +1295,8 @@ ipcMain.handle('project:createLink', async (_e, opts: {
         fileManifest.push({ relativePath: rel, fileName: f.file_name, fileSize: f.file_size ?? 0, sha256: f.checksum ?? null, role: classifyFileRole(f.file_name, f.classifier_role ?? 'misc'), mimeType: null, assetId: f.cloud_asset_id });
       }
       // Ableton: always include the (possibly empty) "Ableton Project Info" directory
-      // marker — see getAbletonManifestExtras for why this is required.
-      fileManifest.push(...getAbletonManifestExtras(project.daw_type, projectFilePath, path.dirname(projectFilePath)));
+      // marker — see abletonManifestExtras (adapters/ableton.ts) for why this is required.
+      fileManifest.push(...getAdapterForProject(project.daw_type, projectFilePath).manifestExtras(projectFilePath, path.dirname(projectFilePath)));
 
       const previewCandidate = findPreviewCandidate(localFiles, path.dirname(projectFilePath));
       return {
@@ -1743,18 +1667,11 @@ ipcMain.handle('restore:start', async (_e, opts: {
       if (fs.existsSync(candidate)) { dawProjectPath = candidate; break; }
     }
   }
-  // Fallback: search for .als, .ptx, .logic, .flp
+  // Fallback: recursive search behind the adapter (behavior-preserving — same
+  // extension set and traversal as before; restore is DAW-agnostic so the
+  // adapter resolved from daw_type delegates to the shared locateProjectFile).
   if (!dawProjectPath) {
-    const DAW_EXTS = ['.als', '.ptx', '.logic', '.flp', '.cpr', '.npr'];
-    const walk = (dir: string): string | null => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) { const r = walk(full); if (r) return r; }
-        else if (DAW_EXTS.includes(path.extname(entry.name).toLowerCase())) return full;
-      }
-      return null;
-    };
-    dawProjectPath = walk(finalDir);
+    dawProjectPath = getAdapterForProject(dawType, null).locateProjectFile(finalDir);
   }
 
   if (!dawProjectPath) {
@@ -2028,6 +1945,14 @@ ipcMain.handle('projects:getDemoStatus', (_e, projectId: string) => {
       totalFiles: totalFiles?.count ?? 0,
     },
   };
+});
+
+// DAW capability report for the Project Detail compatibility surface. Pure
+// adapter lookup — no canonical cloud state. Resolves by stored daw_type, then
+// by the project file path.
+ipcMain.handle('daw:getCapabilities', (_e, opts: { dawType?: string | null; filePath?: string | null }) => {
+  const adapter = getAdapterForProject(opts?.dawType ?? null, opts?.filePath ?? null);
+  return { id: adapter.id, displayName: adapter.displayName, capabilities: adapter.capabilities() };
 });
 
 // Files

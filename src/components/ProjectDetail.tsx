@@ -11,9 +11,10 @@ import { DawLogo } from './DawLogo';
 import { SyncStatusBadge } from './SyncStatusBadge';
 import {
   DetailFile, ROLE_LABELS, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, ROLE_ORDER,
-  buildBounceMediaUrl,
+  buildBounceMediaUrl, deriveProjectSummary, formatFileSize,
 } from '../lib/projectDetailView';
 import { deriveLinkStatus, linkDisplayName } from '../lib/linksView';
+import { deriveCompatibilityRows, compatibilityHeadline, DawCapabilityReport } from '../lib/compatibilityView';
 
 const ROLE_ICONS: Record<string, React.FC<any>> = {
   project: FolderOpen, audio: Music, stem: Music, sample: Music, midi: FileText,
@@ -95,6 +96,8 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [playing, setPlaying] = useState(false);
   const [playError, setPlayError] = useState(false);
+  // DAW compatibility (adapter capability report)
+  const [compat, setCompat] = useState<DawCapabilityReport | null>(null);
 
   // Guards against stale async: a load() resolving after the user switched
   // projects must not paint the previous project's files (which would let the
@@ -132,8 +135,19 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
     load();
   }, [project.id, load]);
 
+  // DAW compatibility report for this project (stale-async guarded by project id).
+  useEffect(() => {
+    let active = true;
+    setCompat(null);
+    api.daw.getCapabilities({ dawType: project.daw_type, filePath: project.file_path })
+      .then((r) => { if (active) setCompat(r); })
+      .catch(() => { if (active) setCompat(null); });
+    return () => { active = false; };
+  }, [project.id, project.daw_type, project.file_path]);
+
   const projectRoot = project.file_path ? project.file_path.split(/[/\\]/).slice(0, -1).join('/') + '/' : '';
   const groups = useMemo(() => groupFilesByRole(files), [files]);
+  const summary = useMemo(() => deriveProjectSummary(files), [files]);
   const bounce = useMemo(() => pickLatestBounce(files), [files]);
   // Opaque, id-only media URL — never a raw filesystem path. null → no playable
   // bounce, so we never hand the <audio> element an empty or file:// src.
@@ -301,6 +315,42 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               <Link2 className="w-3 h-3" /> Listen Link
             </button>
           </div>
+
+          {/* Compatibility — honest capability report from the DAW adapter */}
+          {compat && (
+            <div className="bg-white/[0.03] border border-white/10 rounded-lg p-3">
+              <p className="text-[11px] font-semibold text-white/70 mb-2">{compatibilityHeadline(compat)}</p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                {deriveCompatibilityRows(compat).map((row) => (
+                  <div key={row.label} className="flex items-center justify-between text-[11px]">
+                    <span className="text-white/40 truncate">{row.label}</span>
+                    <span className={
+                      row.tone === 'ok' ? 'text-emerald-400'
+                        : row.tone === 'warn' ? 'text-amber-400'
+                        : 'text-white/35'
+                    }>{row.value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Project summary — at-a-glance package facts (§6.2) */}
+          {!loading && summary.totalFiles > 0 && (
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/40">
+              <span className={summary.hasNativeProject ? 'text-white/60' : 'text-amber-400'}>
+                {summary.hasNativeProject ? 'Native project ✓' : 'No native project'}
+              </span>
+              <span>·</span><span>{summary.stemCount} stems</span>
+              <span>·</span><span>{summary.midiCount} MIDI</span>
+              <span>·</span><span>{formatFileSize(summary.totalSize)}</span>
+              {summary.missingCount > 0 && (<><span>·</span><span className="text-amber-400">{summary.missingCount} missing</span></>)}
+              <span>·</span>
+              <span className={summary.packageCompleteness === 100 ? 'text-emerald-400' : 'text-white/40'}>
+                {summary.packageCompleteness}% complete
+              </span>
+            </div>
+          )}
 
           {/* Listen-link permissions mini-panel (relocated from Dashboard rows) */}
           {showListenPanel && (

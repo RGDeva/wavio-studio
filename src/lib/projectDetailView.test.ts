@@ -1,6 +1,6 @@
 /** Project Detail presentation logic (Phase D). */
 import { describe, it, expect } from 'vitest';
-import { deriveRole, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, buildBounceMediaUrl, DetailFile } from './projectDetailView';
+import { deriveRole, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, buildBounceMediaUrl, deriveProjectSummary, formatFileSize, DetailFile } from './projectDetailView';
 
 function f(overrides: Partial<DetailFile> = {}): DetailFile {
   return {
@@ -10,6 +10,51 @@ function f(overrides: Partial<DetailFile> = {}): DetailFile {
     ...overrides,
   };
 }
+
+describe('deriveProjectSummary (§6.2 at-a-glance facts)', () => {
+  it('counts roles, completeness, size from a mixed project', () => {
+    const files = [
+      f({ file_name: 'Song.als', sync_status: 'synced' }),                          // project, synced
+      f({ file_name: 'master.wav', classifier_role: 'master', sync_status: 'synced', file_size: 1000 }), // bounce, synced
+      f({ file_name: 'kick.wav', classifier_role: 'stem', sync_status: 'synced' }), // stem, synced
+      f({ file_name: 'snare.wav', classifier_role: 'stem', sync_status: 'pending' }), // stem, not synced
+      f({ file_name: 'melody.mid', sync_status: 'pending' }),                        // midi
+      f({ file_name: 'cover.png', sync_status: 'synced' }),                          // artwork, synced
+      f({ file_name: 'gone.wav', classifier_role: 'stem', local_status: 'missing' }), // missing stem
+    ];
+    const s = deriveProjectSummary(files);
+    expect(s.hasNativeProject).toBe(true);
+    expect(s.hasBounce).toBe(true);
+    expect(s.stemCount).toBe(2);   // present stems by role (missing → 'missing' role)
+    expect(s.midiCount).toBe(1);
+    expect(s.artworkCount).toBe(1);
+    expect(s.missingCount).toBe(1);
+    expect(s.totalFiles).toBe(7);
+    // complete = not missing AND synced → Song.als, master, kick, cover = 4/7
+    expect(s.packageCompleteness).toBe(Math.round((4 / 7) * 100));
+  });
+
+  it('empty project → zeros, 0% completeness, no native/bounce', () => {
+    const s = deriveProjectSummary([]);
+    expect(s).toMatchObject({ hasNativeProject: false, hasBounce: false, totalFiles: 0, packageCompleteness: 0 });
+  });
+
+  it('missing files are excluded from completeness even if marked synced', () => {
+    const s = deriveProjectSummary([f({ local_status: 'missing', sync_status: 'synced' })]);
+    expect(s.packageCompleteness).toBe(0);
+    expect(s.missingCount).toBe(1);
+  });
+});
+
+describe('formatFileSize', () => {
+  it('formats bytes across units', () => {
+    expect(formatFileSize(0)).toBe('0 B');
+    expect(formatFileSize(512)).toBe('512 B');
+    expect(formatFileSize(1536)).toBe('1.5 KB');
+    expect(formatFileSize(5 * 1024 * 1024)).toBe('5.0 MB');
+    expect(formatFileSize(2 * 1024 * 1024 * 1024)).toBe('2.0 GB');
+  });
+});
 
 describe('buildBounceMediaUrl (renderer gets an opaque url, never a raw path)', () => {
   it('builds an id-only wavi-media url', () => {
