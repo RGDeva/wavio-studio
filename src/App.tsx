@@ -1,5 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import { Sidebar } from './components/Sidebar';
+import { isUiPreviewEnabled } from './dev/uiPreview/isPreviewEnabled';
+
+// Dev-only UI preview harness. In a production build `import.meta.env.DEV` is a
+// static false, so this ternary is `null` and the dynamic import lives in a dead
+// branch — Rollup omits the harness chunk from production entirely.
+const UiPreview = import.meta.env.DEV ? lazy(() => import('./dev/uiPreview/UiPreview')) : null;
 import { TitleBar } from './components/TitleBar';
 import { Dashboard } from './pages/Dashboard';
 import { LibraryPage } from './pages/LibraryPage';
@@ -27,7 +33,16 @@ export default function App() {
   const [syncProgresses, setSyncProgresses] = useState<Record<string, SyncProgress>>({});
   const [pendingAssociations, setPendingAssociations] = useState(0);
   const [restoreToken, setRestoreToken] = useState<string | null>(null);
+  const [online, setOnline] = useState(typeof navigator !== 'undefined' ? navigator.onLine : true);
   const authChecked = useRef(false);
+
+  useEffect(() => {
+    const up = () => setOnline(true);
+    const down = () => setOnline(false);
+    window.addEventListener('online', up);
+    window.addEventListener('offline', down);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+  }, []);
 
   useEffect(() => {
     if (authChecked.current) return;
@@ -104,11 +119,16 @@ export default function App() {
     }
   }, [authed, refreshPendingCount]);
 
+  // Dev-only visual preview harness — opt-in via ?ui-preview on a dev build.
+  if (import.meta.env.DEV && UiPreview && isUiPreviewEnabled({ dev: true }, window.location.search)) {
+    return <Suspense fallback={null}><UiPreview /></Suspense>;
+  }
+
   // Show nothing while auth state is loading (prevents flash-of-login)
   if (authed === null) {
     return (
-      <div className="flex items-center justify-center h-screen bg-black">
-        <div className="w-5 h-5 border-2 border-white/20 border-t-cyan-500 rounded-full animate-spin" />
+      <div className="flex items-center justify-center h-screen bg-background">
+        <div className="w-5 h-5 border-2 border-white/20 border-t-primary rounded-full animate-spin" />
       </div>
     );
   }
@@ -118,8 +138,14 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-black overflow-hidden">
+    <div className="flex flex-col h-screen bg-background overflow-hidden">
       <TitleBar />
+      {!online && (
+        <div role="status" className="flex items-center gap-2 px-4 py-1.5 bg-warning/10 border-b border-warning/20 text-xs text-warning">
+          <span className="w-1.5 h-1.5 rounded-full bg-warning" />
+          You are offline — changes will sync when the connection returns.
+        </div>
+      )}
       {updateReady && (
         <div className="flex items-center justify-between px-4 py-1.5 bg-cyan-500/10 border-b border-cyan-500/20 text-xs text-cyan-400">
           <span>A new version of Wavi Studio is ready to install.</span>
@@ -133,7 +159,7 @@ export default function App() {
       )}
       <div className="flex flex-1 overflow-hidden">
         <Sidebar currentPage={page} onNavigate={setPage} pendingAssociations={pendingAssociations} />
-        <main className="flex-1 overflow-hidden bg-[#0A0A0A] relative">
+        <main className="flex-1 overflow-hidden bg-surface relative">
           <BounceConfirmModal />
           {restoreToken && (
             <RestoreWindow token={restoreToken} onClose={() => setRestoreToken(null)} />
