@@ -36,6 +36,7 @@ export default defineConfig({
       'src/lib/compatibilityView.test.ts',
       'src/dev/uiPreview/isPreviewEnabled.test.ts',
       'src/components/ui/uiPrimitives.test.ts',
+      'src/lib/projectLinks.test.ts',
     ],
     environment: 'node',
   },
