@@ -125,9 +125,14 @@ function getAuthToken(): string | null {
   } catch { return null; }
 }
 
-async function buildProjectContext(): Promise<ProjectContext> {
+async function buildProjectContext(requestedProjectId?: string | null): Promise<ProjectContext> {
   const projects = getProjects() as any[];
-  const activeProject = projects[0] ?? null; // Most recently modified
+  // Explicit project context (P3-3): when a caller names the project it is
+  // acting on, resolve THAT project rather than silently the most-recently-
+  // modified one — so a tool never acts on the wrong project after a switch.
+  const activeProject = (requestedProjectId
+    ? projects.find((p) => p.id === requestedProjectId)
+    : projects[0]) ?? null;
 
   const baseCtx: ProjectContext = {
     projectId: activeProject?.id ?? null,
@@ -211,17 +216,20 @@ function registerIpcHandlers() {
     overlayWindow?.hide();
   });
 
-  ipcMain.handle('copilot:getContext', async () => {
-    return buildProjectContext();
+  ipcMain.handle('copilot:getContext', async (_e, requestedProjectId?: string | null) => {
+    return buildProjectContext(requestedProjectId ?? null);
   });
 
-  ipcMain.handle('copilot:runTool', async (_e, toolName: string, params: Record<string, unknown>) => {
+  ipcMain.handle('copilot:runTool', async (_e, toolName: string, params: Record<string, unknown>, requestedProjectId?: string | null) => {
     const tool = getToolByName(toolName);
     if (!tool) {
       return { status: 'error', error: `Unknown tool: ${toolName}` };
     }
 
-    const ctx = await buildProjectContext();
+    // Resolve context for the explicitly requested project when provided; the
+    // tool's own resolver then discards the result if the active project no
+    // longer matches what the model targeted (stale-switch guard).
+    const ctx = await buildProjectContext(requestedProjectId ?? (params.projectId as string | undefined) ?? null);
     const result = await tool.handler(params, ctx);
 
     // Log to activity

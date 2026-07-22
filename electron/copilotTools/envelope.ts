@@ -24,6 +24,16 @@ export interface CopilotToolResult {
   filePath?: string;
   /** For needs_confirmation: what the renderer should show on the card. */
   confirmationSummary?: string;
+  /** The project this result pertains to — lets the renderer discard a result
+   *  whose project no longer matches the active one (stale-switch guard). */
+  projectId?: string;
+  /** Set on an honest decline for a server-blocked / unimplemented capability.
+   *  Never accompanies a fabricated success. */
+  blockedReason?:
+    | 'server_contract_pending'
+    | 'authentication_required'
+    | 'unsupported'
+    | 'not_implemented';
 }
 
 export interface FieldSpec {

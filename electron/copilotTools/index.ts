@@ -2,6 +2,9 @@ import type { ProjectContext } from '../copilotTypes';
 import {
   CopilotToolSpec, CopilotToolResult, EnvelopeDeps, wrapTool,
 } from './envelope';
+import {
+  buildLocalInspectionToolSpecs, buildBlockedToolSpecs, type LocalInspectionDeps,
+} from './localTools';
 
 /**
  * The first five Copilot project tools (Phase H). Implementations are
@@ -17,7 +20,7 @@ import {
  *                                  explicit renderer-side confirmation
  */
 
-export interface ProjectToolDeps extends EnvelopeDeps {
+export interface ProjectToolDeps extends EnvelopeDeps, LocalInspectionDeps {
   searchFiles: (query: string, limit: number) => any[];
   openPath: (filePath: string) => void;
   fileExists: (filePath: string) => boolean;
@@ -156,9 +159,16 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): CopilotToolSpec[] 
   ];
 }
 
-/** Registry-shaped entries with the envelope applied. */
+/** Registry-shaped entries with the envelope applied. Includes the Phase-H
+ *  cloud/sync tools, the P3-3 deterministic inspection tools, and honest
+ *  typed declines for server-blocked capabilities. */
 export function buildProjectTools(deps: ProjectToolDeps) {
-  return buildProjectToolSpecs(deps).map((spec) => ({
+  const specs = [
+    ...buildProjectToolSpecs(deps),
+    ...buildLocalInspectionToolSpecs(deps),
+    ...buildBlockedToolSpecs(),
+  ];
+  return specs.map((spec) => ({
     name: spec.name,
     description: spec.description,
     parameters: spec.parameters,

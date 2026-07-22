@@ -498,6 +498,36 @@ app.whenReady().then(async () => {
         return { needsConfirmation: false as const, ...syncAgent.prioritizeProject(projectId) };
       },
       publishVersion: async (localProjectId: string) => (await doPublishVersion({ localProjectId })) as any,
+      // P3-3 deterministic inspection deps. All read-only or main-process-resolved;
+      // reveal is confirmation-gated in the envelope. The full filesystem path is
+      // resolved and used ONLY here — never returned to the tool or the model.
+      revealFileById: (projectId: string, fileId: string) => {
+        try {
+          const rows = getFilesByProject(projectId) as any[];
+          const row = rows.find((f) => f.id === fileId);
+          if (!row?.file_path) return { revealed: false, notFound: true };
+          if (!fs.existsSync(row.file_path)) return { revealed: false, missingOnDisk: true };
+          shell.showItemInFolder(row.file_path);
+          return { revealed: true };
+        } catch { return { revealed: false }; }
+      },
+      getVersions: (projectId: string) => dbMod.getVersionsByProject(projectId) as any[],
+      getCapabilities: (dawType: string | null, filePath: string | null) => {
+        try {
+          const adapter = getAdapterForProject(dawType, filePath);
+          const caps = adapter.capabilities();
+          const notes: string[] = [];
+          if (caps.crossDawReconstruct === false) notes.push('Cross-DAW reconstruction is not supported.');
+          if (caps.scanPlugins === false) notes.push('Plugin scanning is not available.');
+          return {
+            dawType: adapter.displayName ?? dawType ?? 'unknown',
+            canRestore: !!caps.restore,
+            canOpen: !!caps.sameDawOpen,
+            notes,
+          };
+        } catch { return null; }
+      },
+      classifyErrors: (projectId: string) => classifyFailedRowsForProject(projectId),
     }));
   }
   initCopilot(store);

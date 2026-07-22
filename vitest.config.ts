@@ -38,6 +38,8 @@ export default defineConfig({
       'src/components/ui/uiPrimitives.test.ts',
       'src/lib/projectLinks.test.ts',
       'src/lib/accountContext.test.ts',
+      'electron/copilotTools/localTools.test.ts',
+      'src/lib/assistantToolCard.test.ts',
     ],
     environment: 'node',
   },

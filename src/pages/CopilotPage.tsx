@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Send, Zap, Trash2, BookOpen, Plus, ScanSearch, Loader2, X } from 'lucide-react';
+import { Send, Zap, Trash2, BookOpen, Plus, ScanSearch, Loader2, X, FolderGit2 } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface Msg { id: string; role: 'user'|'assistant'; content: string; ts: string; }
@@ -38,10 +38,19 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
   const [newVal, setNewVal] = useState('');
   const [pendingConfirm, setPendingConfirm] = useState<{ tool: string; params: Record<string, unknown>; summary: string; ctx: any } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
+  const [activeProject, setActiveProject] = useState<{ id: string | null; name: string | null } | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => { if (visible) { inputRef.current?.focus(); loadMemories(); } }, [visible]);
+  // Show which project the assistant will act on — resolved explicitly by main.
+  const refreshActiveProject = useCallback(async () => {
+    try {
+      const ctx = await api.copilot.getContext();
+      setActiveProject(ctx ? { id: ctx.projectId ?? null, name: ctx.projectName ?? null } : null);
+    } catch { setActiveProject(null); }
+  }, []);
+
+  useEffect(() => { if (visible) { inputRef.current?.focus(); loadMemories(); refreshActiveProject(); } }, [visible]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   // Listen for discovery progress events from main process
@@ -171,6 +180,14 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-cyan-400" />
             <h1 className="text-base font-semibold text-white">Wavi Copilot</h1>
+            {/* Active project the assistant acts on — explicit, never ambiguous. */}
+            <span
+              className="ml-2 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-white/10 text-white/40"
+              title="Tools act on this project"
+            >
+              <FolderGit2 className="w-3 h-3" />
+              {activeProject?.name ?? 'No project selected'}
+            </span>
           </div>
           <div className="flex items-center gap-2">
             {discovering ? (
