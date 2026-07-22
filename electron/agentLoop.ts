@@ -2,14 +2,13 @@ import {
   generateMidiMelody,
   generateChordProgression,
   generateDrumPattern,
-  revealProjectFolder,
   explainImportToFlStudio,
   summarizeProjectContext,
   type ToolResult,
 } from './midiTools';
 import { searchFiles, getAllFiles } from './db';
-import { shell } from 'electron';
 import type { ProjectContext } from './copilotTypes';
+import { sanitizeToolResult, type CopilotToolResult } from './copilotTools/envelope';
 
 // ── Tool Registry ─────────────────────────────────────────────────────────────
 
@@ -76,15 +75,12 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
       projectFolder: ctx?.filePath ? require('path').dirname(ctx.filePath) : null,
     }),
   },
-  {
-    name: 'reveal_project_folder',
-    description: 'Open the active project folder or MIDI output folder in Finder/Explorer',
-    parameters: {},
-    confirmationRequired: false,
-    handler: async (_params, ctx) => revealProjectFolder(
-      ctx?.filePath ? require('path').dirname(ctx.filePath) : null
-    ),
-  },
+  // NOTE: reveal_project_folder / open_local_file / reveal_local_file were
+  // removed (P3-3 hardening). They launched Finder / opened files WITHOUT the
+  // out-of-band confirmation envelope and leaked absolute paths. The
+  // authoritative, confirmation-gated, project-scoped, path-free replacements are
+  // the envelope tools `open_in_daw` and `reveal_file` (registered via
+  // registerProjectTools). tryLocalIntent routes "open"/"reveal" through them.
   {
     name: 'explain_import_to_fl_studio',
     description: 'Explain how to import a generated MIDI file into FL Studio',
@@ -139,53 +135,17 @@ export const TOOL_REGISTRY: RegisteredTool[] = [
         const why = matchReasons.length ? ` [matched: ${matchReasons.join(', ')}]` : '';
         return `• ${f.file_name}${f.project_name ? ` (${f.project_name})` : ''}${f.bpm ? ` · ${f.bpm} BPM` : ''}${f.key_note ? ` · ${f.key_note}` : ''}${f.modified_at ? ` · ${new Date(f.modified_at).toLocaleDateString()}` : ''}${why}`;
       }).join('\n');
-      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} (fields searched: filename, project, role):\n${list}`, data: rows };
+      // Safe metadata only — never raw file paths in model-visible data.
+      const safe = rows.slice(0, 20).map((f) => ({
+        id: f.id, file_name: f.file_name, project_name: f.project_name ?? null,
+        project_id: f.project_id ?? null, role: f.role ?? null, bpm: f.bpm ?? null, key_note: f.key_note ?? null,
+      }));
+      return { status: 'done', message: `Found ${rows.length} file${rows.length !== 1 ? 's' : ''} (fields searched: filename, project, role):\n${list}`, data: safe };
     },
   },
-  {
-    name: 'open_local_file',
-    description: 'Open a local audio or project file using its file path. Use this when the user says "open" or "play" a specific file.',
-    parameters: {
-      query: { type: 'string', description: 'File name or description to look up' },
-    },
-    confirmationRequired: false,
-    handler: async (params, _ctx): Promise<ToolResult> => {
-      const query = (params.query as string) ?? '';
-      const rows = searchFiles(query, 3) as any[];
-      if (!rows.length) {
-        return { status: 'error', error: `Could not find "${query}" in your library. Try adding the file via the Library tab first.` };
-      }
-      const file = rows[0];
-      // Validate file still exists on disk
-      try { require('fs').statSync(file.file_path); } catch {
-        return { status: 'error', error: `File "${file.file_name}" was moved or deleted. Path: ${file.file_path}` };
-      }
-      // Only open files that are actually in the indexed library (already confirmed via DB lookup)
-      shell.openPath(file.file_path);
-      return { status: 'done', message: `Opening "${file.file_name}" in your default app.\n(Matched by: name search for "${query}")`, filePath: file.file_path };
-    },
-  },
-  {
-    name: 'reveal_local_file',
-    description: 'Reveal a local file in Finder/Explorer. Use when user says "show me", "find in folder", or "reveal".',
-    parameters: {
-      query: { type: 'string', description: 'File name or description to look up' },
-    },
-    confirmationRequired: false,
-    handler: async (params, _ctx): Promise<ToolResult> => {
-      const query = (params.query as string) ?? '';
-      const rows = searchFiles(query, 3) as any[];
-      if (!rows.length) {
-        return { status: 'error', error: `Could not find "${query}" in your library.` };
-      }
-      const file = rows[0];
-      try { require('fs').statSync(file.file_path); } catch {
-        return { status: 'error', error: `File "${file.file_name}" was moved or deleted. Re-run Discover to update your library.` };
-      }
-      shell.showItemInFolder(file.file_path);
-      return { status: 'done', message: `Revealing "${file.file_name}" in Finder.\n(Matched by: name search for "${query}")`, filePath: file.file_path };
-    },
-  },
+  // open_local_file + reveal_local_file removed (P3-3 hardening): ungated
+  // external launches that leaked absolute paths. Use the gated `open_in_daw` /
+  // `reveal_file` envelope tools instead.
   {
     name: 'list_recent_files',
     description: 'List the most recently modified local music files. Use when user asks "what have I been working on?" or "show my recent tracks".',
@@ -239,7 +199,8 @@ export async function runAgentChat(
   context: ProjectContext | null,
   authToken: string | null
 ): Promise<AgentChatReply> {
-  // Local intent detection first — handles find/open/reveal without LLM round-trip
+  // Local intent detection first — handles find/open/reveal without LLM round-trip.
+  // Side-effecting intents are routed through gated envelope tools inside.
   const localResult = await tryLocalIntent(messages, context);
   if (localResult !== null) return localResult;
 
@@ -289,7 +250,9 @@ export async function runAgentChat(
             let params: Record<string, unknown> = {};
             try { params = JSON.parse(tc.function.arguments ?? '{}'); } catch {}
             // Note: no opts passed — the model can never confirm its own call.
-            const result = await tool.handler(params, context);
+            // Sanitize: strip absolute paths from any tool result before it is
+            // returned to the model or surfaced to the renderer.
+            const result = sanitizeToolResult(await tool.handler(params, context) as CopilotToolResult);
             if ((result as any).status === 'needs_confirmation') {
               return {
                 content: result.message ?? 'This action needs your confirmation.',
@@ -313,45 +276,53 @@ export async function runAgentChat(
   return fallbackResponse(messages, context);
 }
 
+/**
+ * Route a side-effecting local-intent request through a gated envelope tool.
+ * The tool returns needs_confirmation (the model/user text can NEVER set
+ * confirmedOutOfBand here), which we surface as a pendingConfirmation card.
+ * If the gated tool is somehow unavailable, we fail safe (no side effect).
+ */
+async function gatedIntent(
+  toolName: string, params: Record<string, unknown>, context: ProjectContext | null,
+): Promise<AgentChatReply> {
+  const tool = getToolByName(toolName);
+  if (!tool) return 'Open the project from its detail view to do that.';
+  const result = sanitizeToolResult(await tool.handler(params, context) as CopilotToolResult);
+  if (result.status === 'needs_confirmation') {
+    return {
+      content: result.message ?? 'This action needs your confirmation.',
+      pendingConfirmation: { tool: toolName, params, summary: result.confirmationSummary ?? `Confirm: ${toolName}` },
+    };
+  }
+  return result.message ?? result.error ?? 'Done.';
+}
+
 async function tryLocalIntent(
   messages: Array<{ role: string; content: string }>,
   context: ProjectContext | null
-): Promise<string | null> {
+): Promise<AgentChatReply | null> {
   const last = messages.filter(m => m.role === 'user').pop()?.content ?? '';
   const low = last.toLowerCase();
 
-  // "open [track name]" or "play [track name]"
+  // "open [track name]" / "play" — gated (external app launch, confirmation card).
+  // Routed to the project-scoped `open_file` (file must belong to the active
+  // project; resolved by opaque id in main; path-free).
   const openMatch = low.match(/^(?:open|play|load)\s+(.+)/);
-  if (openMatch) {
-    const query = openMatch[1].trim();
-    const tool = getToolByName('open_local_file')!;
-    const result = await tool.handler({ query }, context);
-    return result.message ?? result.error ?? null;
-  }
+  if (openMatch) return gatedIntent('open_file', { fileName: openMatch[1].trim() }, context);
 
-  // "show me / reveal / find in folder [track name]"
+  // "show me / reveal / find in folder [track name]" — gated (Finder launch).
   const revealMatch = low.match(/^(?:show|reveal|find in folder|show me|find)\s+(.+)/);
-  if (revealMatch) {
-    const query = revealMatch[1].trim();
-    const tool = getToolByName('reveal_local_file')!;
-    const result = await tool.handler({ query }, context);
-    return result.message ?? result.error ?? null;
-  }
+  if (revealMatch) return gatedIntent('reveal_file', { fileName: revealMatch[1].trim() }, context);
 
-  // "what have i been working on" / "recent tracks"
+  // Read-only fast paths (no side effects, no confirmation, path-sanitized).
   if (low.match(/recent|what.*work|last session|been working/)) {
     const tool = getToolByName('list_recent_files')!;
-    const result = await tool.handler({ limit: 8 }, context);
-    return result.message ?? null;
+    return sanitizeToolResult(await tool.handler({ limit: 8 }, context) as CopilotToolResult).message ?? null;
   }
-
-  // "find tracks" / "search for" / "any tracks with"
   const findMatch = low.match(/(?:find|search for|do i have|any tracks?|look for)\s+(.+)/);
   if (findMatch) {
-    const query = findMatch[1].trim();
     const tool = getToolByName('search_local_files')!;
-    const result = await tool.handler({ query }, context);
-    return result.message ?? null;
+    return sanitizeToolResult(await tool.handler({ query: findMatch[1].trim() }, context) as CopilotToolResult).message ?? null;
   }
 
   return null;
@@ -361,7 +332,7 @@ function buildSystemPrompt(context: ProjectContext | null): string {
   const lines = [
     'You are Wavi Copilot, an AI assistant for music producers.',
     'You help with: finding/opening local tracks, DAW workflows, MIDI generation, mix decisions, and project organization.',
-    'When the user asks to find, open, play, or show a file — use search_local_files, open_local_file, or reveal_local_file tools.',
+    'When the user asks to find a file — use search_local_files. To open or reveal a file — use open_file or reveal_file (these act on the active project and ask the user to confirm).',
     'When the user asks what they worked on recently — use list_recent_files.',
     'Keep responses concise and actionable. Speak like a knowledgeable producer, not a corporate assistant.',
     `Today's date: ${new Date().toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}`,

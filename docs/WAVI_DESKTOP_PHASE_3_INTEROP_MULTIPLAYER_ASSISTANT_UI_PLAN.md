@@ -263,10 +263,11 @@ when green.
   `tasks/backlog/MILESTONE_DEFERRED_AND_BLOCKERS.md`).
 
 ### P1
-- No design-token system / component library (blocks consistent UI + state coverage).
-- Assistant tool set incomplete (only 5/24 required).
+- No design-token system / component library (blocks consistent UI + state coverage). — RESOLVED (P3-1a/b/c).
+- Assistant tool set incomplete (only 5/24 required). — PARTLY RESOLVED (P3-3: local deterministic tools added; server/multiplayer tools remain blocked).
 - Server contract gaps #4–#8 block Workstream A live flow.
 - Two broader planning docs uncommitted (documentation gap).
+- **Assistant safety gaps (P3-3 audit): RESOLVED** — implicit `projects[0]` context, confirmation-envelope bypass by static file-open/reveal tools, and raw-path leakage are all closed (explicit project selection + `sanitizeToolResult` + removal of ungated duplicates + gated `open_file`/`reveal_file`). No assistant safety blocker remains open on this branch.
 
 ### P2
 - Low-contrast text / inconsistent radius+spacing.

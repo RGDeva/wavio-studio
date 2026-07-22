@@ -162,6 +162,8 @@ export interface LocalInspectionDeps extends EnvelopeDeps {
    * outcome the tool can describe with basenames only.
    */
   revealFileById: (projectId: string, fileId: string) => { revealed: boolean; missingOnDisk?: boolean; notFound?: boolean };
+  /** Open a file by opaque id within a project. Path resolved only in main. */
+  openFileById: (projectId: string, fileId: string) => { opened: boolean; missingOnDisk?: boolean; notFound?: boolean };
   /** Local immutable versions for a project. */
   getVersions: (projectId: string) => Array<{ version_number?: number; created_at?: string; file_count?: number }>;
   /** DAW capability report (adapter-derived) for the active project. */
@@ -220,6 +222,28 @@ export function buildLocalInspectionToolSpecs(deps: LocalInspectionDeps): Copilo
         if (outcome.missingOnDisk) return { status: 'error', error: `“${redactPath(match.fileName)}” was moved or deleted on disk.`, projectId: r.projectId };
         if (!outcome.revealed) return { status: 'error', error: `Couldn't reveal “${redactPath(match.fileName)}”.`, projectId: r.projectId };
         return { status: 'done', message: `Revealing “${redactPath(match.fileName)}” in Finder.`, projectId: r.projectId };
+      },
+    },
+    {
+      name: 'open_file',
+      description: 'Open a file from the current project in its default app / DAW. Launches an external app, so it asks for confirmation first.',
+      parameters: { fileName: { type: 'string', description: 'Name of the file to open (must belong to the active project).' }, ...projectIdParam },
+      execution: 'local',
+      requiresConfirmation: true,
+      confirmationSummary: (params) => `Open “${redactPath(String(params.fileName ?? 'the file'))}” in an external app?`,
+      run: async (params, ctx): Promise<CopilotToolResult> => {
+        const r = resolveToolProjectContext(ctx as ProjectContext | null, params.projectId);
+        if (!r.ok) return staleResult(r);
+        const wanted = String(params.fileName ?? '').toLowerCase();
+        // File MUST belong to the active project — resolved from ctx.files only.
+        const match = r.files.find((f) => f.fileName.toLowerCase() === wanted)
+          ?? r.files.find((f) => f.fileName.toLowerCase().includes(wanted));
+        if (!match) return { status: 'error', error: `No file named “${redactPath(String(params.fileName))}” in “${r.projectName}”.`, projectId: r.projectId };
+        const outcome = deps.openFileById(r.projectId, match.id);
+        if (outcome.notFound) return { status: 'error', error: `“${redactPath(match.fileName)}” is no longer in this project.`, projectId: r.projectId };
+        if (outcome.missingOnDisk) return { status: 'error', error: `“${redactPath(match.fileName)}” was moved or deleted on disk.`, projectId: r.projectId };
+        if (!outcome.opened) return { status: 'error', error: `Couldn't open “${redactPath(match.fileName)}”.`, projectId: r.projectId };
+        return { status: 'done', message: `Opening “${redactPath(match.fileName)}”.`, projectId: r.projectId };
       },
     },
     {

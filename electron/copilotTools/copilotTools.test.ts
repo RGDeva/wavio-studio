@@ -30,6 +30,7 @@ function fakeDeps(overrides: Partial<ProjectToolDeps> = {}): ProjectToolDeps & {
     publishVersion: async () => ({ versionId: 'v1', versionNumber: 3, fileCount: 12 }),
     // P3-3 inspection deps
     revealFileById: () => ({ revealed: true }),
+    openFileById: () => ({ opened: true }),
     getVersions: () => [],
     getCapabilities: () => ({ dawType: 'ableton', canRestore: true, canOpen: true, notes: [] }),
     classifyErrors: () => ({ retryable: [], permanent: [], missing: [] }),
@@ -193,7 +194,7 @@ describe('registry integration', () => {
     // typed declines for server-blocked capabilities.
     expect(tools.map((t) => t.name)).toEqual([
       'search_files', 'open_in_daw', 'inspect_sync_status', 'sync_project', 'publish_version',
-      'inspect_project', 'reveal_file', 'inspect_package_completeness', 'inspect_daw_compatibility',
+      'inspect_project', 'reveal_file', 'open_file', 'inspect_package_completeness', 'inspect_daw_compatibility',
       'list_local_versions', 'explain_project_errors',
       'list_project_links', 'create_project_link', 'revoke_project_link',
       'invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version',
@@ -206,7 +207,7 @@ describe('registry integration', () => {
     const flags = Object.fromEntries(buildProjectTools(fakeDeps()).map((t) => [t.name, t.confirmationRequired]));
     expect(flags).toEqual({
       search_files: false, open_in_daw: true, inspect_sync_status: false, sync_project: false, publish_version: true,
-      inspect_project: false, reveal_file: true, inspect_package_completeness: false,
+      inspect_project: false, reveal_file: true, open_file: true, inspect_package_completeness: false,
       inspect_daw_compatibility: false, list_local_versions: false, explain_project_errors: false,
       list_project_links: false, create_project_link: false, revoke_project_link: false,
       invite_collaborator: false, inspect_collaborator_activity: false, publish_child_version: false,

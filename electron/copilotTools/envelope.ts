@@ -70,6 +70,51 @@ export interface CopilotToolSpec {
   run: (params: Record<string, unknown>, ctx: unknown, opts?: ToolInvokeOptions) => Promise<CopilotToolResult>;
 }
 
+// ── Result sanitization (raw-path redaction) ─────────────────────────────────
+// Absolute local paths must never reach the model, tool-result text, error
+// strings, or renderer-visible audit logs. This runs at every result boundary.
+
+const ABS_PATH_RE = /(?:\/[^\s"'`]+|[A-Za-z]:\\[^\s"'`]+)/g;
+const PATH_KEY_RE = /path|dir|folder|location/i;
+
+export function basename(p: string): string {
+  const parts = p.split(/[/\\]/);
+  return parts[parts.length - 1] || p;
+}
+
+/** Replace any absolute-path token in a string with its basename. */
+export function redactPathsInText(s: string): string {
+  return s.replace(ABS_PATH_RE, (m) => (m.length > 1 && /[/\\]/.test(m) ? basename(m) : m));
+}
+
+function redactData(v: unknown): unknown {
+  if (typeof v === 'string') return redactPathsInText(v);
+  if (Array.isArray(v)) return v.map(redactData);
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+      // Drop path-bearing keys outright; redact everything else.
+      if (PATH_KEY_RE.test(k) && typeof val === 'string') { out[k] = basename(val); continue; }
+      out[k] = redactData(val);
+    }
+    return out;
+  }
+  return v;
+}
+
+/**
+ * Strip absolute paths from a tool result before it leaves the main process.
+ * Removes the `filePath` field entirely and redacts message/error/data. Pure.
+ */
+export function sanitizeToolResult(result: CopilotToolResult): CopilotToolResult {
+  const { filePath: _drop, ...rest } = result;
+  const out: CopilotToolResult = { ...rest };
+  if (typeof out.message === 'string') out.message = redactPathsInText(out.message);
+  if (typeof out.error === 'string') out.error = redactPathsInText(out.error);
+  if (out.data !== undefined) out.data = redactData(out.data);
+  return out;
+}
+
 /** Only primitives, truncated — never file contents, paths kept short, no tokens. */
 export function sanitizeArgs(params: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -136,13 +181,13 @@ export function wrapTool(spec: CopilotToolSpec, deps: EnvelopeDeps) {
         };
       }
 
-      // 4. Execute with failure containment
-      const result = await spec.run(params, ctx, opts);
+      // 4. Execute with failure containment + raw-path redaction on the result.
+      const result = sanitizeToolResult(await spec.run(params, ctx, opts));
       audit(result.status);
       return result;
     } catch (e) {
       audit('threw');
-      return { status: 'error', error: (e as Error)?.message ?? 'Unknown error' };
+      return sanitizeToolResult({ status: 'error', error: (e as Error)?.message ?? 'Unknown error' });
     }
   };
 }

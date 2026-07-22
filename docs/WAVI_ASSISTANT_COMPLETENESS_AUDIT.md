@@ -66,3 +66,49 @@ Blocked tools return these in `CopilotToolResult.blockedReason` and NEVER a fabr
 - **Project Link reconciliation** — authoritative `list-project-links` + account identity, uncommitted in `wavio` (`feat/project-links-authoritative-reconciliation`, see `CODEX-TO-DESKTOP-project-link-reconciliation.md`).
 - **Multiplayer** — collaborator invite/activity, contribution/child publish.
 - **Live Ableton E2E** — restore + Open in DAW round trip verification on real hardware.
+
+---
+
+# P3-3 hardening pass — the three safety gaps (resolution)
+
+Branch `feat/assistant-local-tools-foundation`. Status of the three audit findings:
+
+## Finding 1 — implicit `projects[0]` project context → **RESOLVED**
+- `electron/copilot.ts` `buildProjectContext(requestedProjectId)`: the `projects[0]`
+  fallback is removed. With no explicit id the context is project-less; project-sensitive
+  tools fail closed (`no_project_selected`). Evidence: `buildProjectContext` (~129).
+- The active project is chosen **visibly** in the renderer (`CopilotPage` project `<select>`)
+  and threaded to every `getContext`/`chat`/`confirmTool` call. No backend path silently picks
+  a project. Stale switch is discarded by `resolveToolProjectContext` (`localTools.ts`).
+- Tests: `assistantHardening.test.ts` (1),(2),(3),(9),(10); `localTools.test.ts` context suite.
+
+## Finding 2 — file-opening tools bypassing the confirmation envelope → **RESOLVED**
+- Removed the ungated static duplicates `open_local_file`, `reveal_local_file`,
+  `reveal_project_folder` from `agentLoop.ts` `TOOL_REGISTRY`.
+- The regex fast-path `tryLocalIntent` now routes "open"/"reveal" through the gated envelope
+  tools `open_file` / `reveal_file`, propagating `needs_confirmation` as a confirmation card —
+  neither model text nor user chat text can trigger an unconfirmed external launch.
+- New project-scoped `open_file` (parallel to `reveal_file`): opaque-id resolution in main,
+  confirmation-gated, path-free. One authoritative path per capability; no duplicate aliases.
+- Tests: `assistantHardening.test.ts` (4),(5),(6),(7),(8),(13),(14); registry-list tests in
+  `copilotTools.test.ts`.
+
+## Finding 3 — raw absolute-path leakage from `open_local_file` (and elsewhere) → **RESOLVED**
+- New pure `sanitizeToolResult` (`envelope.ts`) strips the `filePath` field and redacts
+  absolute paths from `message`/`error`/`data`. Applied in `wrapTool` (every envelope tool at
+  source), in `runAgentChat` (LLM + fast-path results), and in `copilot.ts` `runTool`/`confirmTool`
+  (IPC boundary + the renderer-visible audit log, which now records only `outcome`, not the result).
+- `search_local_files` returns safe metadata only (no `file_path` in `data`). `open_file`/`reveal_file`
+  resolve the real path in main by opaque id and never return it. `open_in_daw`'s `filePath` is
+  stripped by the sanitizer.
+- Tests: `assistantHardening.test.ts` Gap-3 suite incl. (11) across every built tool and (12) errors;
+  `localTools.test.ts` "no local tool result contains an absolute path".
+
+## Registry consolidation
+One authoritative, envelope-wrapped execution path per capability (open → `open_file`; reveal →
+`reveal_file`; DAW open → `open_in_daw`). Static `TOOL_REGISTRY` retains only read-only/generative
+tools (search/recent/midi/summaries/FL-explainer); no duplicate unsafe aliases (asserted by test 13).
+All side-effecting tools share the same out-of-band confirmation gate and path sanitizer.
+
+**Mergeability:** the three safety gaps are resolved; the branch remains unmerged pending Project
+Link reconciliation (server-blocked tools still return `server_contract_pending`).

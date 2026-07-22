@@ -38,6 +38,7 @@ function fakeDeps(over: Partial<ProjectToolDeps> = {}): ProjectToolDeps & { audi
     prioritizeProject: () => ({ needsConfirmation: false, bumped: 0, requeued: 0, blockedPermanent: 0, skippedMissing: 0 }),
     publishVersion: async () => ({ versionId: 'v1', versionNumber: 1, fileCount: 1 }),
     revealFileById: vi.fn(() => ({ revealed: true })),
+    openFileById: vi.fn(() => ({ opened: true })),
     getVersions: () => [{ version_number: 1, created_at: '2026-07-01T00:00:00Z', file_count: 3 }],
     getCapabilities: () => ({ dawType: 'Ableton Live', canRestore: true, canOpen: true, notes: [] }),
     classifyErrors: () => ({ retryable: [], permanent: [], missing: [] }),

@@ -38,19 +38,27 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
   const [newVal, setNewVal] = useState('');
   const [pendingConfirm, setPendingConfirm] = useState<{ tool: string; params: Record<string, unknown>; summary: string; ctx: any } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
-  const [activeProject, setActiveProject] = useState<{ id: string | null; name: string | null } | null>(null);
+  // Explicit, user-visible active-project selection. There is NO implicit
+  // "last project" — the assistant acts only on the project chosen here, and
+  // this exact id is threaded to every context/chat/tool call. When empty,
+  // project-sensitive tools fail closed.
+  const [projectList, setProjectList] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Show which project the assistant will act on — resolved explicitly by main.
-  const refreshActiveProject = useCallback(async () => {
+  const loadProjects = useCallback(async () => {
     try {
-      const ctx = await api.copilot.getContext();
-      setActiveProject(ctx ? { id: ctx.projectId ?? null, name: ctx.projectName ?? null } : null);
-    } catch { setActiveProject(null); }
+      const rows = await api.projects.getAll();
+      const list = (Array.isArray(rows) ? rows : []).map((p: any) => ({ id: p.id, name: p.project_name ?? p.name ?? 'Untitled' }));
+      setProjectList(list);
+      // Preselect the most recent project as a VISIBLE default the user can
+      // change; the selection (not projects[0] silently) is what tools receive.
+      setSelectedProjectId((cur) => cur || (list[0]?.id ?? ''));
+    } catch { setProjectList([]); }
   }, []);
 
-  useEffect(() => { if (visible) { inputRef.current?.focus(); loadMemories(); refreshActiveProject(); } }, [visible]);
+  useEffect(() => { if (visible) { inputRef.current?.focus(); loadMemories(); loadProjects(); } }, [visible]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
   // Listen for discovery progress events from main process
@@ -74,7 +82,8 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
     setMessages(prev => [...prev, userMsg]);
     setLoading(true);
     try {
-      const ctx = await api.copilot.getContext().catch(() => null);
+      // Explicit project context — the selected project id, never an implicit default.
+      const ctx = await api.copilot.getContext(selectedProjectId || null).catch(() => null);
       const history = [...messages, userMsg].map(m => ({ role: m.role as 'user'|'assistant', content: m.content }));
       const reply = await api.copilot.chat(history, ctx).catch(() => 'Copilot unavailable — ensure you are signed in.' as const);
       if (typeof reply === 'object' && reply !== null && 'pendingConfirmation' in reply) {
@@ -90,7 +99,7 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
       setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: 'Error reaching Copilot. Check your connection.', ts: new Date().toISOString() }]);
     }
     setLoading(false);
-  }, [input, loading, messages]);
+  }, [input, loading, messages, selectedProjectId]);
 
   const handleConfirm = async () => {
     if (!pendingConfirm || confirmBusy) return;
@@ -180,14 +189,22 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-cyan-400" />
             <h1 className="text-base font-semibold text-white">Wavi Copilot</h1>
-            {/* Active project the assistant acts on — explicit, never ambiguous. */}
-            <span
-              className="ml-2 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-white/10 text-white/40"
-              title="Tools act on this project"
-            >
+            {/* Explicit active-project selector. Tools act ONLY on this project;
+                the selection is threaded to every context/chat/tool call. */}
+            <label className="ml-2 flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] border border-white/10 text-white/40" title="Tools act on this project">
               <FolderGit2 className="w-3 h-3" />
-              {activeProject?.name ?? 'No project selected'}
-            </span>
+              <select
+                aria-label="Active project"
+                value={selectedProjectId}
+                onChange={(e) => setSelectedProjectId(e.target.value)}
+                className="bg-transparent text-white/60 text-[10px] focus:outline-none max-w-[160px]"
+              >
+                <option value="">No project selected</option>
+                {projectList.map((p) => (
+                  <option key={p.id} value={p.id} className="bg-[#111]">{p.name}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="flex items-center gap-2">
             {discovering ? (

@@ -511,6 +511,16 @@ app.whenReady().then(async () => {
           return { revealed: true };
         } catch { return { revealed: false }; }
       },
+      openFileById: (projectId: string, fileId: string) => {
+        try {
+          const rows = getFilesByProject(projectId) as any[];
+          const row = rows.find((f) => f.id === fileId);
+          if (!row?.file_path) return { opened: false, notFound: true };
+          if (!fs.existsSync(row.file_path)) return { opened: false, missingOnDisk: true };
+          void shell.openPath(row.file_path);
+          return { opened: true };
+        } catch { return { opened: false }; }
+      },
       getVersions: (projectId: string) => dbMod.getVersionsByProject(projectId) as any[],
       getCapabilities: (dawType: string | null, filePath: string | null) => {
         try {
