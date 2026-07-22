@@ -131,3 +131,34 @@ enforcement contract. P3-2b-local adds one hard dependency (below) that gates th
 ## Missing contract (written to the Codex handoff, §10)
 The desktop needs a **stable, opaque, offline-available account identifier** delivered at
 authentication time (not derived from the token). See handoff §10 for the exact shape.
+---
+
+# P3-2b-prep — account-context boundary implemented (contract-boundary path)
+
+Codex is now implementing the canonical identity + authoritative listing contracts in the web
+repo. The decision gate re-ran against the same evidence as above: **still no stable canonical
+account id on the desktop**, so the schema migration remains intentionally deferred (no
+`account_id` column written, no id invented). Instead the desktop now carries the full contract
+boundary, so Codex's contract wires in without a second refactor:
+
+| Piece | Where | Behavior today |
+|---|---|---|
+| `AuthenticatedAccountContext` + `AccountContextResolver` | `src/lib/accountContext.ts` | the single seam the canonical id will be supplied through (`PendingContractAccountResolver.supply()`); until then every resolve is `missing-account-context` |
+| Canonical-id acceptance guard | `isAcceptableCanonicalAccountId` | rejects tokens (`wv_…`), JWT shapes, emails, paths, long hashes — a secret can never become an account key; client re-checks even against a rogue resolver |
+| Session epoch | `SessionEpoch` (shared instance in `projectLinkClientFactory`) | monotonic; bumped by `onLogout()`/`onAccountSwitch()`; any async result resolving under an older epoch is reported `stale-epoch` and discarded |
+| Scoped client ops | `ProjectLinkClient.listScoped()/revokeScoped()` | fail closed without context; list returns only rows with `record.account_id === active` (none exist today); revoke verifies local attribution BEFORE any server call — unattributed/legacy rows are never mutable through this path |
+| Type-only ownership field | `LinkRecord.account_id?` | no schema change, nothing writes it; every current row is honestly `undefined` = ownership-unknown |
+| Reconciliation seam | `src/lib/linkReconciliation.ts` | pure transition rules: cached→confirmed/revoked/expired, missing→reconciliation-needed, legacy→ownership-unknown, wrong account→hidden non-mutable, wrong project/version/tracking binding→`binding-conflict` (fail closed). No network code, no fake endpoint. |
+| UI | LinksPage | honest "account attribution unavailable" note while the contract is pending; no redesign |
+| Tests | `src/lib/accountContext.test.ts` | 12 deterministic race/isolation scenarios (cross-account visibility/revoke, switch-back, logout, epoch stale-discard, offline scoping, legacy segregation, fail-closed context, no-token-as-key, per-account revoked/expired, binding conflicts) |
+
+**Logout / account-switch behavior:** both bump the shared epoch and clear the client's
+session-confirmed + reconcile sets (in addition to the existing full React-tree unmount on
+`authed=false`). **Stale-response protection:** epoch check before AND after every await in the
+scoped paths. **Legacy policy:** unchanged — preserved, segregated, ownership-unknown, never
+auto-assigned, never mutable via the scoped path; copy/open stay available through the existing
+honest device-scoped view.
+
+**Pending Codex dependency (exact):** canonical account id at auth time + authoritative
+`list-project-links` (see `docs/handoffs/CODEX-TO-DESKTOP-project-link-reconciliation.md` for the
+fields the desktop expects; wire names pending Codex's implemented contract).
