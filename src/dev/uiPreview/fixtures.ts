@@ -42,9 +42,11 @@ export const previewFolders = [
 
 export type PreviewState =
   | 'populated' | 'loading' | 'empty' | 'error'
-  | 'offline' | 'permission-denied' | 'partial-sync' | 'missing-file' | 'success';
+  | 'offline' | 'permission-denied' | 'partial-sync' | 'missing-file' | 'success'
+  | 'sync-in-progress' | 'publish-ready' | 'no-native-daw' | 'playback-error';
 
 export const PREVIEW_STATES: PreviewState[] = [
   'populated', 'loading', 'empty', 'error',
   'offline', 'permission-denied', 'partial-sync', 'missing-file', 'success',
+  'sync-in-progress', 'publish-ready', 'no-native-daw', 'playback-error',
 ];
