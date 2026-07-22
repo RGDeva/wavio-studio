@@ -178,3 +178,46 @@ describe('ProjectLinkClient', () => {
     expect(c.confirmedIds().size).toBe(0);
   });
 });
+
+/**
+ * P3-2b-local posture: the desktop has NO stable account identifier (audit),
+ * so the account_id migration is blocked. These pin the honest, identity-free
+ * safety invariants that keep the current cache safe across accounts, so a future
+ * change cannot silently start presenting a persisted row as owned/confirmed.
+ */
+describe('account-isolation posture without an identity contract', () => {
+  const online = { v: true };
+  function mk(list: () => Promise<LinkRecord[]>) {
+    return new ProjectLinkClient({
+      createProjectLink: async () => ({ trackingId: 'tNew', linkUrl: 'u' }),
+      revokeLink: async () => ({ success: true }),
+      listLinks: list,
+      isOnline: () => online.v,
+    });
+  }
+
+  it('a persisted row not confirmed THIS session is ownership-unknown (cached), never server-confirmed', async () => {
+    online.v = true;
+    const c = mk(async () => [rec({ tracking_id: 'fromPrevSession', version_id: 'v1' })]);
+    const [v] = await c.list();
+    expect(v.state).toBe('cached');       // not server-confirmed → not attributed to the active account
+    expect(v.group).toBe('active');       // still usable (copy/open); server enforces revoke ownership
+  });
+
+  it('a fresh client (new login) does not inherit a previous session\'s confirmation', async () => {
+    online.v = true;
+    const first = mk(async () => [rec({ tracking_id: 'tNew', version_id: 'v1' })]);
+    await first.create({ projectId: 'p1' });
+    expect((await first.list())[0].state).toBe('server-confirmed');
+    // A brand-new instance models the post-logout/login remount: empty confirmed set.
+    const afterRelogin = mk(async () => [rec({ tracking_id: 'tNew', version_id: 'v1' })]);
+    expect((await afterRelogin.list())[0].state).toBe('cached');
+  });
+
+  it('offline never upgrades an unconfirmed persisted row to confirmed (no cross-account merge)', async () => {
+    online.v = false;
+    const c = mk(async () => [rec({ tracking_id: 'x', version_id: 'v1' })]);
+    expect((await c.list())[0].state).toBe('offline');
+    online.v = true;
+  });
+});
