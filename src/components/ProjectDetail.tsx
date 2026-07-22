@@ -13,7 +13,10 @@ import {
   DetailFile, ROLE_LABELS, groupFilesByRole, pickLatestBounce, expiryToIso, pickShareAsset, ROLE_ORDER,
   buildBounceMediaUrl, deriveProjectSummary, formatFileSize, deriveNextAction,
 } from '../lib/projectDetailView';
-import { deriveLinkStatus, linkDisplayName } from '../lib/linksView';
+import { linkDisplayName } from '../lib/linksView';
+import { deriveLinkState, linkGroupForState, LINK_STATE_PRESENTATION, type LinkResult } from '../lib/projectLinks';
+import { createProjectLinkClient } from '../lib/projectLinkClientFactory';
+import { StatusBadge } from './ui/StatusBadge';
 import { Button } from './ui/Button';
 import { Tabs } from './ui/Tabs';
 import { Progress } from './ui/Progress';
@@ -22,6 +25,20 @@ import { FileRow } from './ui/FileRow';
 import { EmptyState } from './ui/EmptyState';
 import { Skeleton } from './ui/Skeleton';
 import { deriveCompatibilityRows, compatibilityHeadline, DawCapabilityReport } from '../lib/compatibilityView';
+
+/** Honest one-line explanation for a non-confirmed link mutation. */
+function describeLinkResult(r: LinkResult): string {
+  switch (r.kind) {
+    case 'confirmed': return 'Project Link created and copied.';
+    case 'offline': return "You appear to be offline — nothing was created on the server.";
+    case 'unauthorized': return 'Not authorized — sign in again and retry.';
+    case 'rejected': return `Server rejected the request: ${r.message}`;
+    case 'retryable': return `Temporary server problem: ${r.message}. Try again shortly.`;
+    case 'unsupported': return `Not supported yet: ${r.message}`;
+    case 'malformed': return 'The server response could not be confirmed, so nothing was created.';
+    case 'permanent': return r.message;
+  }
+}
 
 const ROLE_ICONS: Record<string, React.FC<any>> = {
   project: FolderOpen, audio: Music, stem: Music, sample: Music, midi: FileText,
@@ -64,6 +81,11 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   const [playing, setPlaying] = useState(false);
   const [playError, setPlayError] = useState(false);
   const [compat, setCompat] = useState<DawCapabilityReport | null>(null);
+  const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
+
+  // One honest Project Link boundary for this view — typed results, session-scoped
+  // server-confirmation tracking (invalidated on account switch inside the client).
+  const linkClientRef = useRef(createProjectLinkClient());
 
   // Guards against stale async: a load() resolving after the user switched
   // projects must not paint the previous project's files (which would let the
@@ -112,6 +134,15 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
     return () => { active = false; };
   }, [project.id, project.daw_type, project.file_path]);
 
+  // Track connectivity so link states flip to/from `offline` honestly.
+  useEffect(() => {
+    const on = () => setOnline(true);
+    const off = () => setOnline(false);
+    window.addEventListener('online', on);
+    window.addEventListener('offline', off);
+    return () => { window.removeEventListener('online', on); window.removeEventListener('offline', off); };
+  }, []);
+
   const projectRoot = project.file_path ? project.file_path.split(/[/\\]/).slice(0, -1).join('/') + '/' : '';
   const groups = useMemo(() => groupFilesByRole(files), [files]);
   const summary = useMemo(() => deriveProjectSummary(files), [files]);
@@ -120,7 +151,20 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   // bounce, so we never hand the <audio> element an empty or file:// src.
   const bounceMediaUrl = useMemo(() => buildBounceMediaUrl(project.id, bounce), [project.id, bounce]);
   const missingFiles = useMemo(() => files.filter((f) => f.local_status === 'missing'), [files]);
-  const activeLinks = links.filter((l) => deriveLinkStatus(l) === 'active');
+
+  // Reconcile the displayed links to THIS project with an honest per-record state.
+  // `links` is already project-scoped in load() (no cross-project leakage); here we
+  // add the derived state so nothing offline/legacy is shown as server-confirmed.
+  const linkViews = useMemo(() => {
+    const client = linkClientRef.current;
+    return links
+      .filter((l) => l.project_id === project.id) // defense-in-depth against stale
+      .map((l) => {
+        const state = deriveLinkState(l as any, { online, confirmedThisSession: client.confirmedIds() });
+        return { record: l, state, group: linkGroupForState(state) };
+      });
+  }, [links, project.id, online]);
+  const activeLinks = useMemo(() => linkViews.filter((v) => v.group === 'active'), [linkViews]);
 
   const togglePlay = () => {
     const el = audioRef.current;
@@ -174,12 +218,19 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
     setSharingProject(true);
     setStatusMsg(null);
     try {
-      const r = await api.project.createLink({ projectId: project.id, cloudProjectId: project.cloud_id ?? undefined, allowDownload: true });
-      if (r.error) setStatusMsg(`Error: ${r.error}`);
-      else if (r.linkUrl) {
-        await navigator.clipboard.writeText(r.linkUrl);
+      // Typed result via the honest client: nothing is announced as created unless
+      // the server confirmed it. Offline → `offline`, never a false "created".
+      const result = await linkClientRef.current.create({
+        projectId: project.id,
+        cloudProjectId: project.cloud_id ?? undefined,
+        allowDownload: true,
+      });
+      if (result.kind === 'confirmed') {
+        if (result.url) await navigator.clipboard.writeText(result.url);
         setStatusMsg('Project Link created and copied.');
         await load();
+      } else {
+        setStatusMsg(describeLinkResult(result));
       }
     } catch (e: any) { setStatusMsg(`Error: ${e?.message ?? 'unknown'}`); }
     setSharingProject(false);
@@ -270,7 +321,10 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
         {/* Primary + secondary actions */}
         <div className="px-5 py-3 border-b border-border-subtle space-y-2.5">
           <div className="flex items-center gap-2 flex-wrap">
-            <Button variant="primary" onClick={handleOpenInDaw}><ExternalLink /> Open in DAW</Button>
+            <Button variant="primary" onClick={handleOpenInDaw} disabled={!project.file_path}
+              title={project.file_path ? 'Open the project in its DAW' : 'No local project file on this device to open'}>
+              <ExternalLink /> Open in DAW
+            </Button>
             <Button variant="secondary" onClick={handlePrioritize} loading={prioritizing}
               disabled={!(project.sync_status === 'pending' || project.sync_status === 'failed')}
               title="Move this project to the front of the sync queue">
@@ -372,13 +426,17 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                 <div>
                   <SectionHeader label="Links" count={activeLinks.length} action={<button onClick={() => onNavigate?.('links')} className="text-[10px] text-primary/80 hover:text-primary">Manage</button>} />
                   <div className="space-y-1">
-                    {activeLinks.slice(0, 3).map((l) => (
-                      <div key={l.tracking_id} className="flex items-center gap-2 text-[11px]">
-                        <Link2 className="w-3 h-3 text-primary/50 flex-shrink-0" />
-                        <span className="text-foreground/70 truncate">{linkDisplayName(l)}</span>
-                        <button onClick={() => navigator.clipboard.writeText(l.url)} title="Copy" className="ml-auto p-0.5 rounded hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"><Copy className="w-3 h-3 text-white/40" /></button>
-                      </div>
-                    ))}
+                    {activeLinks.slice(0, 3).map(({ record: l, state }) => {
+                      const pres = LINK_STATE_PRESENTATION[state];
+                      return (
+                        <div key={l.tracking_id} className="flex items-center gap-2 text-[11px]">
+                          <Link2 className="w-3 h-3 text-primary/50 flex-shrink-0" />
+                          <span className="text-foreground/70 truncate">{linkDisplayName(l)}</span>
+                          <StatusBadge tone={pres.tone} label={pres.label} title={pres.note} className="flex-shrink-0" />
+                          <button onClick={() => navigator.clipboard.writeText(l.url)} title="Copy" className="ml-auto p-0.5 rounded hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"><Copy className="w-3 h-3 text-white/40" /></button>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}

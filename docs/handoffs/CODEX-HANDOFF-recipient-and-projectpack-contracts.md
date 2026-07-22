@@ -121,6 +121,52 @@ workspace:
 
 ---
 
+## 7. Authoritative link listing + reconciliation  [GAP — found in P3-2a audit]
+
+The desktop Links workspace and the Project Detail links section are **local
+device-only** today: `links:getAll` reads the desktop SQLite `links` table and
+there is **no** server call that lists a user's links or reconciles a cached
+record against server truth (see `docs/WAVI_PROJECT_LINKS_DESKTOP_AUDIT.md` Q3/Q7).
+Consequence the desktop now surfaces honestly: a record loaded from a previous
+session is shown as `cached` (not `server-confirmed`), and reconciliation is
+exposed as *unavailable* rather than faked.
+
+- **Requested:** a `list-project-links` desktop action returning, per link:
+  `trackingId`, `projectId`, `projectVersionId`, `status` (active/revoked/expired),
+  `permissions`, `createdAt`, `expiresAt`, `revokedAt`. This lets desktop flip a
+  `cached` record to `server-confirmed`/`revoked`/`expired` authoritatively and
+  drop the "not re-verified this session" caveat.
+- Optional: a lightweight `resolve-project-link-status` (single trackingId) for
+  cheap per-row reconciliation.
+
+## 8. Account-scoped isolation of cached links  [GAP — found in P3-2a audit]
+
+The `links` table has **no creator/account column**, and `auth:clearToken`
+(logout) does **not** clear it (audit Q8). Desktop mitigates in the client layer
+(session-confirmed state is invalidated on account switch, so a cached row is
+never *presented* as freshly server-confirmed for a different account), but the
+rows themselves remain visible.
+
+- **Requested (server/contract):** include the owning `accountId` in the
+  `create-project-link` response and any `list-project-links` payload so desktop
+  can attribute — and on account switch, hide/segregate — cached records.
+- Desktop-side follow-up (tracked separately, not requested of Codex): persist
+  that `accountId` on the local row and filter on the active account.
+
+## 9. Permission-enforcement contract  [GAP — found in P3-2a audit]
+
+Desktop only offers permissions it can verify the server honors: `allow_download`
+and `collaboratorMode` ∈ {view, comment, edit}. Everything else (download
+Project Pack, open-in-Wavi-Studio import, contribute, comment enforcement) is
+shown **disabled with an honest note**, not as an enforced capability.
+
+- **Requested:** the authoritative list of permission keys the server *enforces*
+  on resolve/download, and their exact wire names, so desktop can enable each
+  toggle only when enforcement is real. Until a key appears here, desktop keeps it
+  disabled.
+
+---
+
 ## What desktop already guarantees (so the web side can rely on it)
 - Every downloaded file is SHA-256-verified against the manifest; restore fails
   closed on mismatch/missing.

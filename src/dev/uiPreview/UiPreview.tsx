@@ -13,6 +13,24 @@ import {
   previewProjects, previewLinks, previewVersions, previewActivity,
   PREVIEW_STATES, type PreviewState,
 } from './fixtures';
+import {
+  LINK_STATE_PRESENTATION, LINK_GROUP_META, LINK_GROUP_ORDER,
+  linkGroupForState, type LinkState, type LinkGroup,
+} from '../../lib/projectLinks';
+
+/** Synthetic Project Link rows — one per honest state — for the Links preview. */
+const PREVIEW_LINK_STATES: { state: LinkState; label: string; url: string }[] = [
+  { state: 'server-confirmed', label: 'Summer EP — master', url: 'https://wavi.stream/project-link/aaa' },
+  { state: 'cached', label: 'Late Night Bounce', url: 'https://wavi.stream/project-link/bbb' },
+  { state: 'reconciliation-needed', label: 'Client review v3', url: 'https://wavi.stream/project-link/ccc' },
+  { state: 'offline', label: 'Demo for label', url: 'https://wavi.stream/project-link/ddd' },
+  { state: 'failed', label: 'Collab share', url: 'https://wavi.stream/project-link/eee' },
+  { state: 'permission-denied', label: 'Restricted mix', url: 'https://wavi.stream/project-link/fff' },
+  { state: 'legacy-local-only', label: 'Old listen link', url: 'https://wavi.stream/listen/ggg' },
+  { state: 'unsupported-contract', label: 'Project Pack (beta)', url: 'https://wavi.stream/project-link/hhh' },
+  { state: 'expired', label: 'Time-boxed preview', url: 'https://wavi.stream/project-link/iii' },
+  { state: 'revoked', label: 'Withdrawn share', url: 'https://wavi.stream/project-link/jjj' },
+];
 
 /**
  * Development-only visual preview harness (P3-1b). Renders representative,
@@ -30,7 +48,7 @@ const SURFACES = [
 export default function UiPreview() {
   const [state, setState] = useState<PreviewState>('populated');
   const offline = state === 'offline';
-  const [view, setView] = useState<'home' | 'project'>('home');
+  const [view, setView] = useState<'home' | 'project' | 'links'>('home');
 
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
@@ -40,6 +58,7 @@ export default function UiPreview() {
         <div className="flex items-center gap-1 ml-3">
           <Button size="compact" variant={view === 'home' ? 'primary' : 'ghost'} onClick={() => setView('home')}>Home</Button>
           <Button size="compact" variant={view === 'project' ? 'primary' : 'ghost'} onClick={() => setView('project')}>Project Detail</Button>
+          <Button size="compact" variant={view === 'links' ? 'primary' : 'ghost'} onClick={() => setView('links')}>Links</Button>
         </div>
         <div className="ml-auto flex items-center gap-1">
           {PREVIEW_STATES.map((s) => (
@@ -51,6 +70,56 @@ export default function UiPreview() {
       {view === 'project' && (
         <div className="flex-1 overflow-hidden bg-background flex justify-center py-4">
           <ProjectDetailPreview state={state} />
+        </div>
+      )}
+
+      {view === 'links' && (
+        <div className="flex-1 overflow-y-auto bg-background">
+          <div className="max-w-3xl mx-auto p-6 space-y-5">
+            <PageHeader
+              title="Links"
+              subtitle="Every honest Project Link state, grouped as the workspace groups them. Synthetic — no network."
+              status={<StatusBadge tone="beta" label="Preview" />}
+            />
+            {/* Empty + error exemplars (states 11 & 12) */}
+            <div className="grid grid-cols-2 gap-4">
+              <Surface variant="inset" className="p-4">
+                <EmptyState icon={Link2} title="No links yet" description="Create a link from a synced project." />
+              </Surface>
+              <Surface variant="inset" className="p-4">
+                <ErrorState title="Couldn't load your links" description="Local link registry unavailable." retryLabel="Try again" onRetry={() => {}} />
+              </Surface>
+            </div>
+            {LINK_GROUP_ORDER.map((group: LinkGroup) => {
+              const rows = PREVIEW_LINK_STATES.filter((r) => linkGroupForState(r.state) === group);
+              if (!rows.length) return null;
+              const meta = LINK_GROUP_META[group];
+              return (
+                <section key={group} className="space-y-2">
+                  <div className="flex items-baseline gap-2">
+                    <h2 className="text-sm font-semibold text-white/80">{meta.title}</h2>
+                    <span className="text-[10px] text-white/25">{rows.length} · {meta.hint}</span>
+                  </div>
+                  <div className="space-y-2">
+                    {rows.map((r) => {
+                      const pres = LINK_STATE_PRESENTATION[r.state];
+                      return (
+                        <Surface key={r.state} variant="base" className="border border-white/5 p-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-white/85 truncate">{r.label}</span>
+                            <StatusBadge tone={pres.tone} label={pres.label} title={pres.note} />
+                            <span className="ml-auto text-[10px] text-white/25 font-mono">{r.state}</span>
+                          </div>
+                          <p className="text-[10px] text-white/20 font-mono truncate mt-0.5">{r.url}</p>
+                          <p className="text-[10px] text-white/30 mt-1.5">{pres.note}</p>
+                        </Surface>
+                      );
+                    })}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
         </div>
       )}
 
