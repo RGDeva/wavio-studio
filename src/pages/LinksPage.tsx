@@ -6,7 +6,7 @@ import {
 import { api, LinkListItem } from '../lib/api';
 import { canDuplicate, linkDisplayName, CAPABILITY_LABELS, linkCapabilities } from '../lib/linksView';
 import { ProjectLinkClient, type LinkView } from '../lib/projectLinkClient';
-import { createProjectLinkClient } from '../lib/projectLinkClientFactory';
+import { createProjectLinkClient, sharedAccountResolver } from '../lib/projectLinkClientFactory';
 import {
   LINK_STATE_PRESENTATION, LINK_GROUP_META, LINK_GROUP_ORDER,
   type LinkGroup, type LinkResult,
@@ -167,6 +167,19 @@ export function LinksPage({ visible }: { visible?: boolean }) {
             </Button>
           }
         />
+
+        {/* Account attribution status (P3-2b prep): honest, non-alarming note while
+            the canonical account-identity contract is pending. Records stay
+            device-scoped and ownership-unknown until it lands. */}
+        {sharedAccountResolver.current().kind === 'missing-account-context' && total > 0 && (
+          <Surface variant="inset" className="border border-white/5 px-4 py-2.5">
+            <p className="text-[11px] text-white/35 leading-relaxed">
+              Account attribution isn't available yet, so these records are scoped to this
+              computer rather than to your account. Ownership can't be verified per record
+              until account-aware link sync arrives.
+            </p>
+          </Surface>
+        )}
 
         {actionError && (
           <Surface variant="inset" className="border border-destructive/20 px-4 py-3 flex items-center gap-3">

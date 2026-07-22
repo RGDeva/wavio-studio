@@ -37,6 +37,7 @@ export default defineConfig({
       'src/dev/uiPreview/isPreviewEnabled.test.ts',
       'src/components/ui/uiPrimitives.test.ts',
       'src/lib/projectLinks.test.ts',
+      'src/lib/accountContext.test.ts',
     ],
     environment: 'node',
   },

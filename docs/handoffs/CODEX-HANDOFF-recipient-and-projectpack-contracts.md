@@ -165,6 +165,38 @@ shown **disabled with an honest note**, not as an enforced capability.
   toggle only when enforcement is real. Until a key appears here, desktop keeps it
   disabled.
 
+## 10. Desktop account-identity contract  [HARD BLOCKER — found in P3-2b-local audit]
+
+P3-2b-local (account-scoped local link-cache isolation) **cannot be implemented**
+without a stable account identifier, and the desktop has **none** today. Audit
+(`docs/WAVI_PROJECT_LINKS_DESKTOP_AUDIT.md`, P3-2b section) confirmed every channel:
+`create-desktop-token` → `{ token, expiresAt }`; `create-project-link` →
+`{ trackingId, linkUrl }`; `plan` → `{ plan, usage, limits }`; renderer auth state is
+a bare boolean; the `links` table has no account column. The only identity artifact
+is the opaque `wv_` token, and deriving an id from it (substring/fingerprint) is
+explicitly disallowed. So the account_id migration is **stopped, not faked**.
+
+- **Requested (pick one, in priority order):**
+  1. **Preferred:** `create-desktop-token` returns a stable, opaque
+     `accountId` (server-generated, not the token, not email/username) alongside
+     `{ token, expiresAt }`. Desktop persists it next to the encrypted token so it is
+     **available offline** and survives restarts.
+  2. Additionally (or alternatively) include the same `accountId` on the
+     `create-project-link` response, so newly created rows can be stamped even if (1)
+     is not yet available.
+  3. A `whoami` / `get-desktop-identity` desktop action returning `{ accountId }` for
+     the current token — acceptable **only** as an online refresh; it does not satisfy
+     the offline-scoping requirement on its own.
+- **Constraints the identifier must meet:** stable across logins for the same account;
+  opaque (no PII); available to the **main process** at rest (so isolation is enforced
+  in persistence, not renderer filtering); available **offline** (so cached reads stay
+  scoped without a network round-trip).
+- Once any of these lands, desktop will: add a nullable `account_id` to `links` (bounded
+  migration, legacy rows preserved as ownership-unknown), stamp it on server-confirmed
+  creates, scope reads/revokes to the active account in the main-process service, and
+  clear/reload on logout+login. All of that is designed and ready; it is blocked solely
+  on this identifier.
+
 ---
 
 ## What desktop already guarantees (so the web side can rely on it)

@@ -7,6 +7,18 @@
  */
 import { api, type LinkListItem } from './api';
 import { ProjectLinkClient, type LinkClientDeps } from './projectLinkClient';
+import { PendingContractAccountResolver, SessionEpoch } from './accountContext';
+
+/**
+ * One account-context resolver + session epoch per renderer session (P3-2b
+ * prep). Today it always reports `missing-account-context` — the desktop has
+ * no canonical account id until the Codex identity contract lands, at which
+ * point `sharedAccountResolver.supply(<canonical id>)` activates scoping with
+ * no other call-site changes. Logout/account-switch must call `onLogout()` /
+ * `onAccountSwitch()` on both the resolver and any live client.
+ */
+export const sharedSessionEpoch = new SessionEpoch();
+export const sharedAccountResolver = new PendingContractAccountResolver(sharedSessionEpoch);
 
 export function makeLinkClientDeps(): LinkClientDeps {
   return {
@@ -23,5 +35,7 @@ export function makeLinkClientDeps(): LinkClientDeps {
 }
 
 export function createProjectLinkClient(): ProjectLinkClient {
-  return new ProjectLinkClient(makeLinkClientDeps());
+  const client = new ProjectLinkClient(makeLinkClientDeps());
+  client.attachAccountContext(sharedAccountResolver, sharedSessionEpoch);
+  return client;
 }

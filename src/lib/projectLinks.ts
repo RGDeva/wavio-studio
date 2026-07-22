@@ -21,6 +21,12 @@ export interface LinkRecord {
   expires_at?: string | null;
   created_at: string;
   revoked_at?: string | null;
+  /**
+   * Canonical owning account id (P3-2b prep). TYPE-ONLY today: no schema
+   * migration exists and no code writes it — every current row is `undefined`
+   * (ownership-unknown). Populated only once the Codex identity contract lands.
+   */
+  account_id?: string | null;
 }
 
 export type LinkState =
