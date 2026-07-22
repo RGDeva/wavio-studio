@@ -73,3 +73,61 @@ Because no server list endpoint is consumed, a record loaded from SQLite in a la
   sent to and stored by the server via `create-project-link`.
 - **Unsupported (show disabled + honest note):** download Project Pack, open in Wavi Studio import,
   contribute, comment enforcement — no verified enforcement contract from the desktop's view.
+
+---
+
+# P3-2b-local — account-scoped cache isolation: **BLOCKED, no stable account identity available**
+
+## A. Active-account identity audit (evidence)
+
+Goal: find a **stable, non-derived** account identifier the desktop process can use to scope
+cached Project Link rows to their owning account. Traced the full auth path:
+
+| Stage | Location | Carries a stable account id? |
+|---|---|---|
+| Deep-link auth token in | `handleDeepLink` / token receive (electron/main.ts ~770-795) | **No** — raw Privy JWT or `wv_` token only |
+| Token exchange | `exchangePrivyJwt` → `create-desktop-token` (electron/main.ts 695-731) | **No** — response is `{ token, expiresAt }` |
+| Token at rest | `store.set('authToken', …)` encrypted via safeStorage (main.ts 786-789) | opaque `wv_` token only |
+| Token decrypt/use | `getDecryptedToken` (main.ts ~991) | opaque token only |
+| Create Project Link | `create-project-link` response (main.ts 1326) | **No** — `{ trackingId, linkUrl }` |
+| Plan/usage | `X-Desktop-Action: plan` (SettingsPage.tsx 62-65) | **No** — `{ plan, usage, limits }`, and network-only (absent offline) |
+| Renderer auth state | `App.tsx` `authed` | **No** — tri-state **boolean** (`null`/`false`/`true`); there is no user object |
+| Logout | `auth:clearToken` (main.ts 1006) + `SettingsPage.handleLogout` → `onLogout()` → `setAuthed(false)` | clears token; unmounts the entire authed tree |
+| DB schema | `links` table (electron/db.ts 223) | **No** creator/account column (`owner_user_id` at db.ts 258 is on `restored_projects` — the *sharer's* id from a resolved recipient link, not the current user) |
+
+**Conclusion: there is no stable account identifier available to the desktop today.** The only
+persisted identity artifact is the opaque `wv_` token. The forbidden derivations (email text, token
+substring, token fingerprint, device id, mutable username, local path) are the *only* things that
+could be manufactured from what exists — so per the P3-2b instruction, **implementation stops here.
+No identifier is invented.**
+
+## Prior (still-current) unscoped behavior
+- The `links` table is written by any authenticated session and read globally (`links:getAll`,
+  db.ts `getLinks`). There is no account column and logout does not clear the rows.
+- Cross-account **mutation** is nonetheless prevented server-side: `revoke-project-link` is sent with
+  the current token and the server enforces ownership (a foreign trackingId returns an error, which the
+  desktop normalizes to `unauthorized`/`rejected` and never writes `markLinkRevoked`). The gap is
+  **local visibility** of a previous account's cached rows, not unauthorized revoke.
+
+## Why the migration is safe to defer (current honest posture)
+P3-2a already prevents the worst outcome without an identity: a row loaded from SQLite is `cached`
+(**never** `server-confirmed`) — only links created *this session with the current token* are shown as
+confirmed. On logout/account-switch the authed React tree unmounts (`authed=false`), discarding the
+`ProjectLinkClient` instances and their session-confirmed sets; the next login starts with an empty
+confirmed set, so trust never bleeds across sessions. Account switch is logout+login (no in-app
+switch path exists), so it shares this clearing.
+
+## Legacy-row policy (unchanged until identity lands)
+Every persisted Project Link row is, strictly, **ownership-unknown** on this device: without an account
+id we cannot prove it belongs to the active account. It is therefore honestly presented as `cached`
+("not re-verified this session") and legacy/listen records as `legacy-local-only`. No row is labelled
+`server-confirmed` on load, and no row is auto-attributed to the active account. This is the
+conservative reading of the P3-2b legacy policy given the missing contract.
+
+## Remaining server reconciliation gap
+Unchanged from P3-2a §7-9: no `list-project-links`, no per-account attribution, no permission
+enforcement contract. P3-2b-local adds one hard dependency (below) that gates the account_id migration.
+
+## Missing contract (written to the Codex handoff, §10)
+The desktop needs a **stable, opaque, offline-available account identifier** delivered at
+authentication time (not derived from the token). See handoff §10 for the exact shape.
