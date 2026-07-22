@@ -38,6 +38,7 @@ export default defineConfig({
       'src/components/ui/uiPrimitives.test.ts',
       'src/lib/projectLinks.test.ts',
       'src/lib/accountContext.test.ts',
+      'src/lib/codexLinkContractAdapter.test.ts',
     ],
     environment: 'node',
   },

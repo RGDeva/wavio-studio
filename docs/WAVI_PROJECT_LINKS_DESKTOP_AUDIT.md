@@ -162,3 +162,44 @@ honest device-scoped view.
 **Pending Codex dependency (exact):** canonical account id at auth time + authoritative
 `list-project-links` (see `docs/handoffs/CODEX-TO-DESKTOP-project-link-reconciliation.md` for the
 fields the desktop expects; wire names pending Codex's implemented contract).
+
+---
+
+# P3-2c-inspect — actual Codex server contract inspected (read-only)
+
+The Codex Project Link server contracts now exist LOCALLY in the sibling `wavio` repo
+(branch `test/project-links-authoritative-staging`, HEAD `c8fefb24`), but the relevant
+changes to `api/desktop/index.ts` + `docs/WAVI_PROJECT_LINKS_SERVER_AUDIT.md` and the new
+`api/desktop/__tests__/project-links-mutation.test.ts` were **uncommitted and unpushed** at
+inspection time. Contract is real but **not yet locked**. `wavio` was inspected read-only only;
+nothing there was modified.
+
+## What the inspection changed on the desktop (bounded, fail-closed, no endpoint called)
+
+- **Canonical identity is the Privy DID** (`did:privy:…`), returned server-side as top-level
+  `accountId` on every list/create/revoke response — NOT delivered at token-exchange time.
+  `isAcceptableCanonicalAccountId` previously accepted only UUID/short-id shapes and would have
+  **rejected the real id**; it now accepts `did:privy:…` while still refusing tokens/JWTs/
+  emails/paths/hashes.
+- `src/lib/codexLinkContractAdapter.ts` — pure adapter from the observed wire shape to
+  `AuthoritativeLinkRecord`: state-booleans→status enum, fail-closed on missing/contradictory
+  fields, and a `pageComplete` gate encoding the server's rule that a cached link may only
+  become `reconciliation-needed` after ALL pages are exhausted. No network code.
+- Collaborator mode UI no longer offers `edit` — the server's `create-project-link` supports
+  only `view|comment` and rejects `edit` with 400 (was previously offered = an unenforced
+  permission claim).
+
+## Delta vs the placeholder contract this doc previously assumed
+- create/revoke return `{ accountId, created|revoked|alreadyRevoked, item{…} }` — **no
+  `linkUrl`, no bare `trackingId`** at the top level. The legacy desktop `project:createLink`
+  handler reads `result.trackingId`/`result.linkUrl`; it will need the adapter when these
+  actions ship on the production endpoint.
+- status is **state booleans** (`state.active/revoked/expired`), not a string enum; there is no
+  `revokedAt` timestamp (revocation = `state.revoked` + `updatedAt`).
+
+## Still blocking live wiring (see CODEX-TO-DESKTOP note §Still required)
+Codex must commit+push the staging changes (lock the contract SHAs), confirm whether `accountId`
+is also delivered at `create-desktop-token` (needed for offline-scoped reads, else the desktop
+persists it from the first authenticated response), and confirm rollout ordering so the current
+production create/revoke shape holds until the desktop ships the adapter. **No merge into
+integration until the contract is committed and pushed.**

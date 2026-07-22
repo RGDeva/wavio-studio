@@ -63,3 +63,53 @@ For each Project Link owned by the account, desktop expects the following semant
 Nothing in the desktop repo fakes any of this today: no fake endpoint, no invented id, no
 ownership writes. Reply with the implemented action names + response shapes and the desktop
 wiring is a single bounded task.
+
+---
+
+# UPDATE 2026-07-22 — actual Codex implementation inspected (read-only)
+
+Inspected in the sibling `wavio` repo, branch `test/project-links-authoritative-staging`
+(HEAD `c8fefb24`, base `831d071f` vs origin/main). **The relevant changes were UNCOMMITTED
+and the branch had no upstream at inspection time — contract is real but not yet locked.**
+Full server-side spec: `wavio/docs/WAVI_PROJECT_LINKS_SERVER_AUDIT.md` (also uncommitted).
+
+## Observed contract (supersedes the semantic placeholders above)
+
+- **Identity:** canonical account id = **Privy DID** (`did:privy:…`), resolved server-side from
+  the Bearer token (`validateDesktopToken().userId`, else `verifyPrivyToken`). Returned as
+  top-level `accountId` on every list/create/revoke response. NOT delivered at token-exchange
+  time — the desktop learns it from the first authenticated link call.
+- **Endpoint:** `POST {API_BASE}/desktop/index`, `X-Desktop-Action:
+  list-project-links | create-project-link | revoke-project-link`.
+- **List:** `{ accountId, items[], pageInfo{ limit, hasMore, nextCursor, order:'updatedAtDesc,idDesc',
+  scope:'owner' } }`; cursor-paged (max 100/page). **Reconciliation rule:** a cached link may be
+  marked reconciliation-needed ONLY after every page is exhausted.
+- **Item shape:** `{ id, trackingId, publicIdentifier, projectId, versionId, ownerAccountId,
+  createdAt, updatedAt, revision(=updatedAt), expiresAt, state{active,revoked,expired},
+  permissions{allowDownload, collaboratorMode, previewEnabled, requiresPassword} }` — status is
+  **state booleans**, no enum; no `revokedAt` timestamp.
+- **Create:** validates ownership (404 not-owner), version (409 none), collaboratorMode
+  (`view|comment` ONLY — `edit` is rejected 400); response `{ accountId, created:true, item }`.
+  ⚠ No `linkUrl` and no bare `trackingId` — the legacy desktop path that reads
+  `result.trackingId`/`result.linkUrl` must adapt when this ships.
+- **Revoke:** `{ trackingId }` → `{ accountId, revoked:true, item }`, idempotent
+  (`alreadyRevoked:true`), 404 when not found/not owned.
+
+## Desktop code updated against this (branch feat/project-links-authoritative-reconciliation)
+
+- `isAcceptableCanonicalAccountId` now accepts `did:privy:…` (was UUID-only — would have
+  rejected the real id).
+- `src/lib/codexLinkContractAdapter.ts`: pure fail-closed adapter (item + list parsing,
+  state-boolean→status mapping, `pageComplete` gate for reconciliation-needed) + tests using
+  the exact documented sample payloads. No endpoint is called yet.
+- UI stops offering collaborator mode `edit` (server rejects it).
+
+## Still required from Codex before live wiring
+
+1. **Commit + push** the staging changes (or report the final SHAs) so the contract is locked.
+2. Confirm whether `accountId` will ALSO be delivered at `create-desktop-token` time —
+   without that, offline-scoped reads need the desktop to persist the id from the first
+   authenticated response instead (workable, but say which).
+3. Confirm the legacy `create-project-link`/`revoke-project-link` actions on the CURRENT
+   production endpoint keep their old response shape until the desktop ships the adapter
+   (rollout ordering).

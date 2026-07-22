@@ -39,15 +39,19 @@ export interface AccountContextResolver {
 
 const EMAIL_RE = /@/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+// Codex's server audit (WAVI_PROJECT_LINKS_SERVER_AUDIT.md, staging branch) locks
+// the canonical account identity as the Privy DID string, e.g. "did:privy:abc123".
+const PRIVY_DID_RE = /^did:privy:[A-Za-z0-9]{6,64}$/;
 // Shapes we must refuse as account keys: desktop tokens, JWTs, long opaque
-// secrets, emails, filesystem paths. A canonical id is expected to be a UUID
-// (or similar short backend id) — fail closed on anything token-like.
+// secrets, emails, filesystem paths. A canonical id is a backend-owned principal
+// id — Privy DID or UUID (or similar short id) — fail closed on anything token-like.
 export function isAcceptableCanonicalAccountId(value: string): boolean {
   if (!value || typeof value !== 'string') return false;
   if (value.startsWith('wv_')) return false;            // desktop auth token
   if (value.split('.').length === 3 && value.length > 60) return false; // JWT shape
   if (EMAIL_RE.test(value)) return false;               // email
   if (value.includes('/') || value.includes('\\')) return false; // path
+  if (PRIVY_DID_RE.test(value)) return true;            // canonical Privy DID
   if (value.length > 64) return false;                  // opaque secret / hash
   return UUID_RE.test(value) || /^[A-Za-z0-9_-]{8,64}$/.test(value);
 }
