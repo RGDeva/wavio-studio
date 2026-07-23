@@ -203,3 +203,49 @@ is also delivered at `create-desktop-token` (needed for offline-scoped reads, el
 persists it from the first authenticated response), and confirm rollout ordering so the current
 production create/revoke shape holds until the desktop ships the adapter. **No merge into
 integration until the contract is committed and pushed.**
+
+---
+
+# P3-2c — authoritative networking + account-scoped persistence IMPLEMENTED
+
+Locked Codex contract: `wavio` @ `d34d5218eb0b992920a43939eb5c892f69aed030`,
+`POST {API_BASE}/desktop`, actions `list-project-links | create-project-link |
+revoke-project-link`, identity = server Privy DID in `accountId`.
+
+## What landed (desktop, main-process authority)
+- `electron/projectLinkService.ts` — pure, injectable networking + parsing +
+  reconciliation planning against the locked shapes: `parseItem` (state booleans→
+  status, fail-closed), `classifyHttpFailure` (401/403→unauthorized, 404→not-found,
+  409→conflict, 400→rejected, 5xx→retryable, thrown→offline), paginated
+  `listProjectLinksAll` (accumulates every page; `pageComplete` only when the
+  server says `hasMore:false`), `createProjectLinkFlow`/`revokeProjectLinkFlow`
+  (confirmed only with `accountId` + `created/revoked/alreadyRevoked` + a
+  parseable `item` — never a fabricated success), and `planReconciliation`
+  (owner-only apply; reconciliation-needed only when page-complete; legacy/foreign
+  rows never touched).
+- `electron/main.ts` — `postDesktopAction` hits `${API_BASE}/desktop` (token in
+  main only); IPC `projectLinks:reconcile|getScoped|create|revoke`; captures the
+  server DID into `currentAccountId` and pushes `auth:account` to the renderer;
+  `auth:clearToken` clears the DID and signals logout.
+- `electron/db.ts` — bounded `ALTER TABLE links ADD COLUMN account_id` (nullable,
+  additive, legacy rows preserved); `recordLink` stamps `account_id` on
+  server-confirmed creates; `getLinksForAccount` / `getLegacyUnscopedLinks` /
+  `applyAuthoritativeLink` (owner-scoped reconcile) / `markLinkRevokedForAccount`.
+- Renderer (`src/lib/api.ts`, `projectLinkClientFactory.ts`) — typed
+  `api.projectLinks.*`; the factory routes create/revoke/list through the
+  authoritative IPC and bridges `auth:account` → `sharedAccountResolver`
+  (supply on login, `onAccountSwitch` on DID change, `onLogout` on null). Token
+  and DID never reach the renderer.
+
+## Identity & isolation
+Active account = server Privy DID (never derived from the token). Cache rows are
+account-scoped; account A never sees account B's rows; legacy NULL-account rows
+are segregated as ownership-unknown and never auto-assigned; logout clears the
+in-memory DID + resolver; a DID change reloads the new account's scope.
+
+## Still requiring live verification (not unit-testable here)
+The real `fetch` against the deployed `/api/desktop` endpoint, and the end-to-end
+renderer reconcile/switch flow, need a live signed-in staging pass. The pure
+contract logic (parsing, pagination, reconciliation, account scoping, fail-closed
+create/revoke) is covered by `electron/projectLinkService.test.ts` (15) and the
+account-scoping SQL by `electron/links.test.ts` (P3-2c block).

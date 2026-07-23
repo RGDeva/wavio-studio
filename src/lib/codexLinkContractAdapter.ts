@@ -1,28 +1,39 @@
 /**
  * Adapter: Codex Project Link wire shape → desktop AuthoritativeLinkRecord.
  *
- * Source of truth: the ACTUAL implementation inspected read-only in the sibling
- * `wavio` repo (branch `test/project-links-authoritative-staging`, working tree
- * on top of c8fefb24; documented in its WAVI_PROJECT_LINKS_SERVER_AUDIT.md).
+ * Source of truth: the LOCKED, committed server contract in the sibling `wavio`
+ * repo, branch `test/project-links-authoritative-staging` @
+ * `d34d5218eb0b992920a43939eb5c892f69aed030` (`api/desktop/index.ts`; spec in
+ * `docs/WAVI_PROJECT_LINKS_SERVER_AUDIT.md`).
  *
- * ⚠ STAGING-PENDING: those changes were UNCOMMITTED and unpushed at inspection
- * time. This adapter is pure and fail-closed — nothing in the desktop calls the
- * endpoint yet. If Codex's final commit changes a field, only this file moves.
- *
- * Observed contract (endpoint `POST {API_BASE}/desktop/index`, Bearer auth,
+ * Contract (endpoint `POST {API_BASE}/desktop`, Bearer auth,
  * `X-Desktop-Action: list-project-links | create-project-link | revoke-project-link`):
- *  - every response carries top-level `accountId` = Privy DID (`did:privy:…`);
- *  - list → `{ accountId, items[], pageInfo{ limit, hasMore, nextCursor, order, scope:'owner' } }`;
- *  - create → `{ accountId, created:true, item }`; revoke → `{ accountId, revoked:true|alreadyRevoked:true, item }`;
+ *  - every 200 response carries top-level `accountId` = Privy DID (`did:privy:…`);
+ *  - list → `{ accountId, items[], pageInfo{ limit, hasMore, nextCursor, order:'updatedAtDesc,idDesc', scope:'owner' } }`
+ *    (cursor-paged, DEFAULT_LIMIT 50, MAX_LIMIT 100);
+ *  - create → `{ accountId, created:true, item }`; revoke → `{ accountId, revoked:true, item }`
+ *    or `{ accountId, alreadyRevoked:true, item }`;
  *  - item: `{ id, trackingId, publicIdentifier, projectId, versionId, ownerAccountId,
  *      createdAt, updatedAt, revision, expiresAt, state{active,revoked,expired},
  *      permissions{allowDownload, collaboratorMode, previewEnabled, requiresPassword} }`;
  *  - status is BOOLEANS under `state`, not an enum; collaboratorMode supports
- *    only `view | comment` (desktop must stop offering `edit`);
+ *    only `view | comment` (400 on anything else); create errors: 400 (validation),
+ *    404 (project not owned), 409 (no publishable version), 500; revoke errors:
+ *    400, 404 (not found/not owned), 500;
  *  - reconciliation rule: a cached link may be marked reconciliation-needed only
  *    after ALL pages for the same scope are exhausted.
  */
 import type { AuthoritativeLinkRecord } from './linkReconciliation';
+
+/** Locked endpoint + actions. Path is relative to API_BASE (e.g. `${API_BASE}/desktop`). */
+export const DESKTOP_ENDPOINT_PATH = '/desktop';
+export const DESKTOP_ACTIONS = {
+  list: 'list-project-links',
+  create: 'create-project-link',
+  revoke: 'revoke-project-link',
+} as const;
+export const DEFAULT_LIST_LIMIT = 50;
+export const MAX_LIST_LIMIT = 100;
 
 /** Raw wire item as implemented on the Codex staging branch. */
 export interface CodexWireLinkItem {
@@ -131,6 +142,54 @@ export function parseListResponse(raw: unknown): WireListParseResult {
     nextCursor: str(w.pageInfo?.nextCursor),
     pageComplete: !hasMore,
   };
+}
+
+/** Top-level create/revoke response (observed shape). */
+export interface CodexWireMutationResponse {
+  accountId?: unknown;
+  created?: unknown;
+  revoked?: unknown;
+  alreadyRevoked?: unknown;
+  item?: unknown;
+  error?: unknown;
+}
+
+export type MutationParseResult =
+  | { kind: 'confirmed'; accountId: string; record: AuthoritativeLinkRecord; alreadyRevoked: boolean }
+  | { kind: 'malformed'; reason: string };
+
+/**
+ * Parse a create/revoke 200 body. Fail-closed: a confirmation requires BOTH a
+ * top-level `accountId` and a parseable `item`; a missing/garbled item is
+ * `malformed`, never a fabricated success. `alreadyRevoked` is surfaced honestly.
+ */
+export function parseMutationResponse(raw: unknown): MutationParseResult {
+  const w = (raw ?? {}) as CodexWireMutationResponse;
+  const accountId = str(w.accountId);
+  if (!accountId) return { kind: 'malformed', reason: 'missing accountId' };
+  const confirmed = w.created === true || w.revoked === true || w.alreadyRevoked === true;
+  if (!confirmed) return { kind: 'malformed', reason: 'no created/revoked/alreadyRevoked flag' };
+  const item = parseAuthoritativeItem(w.item);
+  if (item.kind !== 'ok') return { kind: 'malformed', reason: `item: ${item.reason}` };
+  return { kind: 'confirmed', accountId, record: item.record, alreadyRevoked: w.alreadyRevoked === true };
+}
+
+/**
+ * Classify a non-2xx desktop response into a typed failure reason. Mirrors the
+ * locked contract's status codes. `online:false` (thrown fetch) overrides to
+ * `offline`. Never yields a success.
+ */
+export type DesktopFailureReason =
+  | 'offline' | 'unauthorized' | 'rejected' | 'not-found' | 'conflict' | 'retryable' | 'malformed';
+
+export function classifyHttpFailure(status: number, online: boolean): DesktopFailureReason {
+  if (!online) return 'offline';
+  if (status === 401 || status === 403) return 'unauthorized';
+  if (status === 404) return 'not-found';
+  if (status === 409) return 'conflict';
+  if (status === 400) return 'rejected';
+  if (status >= 500) return 'retryable';
+  return 'malformed';
 }
 
 /**

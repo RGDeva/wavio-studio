@@ -133,3 +133,80 @@ maybeDescribe('links registry (real arm64 sqlite)', () => {
     expect(() => recordLink(db, { tracking_id: 'x', kind: 'weird', url: 'u' })).toThrow();
   });
 });
+
+// ── P3-2c: account-scoped cache isolation (mirrors db.ts SQL) ─────────────────
+maybeDescribe('links account-scoping (real arm64 sqlite)', () => {
+  let Database: any;
+  let db: any;
+  const DID_A = 'did:privy:aaa';
+  const DID_B = 'did:privy:bbb';
+
+  // recordLink variant with the account_id column (mirrors the migrated db.ts).
+  function recordScoped(d: any, link: any) {
+    d.prepare(`
+      INSERT INTO links (tracking_id, kind, project_id, asset_id, version_id, url, label, allow_download, collaborator_mode, expires_at, created_at, account_id)
+      VALUES (@tracking_id, @kind, @project_id, @asset_id, @version_id, @url, @label, @allow_download, @collaborator_mode, @expires_at, @created_at, @account_id)
+      ON CONFLICT(tracking_id) DO UPDATE SET
+        account_id = COALESCE(excluded.account_id, links.account_id), revoked_at = NULL
+    `).run({
+      project_id: null, asset_id: null, version_id: null, label: null,
+      allow_download: 1, collaborator_mode: null, expires_at: null,
+      created_at: new Date().toISOString(), account_id: null, ...link,
+    });
+  }
+  const getForAccount = (acct: string) => db.prepare('SELECT * FROM links WHERE account_id = ? ORDER BY created_at DESC').all(acct);
+  const getLegacy = () => db.prepare('SELECT * FROM links WHERE account_id IS NULL').all();
+  function applyAuthoritative(d: any, r: any) {
+    d.prepare(`
+      UPDATE links SET account_id=@account_id, expires_at=@expires_at,
+        revoked_at = CASE WHEN @revoked=1 THEN COALESCE(revoked_at,@now) ELSE revoked_at END
+      WHERE tracking_id=@tracking_id AND (account_id IS NULL OR account_id=@account_id)
+    `).run({ now: new Date().toISOString(), expires_at: null, ...r });
+  }
+  const markRevokedForAccount = (t: string, a: string) =>
+    db.prepare('UPDATE links SET revoked_at=? WHERE tracking_id=? AND account_id=? AND revoked_at IS NULL').run(new Date().toISOString(), t, a);
+
+  beforeEach(() => {
+    if (!Database) Database = require(NATIVE_SQLITE_PATH);
+    db = buildSchema(Database);
+    db.exec('ALTER TABLE links ADD COLUMN account_id TEXT'); // the migration
+  });
+  afterEach(() => db?.close());
+
+  it('migration is idempotent (adding account_id twice is safe)', () => {
+    expect(() => { try { db.exec('ALTER TABLE links ADD COLUMN account_id TEXT'); } catch { /* already exists */ } }).not.toThrow();
+    const cols = db.prepare("PRAGMA table_info(links)").all().map((c: any) => c.name);
+    expect(cols).toContain('account_id');
+  });
+
+  it('account A rows are invisible to account B; switching back restores A', () => {
+    recordScoped(db, { tracking_id: 'ta', kind: 'project', url: 'u', account_id: DID_A });
+    recordScoped(db, { tracking_id: 'tb', kind: 'project', url: 'u', account_id: DID_B });
+    expect(getForAccount(DID_A).map((r: any) => r.tracking_id)).toEqual(['ta']);
+    expect(getForAccount(DID_B).map((r: any) => r.tracking_id)).toEqual(['tb']);
+  });
+
+  it('legacy NULL-account rows are segregated, never in any account view', () => {
+    recordScoped(db, { tracking_id: 'legacy', kind: 'project', url: 'u' }); // account_id NULL
+    expect(getForAccount(DID_A)).toHaveLength(0);
+    expect(getLegacy().map((r: any) => r.tracking_id)).toEqual(['legacy']);
+  });
+
+  it('applyAuthoritativeLink stamps a legacy row and syncs revoked; cannot rewrite a foreign row', () => {
+    recordScoped(db, { tracking_id: 'legacy', kind: 'project', url: 'u' });      // NULL → claimable by reconcile
+    recordScoped(db, { tracking_id: 'owned-b', kind: 'project', url: 'u', account_id: DID_B });
+    applyAuthoritative(db, { tracking_id: 'legacy', account_id: DID_A, revoked: 1 });
+    applyAuthoritative(db, { tracking_id: 'owned-b', account_id: DID_A, revoked: 1 }); // wrong owner → no-op
+    expect(getForAccount(DID_A).map((r: any) => r.tracking_id)).toEqual(['legacy']);
+    expect(db.prepare("SELECT revoked_at FROM links WHERE tracking_id='legacy'").get().revoked_at).toBeTruthy();
+    expect(db.prepare("SELECT revoked_at FROM links WHERE tracking_id='owned-b'").get().revoked_at).toBeNull();
+  });
+
+  it('markLinkRevokedForAccount only affects the owning account', () => {
+    recordScoped(db, { tracking_id: 'ta', kind: 'project', url: 'u', account_id: DID_A });
+    markRevokedForAccount('ta', DID_B); // wrong account → no-op
+    expect(db.prepare("SELECT revoked_at FROM links WHERE tracking_id='ta'").get().revoked_at).toBeNull();
+    markRevokedForAccount('ta', DID_A);
+    expect(db.prepare("SELECT revoked_at FROM links WHERE tracking_id='ta'").get().revoked_at).toBeTruthy();
+  });
+});

@@ -22,6 +22,14 @@ import { getAdapterForProject } from './adapters';
 import { safeRelativePath, classifyFileRole, findPreviewCandidate, ManifestEntry } from './adapters/common';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS, classifyFolderForImport, FolderClassification } from './discovery';
 import { registerWaviMediaPrivileges, registerWaviMediaProtocol } from './mediaProtocolRegister';
+import {
+  listProjectLinksAll, createProjectLinkFlow, revokeProjectLinkFlow, planReconciliation,
+  type DesktopResponse, type ProjectLinkServiceDeps,
+} from './projectLinkService';
+
+// Server-authoritative account DID (Privy) for the active session; scopes the
+// Project Link cache. Set on any authenticated PL response, cleared on logout.
+let currentAccountId: string | null = null;
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -1006,6 +1014,10 @@ ipcMain.handle('auth:setToken', (_e, token: string) => {
 ipcMain.handle('auth:clearToken', () => {
   store.delete('authToken');
   syncAgent?.setAuthToken(null);
+  // Logout: drop the active account DID so no account-scoped cache is served,
+  // and tell the renderer to invalidate its account-context resolver + epoch.
+  currentAccountId = null;
+  mainWindow?.webContents.send('auth:account', { accountId: null });
 });
 
 // Share links — create or retrieve a share link for a synced asset
@@ -1391,6 +1403,113 @@ ipcMain.handle('links:revoke', async (_e, opts: { trackingId: string }) => {
     logActivity({ id: crypto.randomUUID(), type: 'share_link_revoked', message: `Revoked link: ${opts.trackingId}` });
   }
   return result;
+});
+
+// ── Authoritative Project Link networking (P3-2c, locked Codex contract) ─────
+// POST ${API_BASE}/desktop with X-Desktop-Action; identity is the server Privy
+// DID in `accountId`. The token + DID never leave the main process; the renderer
+// only receives typed results + account-stamped cache rows.
+
+/** Raw desktop POST returning the full response (status/json/threw) for the service. */
+async function postDesktopAction(token: string, action: string, body: Record<string, unknown>): Promise<DesktopResponse> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const res = await fetch(`${API_BASE}/desktop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Desktop-Action': action },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const json = await res.json().catch(() => ({}));
+    return { status: res.status, json };
+  } catch {
+    return { status: 0, json: {}, threw: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Record the server-authoritative account DID and notify the renderer so its
+ *  account-context resolver can scope the cache. Never sends the token. */
+function captureAccountId(did: string) {
+  if (did && did !== currentAccountId) {
+    currentAccountId = did;
+    mainWindow?.webContents.send('auth:account', { accountId: did });
+  }
+}
+
+function plServiceDeps(token: string): ProjectLinkServiceDeps {
+  return { postDesktop: (action, body) => postDesktopAction(token, action, body), isOnline: () => true };
+}
+
+// List + reconcile the local cache against server truth for the active account.
+ipcMain.handle('projectLinks:reconcile', async (_e, filter?: { projectId?: string; versionId?: string }) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
+  const res = await listProjectLinksAll(plServiceDeps(token), filter ?? {});
+  if (res.kind === 'failure') return { error: res.message ?? res.reason, reason: res.reason };
+  captureAccountId(res.accountId);
+  const db = require('./db');
+  const cached = (db.getLinks() as any[]).map((r) => ({ tracking_id: r.tracking_id, account_id: r.account_id ?? null, revoked_at: r.revoked_at ?? null }));
+  const ops = planReconciliation(res.accountId, res.records, cached, res.pageComplete);
+  let applied = 0, flagged = 0;
+  for (const op of ops) {
+    if (op.op === 'apply') {
+      db.applyAuthoritativeLink({
+        tracking_id: op.item.trackingId, account_id: op.item.ownerAccountId,
+        project_version_id: op.item.projectVersionId, revoked: op.item.status === 'revoked',
+        expires_at: op.item.expiresAt,
+      });
+      applied++;
+    } else { flagged++; }
+  }
+  return { accountId: res.accountId, applied, reconciliationNeeded: flagged, total: res.records.length, pageComplete: res.pageComplete };
+});
+
+// Account-scoped rows for the renderer (active account only; legacy separated).
+ipcMain.handle('projectLinks:getScoped', () => {
+  try {
+    const db = require('./db');
+    return {
+      accountId: currentAccountId,
+      scoped: currentAccountId ? db.getLinksForAccount(currentAccountId) : [],
+      legacy: db.getLegacyUnscopedLinks(),
+    };
+  } catch { return { accountId: currentAccountId, scoped: [], legacy: [] }; }
+});
+
+// Authoritative create — persists account_id ONLY after server confirmation.
+ipcMain.handle('projectLinks:create', async (_e, opts: {
+  projectId: string; projectVersionId?: string; allowDownload?: boolean; expiresAt?: string | null; collaboratorMode?: 'view' | 'comment';
+}) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
+  const r = await createProjectLinkFlow(plServiceDeps(token), opts);
+  if (r.kind === 'failure') return { error: r.message ?? r.reason, reason: r.reason };
+  captureAccountId(r.accountId);
+  const url = `${WEB_BASE}/project-link/${r.item.trackingId}`;
+  try {
+    require('./db').recordLink({
+      tracking_id: r.item.trackingId, kind: 'project', project_id: opts.projectId,
+      version_id: r.item.projectVersionId, url,
+      allow_download: r.item.permissions.allowDownload !== false,
+      collaborator_mode: (r.item.permissions.collaboratorMode as string) ?? 'view',
+      expires_at: r.item.expiresAt, account_id: r.accountId,
+    });
+  } catch (e) { mainLog(`[projectLinks] record create failed: ${(e as any)?.message}`); }
+  return { ok: true, accountId: r.accountId, trackingId: r.item.trackingId, url };
+});
+
+// Authoritative revoke — verifies ownership server-side; marks local on confirm.
+ipcMain.handle('projectLinks:revoke', async (_e, opts: { trackingId: string }) => {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
+  const r = await revokeProjectLinkFlow(plServiceDeps(token), opts.trackingId);
+  if (r.kind === 'failure') return { error: r.message ?? r.reason, reason: r.reason };
+  captureAccountId(r.accountId);
+  try { require('./db').markLinkRevokedForAccount(opts.trackingId, r.accountId); } catch { /* best effort */ }
+  return { ok: true, accountId: r.accountId, alreadyRevoked: r.alreadyRevoked };
 });
 
 ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: string }) => {

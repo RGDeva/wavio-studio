@@ -62,7 +62,11 @@ export function LinksPage({ visible }: { visible?: boolean }) {
   const refresh = useCallback(async () => {
     try {
       setLoadError(null);
-      const rows = await client.list(); // all projects; honest per-record state
+      // Pull authoritative server state first (paginated, account-scoped); the
+      // main process persists reconciliation + stamps account ownership. Failure
+      // here is non-fatal — we still render the last-known local cache.
+      await api.projectLinks.reconcile().catch(() => undefined);
+      const rows = await client.list(); // account-scoped, honest per-record state
       setViews(rows);
     } catch (e) {
       setLoadError((e as Error)?.message ?? 'Could not load links');
