@@ -24,6 +24,7 @@ import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDI
 import { registerWaviMediaPrivileges, registerWaviMediaProtocol } from './mediaProtocolRegister';
 import {
   listProjectLinksAll, createProjectLinkFlow, revokeProjectLinkFlow, planReconciliation,
+  buildDesktopEndpoint, toRendererAccountHandle, createLinkOpsCoordinator, normalizeCreateKey,
   type DesktopResponse, type ProjectLinkServiceDeps,
 } from './projectLinkService';
 
@@ -1015,8 +1016,11 @@ ipcMain.handle('auth:clearToken', () => {
   store.delete('authToken');
   syncAgent?.setAuthToken(null);
   // Logout: drop the active account DID so no account-scoped cache is served,
-  // and tell the renderer to invalidate its account-context resolver + epoch.
+  // invalidate every in-flight Project Link request (its response becomes stale
+  // and is discarded, never persisted), and tell the renderer to reset its
+  // account-context resolver + epoch. Only the null handle crosses the IPC.
   currentAccountId = null;
+  plCoordinator.bumpGeneration();
   mainWindow?.webContents.send('auth:account', { accountId: null });
 });
 
@@ -1137,6 +1141,14 @@ ipcMain.handle('share:revokeLink', async (_e, opts: { trackingId: string; projec
 
 // ── Project Links ─────────────────────────────────────────────────────────────
 
+/**
+ * LEGACY production endpoint helper (`/desktop/index`) — used ONLY for actions
+ * OUTSIDE the locked Project Link contract (publish-project-version,
+ * get-project-files, revoke-share-link, …) which are still served by the
+ * deployed production router. The three Project Link actions must never go
+ * through here — they use postDesktopAction → buildDesktopEndpoint(API_BASE)
+ * (`/api/desktop`, the locked contract). Guarded by projectLinkEndpoints.test.
+ */
 async function desktopApiPost(token: string, action: string, body: Record<string, unknown>) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
@@ -1333,45 +1345,49 @@ ipcMain.handle('project:createLink', async (_e, opts: {
     versionId = (published as any).versionId;
   }
 
-  // Step 2: create the Project Link referencing this exact immutable version
+  // Step 2: create the Project Link referencing this exact immutable version.
+  // ROUTED through the authoritative service (locked /api/desktop contract,
+  // in-flight dedup, no retry, outcome-unknown on ambiguity) — the obsolete
+  // legacy-endpoint create path is gone. Response keeps the legacy
+  // { trackingId, linkUrl } shape for existing callers.
   const cloudProjectId = opts.cloudProjectId ?? (getProjectById(opts.projectId) as any)?.cloud_id;
-  const result = await desktopApiPost(token, 'create-project-link', {
-    projectId: cloudProjectId,
-    projectVersionId: versionId,
-    allowDownload: opts.allowDownload ?? true,
-    expiresAt: opts.expiresAt ?? null,
-    collaboratorMode: opts.collaboratorMode ?? 'view',
-  });
-
-  // Override server-returned linkUrl with the desktop's own WEB_BASE so the
-  // generated link always points at the deployment this app is wired to,
-  // regardless of what WAVI_PUBLIC_URL is set to on the Vercel side.
-  if (result && !(result as any).error && (result as any).trackingId) {
-    (result as any).linkUrl = `${WEB_BASE}/project-link/${(result as any).trackingId}`;
-    // Links registry (Links page)
-    try {
-      const { recordLink } = require('./db');
-      recordLink({
-        tracking_id: (result as any).trackingId, kind: 'project',
-        project_id: opts.projectId, version_id: versionId,
-        url: (result as any).linkUrl,
-        allow_download: opts.allowDownload ?? true,
-        collaborator_mode: opts.collaboratorMode ?? 'view',
-        expires_at: opts.expiresAt ?? null,
-      });
-    } catch (e) { mainLog(`[links] record project link failed: ${(e as any)?.message}`); }
-  }
-  return result;
+  const { stale, value: created } = await plCoordinator.runCreate(
+    normalizeCreateKey({ projectId: cloudProjectId, projectVersionId: versionId ?? undefined, allowDownload: opts.allowDownload, expiresAt: opts.expiresAt ?? null, collaboratorMode: opts.collaboratorMode === 'comment' ? 'comment' : 'view' }),
+    () => createProjectLinkFlow(plServiceDeps(token), {
+      projectId: cloudProjectId, projectVersionId: versionId ?? undefined,
+      allowDownload: opts.allowDownload, expiresAt: opts.expiresAt ?? null,
+      collaboratorMode: opts.collaboratorMode === 'comment' ? 'comment' : 'view',
+    }),
+  );
+  if (stale) return { error: 'Session changed while creating — refresh Links to check the result.' };
+  if (created.kind === 'failure') return { error: created.message ?? created.reason };
+  captureAccountId(created.accountId);
+  // Desktop-owned recipient URL (always points at this app's deployment).
+  const linkUrl = `${WEB_BASE}/project-link/${created.item.trackingId}`;
+  try {
+    const { recordLink } = require('./db');
+    recordLink({
+      tracking_id: created.item.trackingId, kind: 'project',
+      project_id: opts.projectId, version_id: created.item.projectVersionId,
+      url: linkUrl,
+      allow_download: created.item.permissions.allowDownload !== false,
+      collaborator_mode: (created.item.permissions.collaboratorMode as string) ?? 'view',
+      expires_at: created.item.expiresAt,
+      account_id: created.accountId,
+    });
+  } catch (e) { mainLog(`[links] record project link failed: ${(e as any)?.message}`); }
+  return { trackingId: created.item.trackingId, linkUrl, versionId: created.item.projectVersionId };
 });
 
 ipcMain.handle('project:revokeLink', async (_e, opts: { trackingId: string }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
-  const result = await desktopApiPost(token, 'revoke-project-link', { trackingId: opts.trackingId });
-  if (result && !(result as any).error) {
-    try { require('./db').markLinkRevoked(opts.trackingId); } catch { /* registry best-effort */ }
-  }
-  return result;
+  // ROUTED through the authoritative service (single mutation path).
+  const r = await revokeProjectLinkFlow(plServiceDeps(token), opts.trackingId);
+  if (r.kind === 'failure') return { error: r.message ?? r.reason };
+  captureAccountId(r.accountId);
+  try { require('./db').markLinkRevokedForAccount(opts.trackingId, r.accountId); } catch { /* registry best-effort */ }
+  return { success: true };
 });
 
 // ── Links registry (Links page, Phase C) ─────────────────────────────────────
@@ -1392,11 +1408,24 @@ ipcMain.handle('links:revoke', async (_e, opts: { trackingId: string }) => {
   if (!link) return { error: 'Link not found' };
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated' };
-  const action = link.kind === 'project' ? 'revoke-project-link' : 'revoke-share-link';
-  const result = await desktopApiPost(token, action, { trackingId: opts.trackingId });
+
+  if (link.kind === 'project') {
+    // Project Links: ROUTED through the authoritative service — single
+    // mutation path against the locked /api/desktop contract.
+    const r = await revokeProjectLinkFlow(plServiceDeps(token), opts.trackingId);
+    if (r.kind === 'failure') return { error: r.message ?? r.reason };
+    captureAccountId(r.accountId);
+    try { require('./db').markLinkRevokedForAccount(opts.trackingId, r.accountId); } catch { /* best effort */ }
+    logActivity({ id: crypto.randomUUID(), type: 'share_link_revoked', message: `Revoked link: ${opts.trackingId}` });
+    return { success: true };
+  }
+
+  // Listen links: UNRELATED to the Project Link contract — still served by the
+  // legacy production share-link action (documented legacy path).
+  const result = await desktopApiPost(token, 'revoke-share-link', { trackingId: opts.trackingId });
   if (result && !(result as any).error) {
     markRevoked(opts.trackingId);
-    if (link.kind === 'listen' && link.project_id) {
+    if (link.project_id) {
       const { updateProjectShareInfo } = require('./db');
       updateProjectShareInfo(link.project_id, null, null);
     }
@@ -1406,16 +1435,19 @@ ipcMain.handle('links:revoke', async (_e, opts: { trackingId: string }) => {
 });
 
 // ── Authoritative Project Link networking (P3-2c, locked Codex contract) ─────
-// POST ${API_BASE}/desktop with X-Desktop-Action; identity is the server Privy
-// DID in `accountId`. The token + DID never leave the main process; the renderer
-// only receives typed results + account-stamped cache rows.
+// POST /api/desktop (via buildDesktopEndpoint — the ONE endpoint builder) with
+// X-Desktop-Action; identity is the server Privy DID in `accountId`. The token
+// AND the DID stay in the main process: the renderer receives only an opaque,
+// non-reversible account handle (toRendererAccountHandle) for scoping/epoch.
+const DESKTOP_ENDPOINT = buildDesktopEndpoint(API_BASE);
+const plCoordinator = createLinkOpsCoordinator();
 
 /** Raw desktop POST returning the full response (status/json/threw) for the service. */
 async function postDesktopAction(token: string, action: string, body: Record<string, unknown>): Promise<DesktopResponse> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20_000);
   try {
-    const res = await fetch(`${API_BASE}/desktop`, {
+    const res = await fetch(DESKTOP_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, 'X-Desktop-Action': action },
       body: JSON.stringify(body),
@@ -1430,13 +1462,25 @@ async function postDesktopAction(token: string, action: string, body: Record<str
   }
 }
 
-/** Record the server-authoritative account DID and notify the renderer so its
- *  account-context resolver can scope the cache. Never sends the token. */
+/** The renderer-visible form of the active account: opaque handle, never the DID. */
+function rendererAccountHandle(): string | null {
+  return currentAccountId ? toRendererAccountHandle(currentAccountId) : null;
+}
+
+/** Record the server-authoritative account DID (main-only). A DID change is an
+ *  account switch: invalidate in-flight work and tell the renderer via the
+ *  OPAQUE handle only — the DID itself never crosses the IPC boundary. */
 function captureAccountId(did: string) {
   if (did && did !== currentAccountId) {
+    if (currentAccountId) plCoordinator.bumpGeneration(); // account switch mid-session
     currentAccountId = did;
-    mainWindow?.webContents.send('auth:account', { accountId: did });
+    mainWindow?.webContents.send('auth:account', { accountId: toRendererAccountHandle(did) });
   }
+}
+
+/** Strip the DID from rows before they cross to the renderer (opaque handle instead). */
+function toRendererRows(rows: any[]): any[] {
+  return rows.map((r) => ({ ...r, account_id: r.account_id ? toRendererAccountHandle(r.account_id) : null }));
 }
 
 function plServiceDeps(token: string): ProjectLinkServiceDeps {
@@ -1444,15 +1488,26 @@ function plServiceDeps(token: string): ProjectLinkServiceDeps {
 }
 
 // List + reconcile the local cache against server truth for the active account.
+// No token → no network request at all. In-flight dedup per filter; a logout /
+// account switch mid-flight marks the result stale → nothing is persisted.
 ipcMain.handle('projectLinks:reconcile', async (_e, filter?: { projectId?: string; versionId?: string }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
-  const res = await listProjectLinksAll(plServiceDeps(token), filter ?? {});
+  const f = filter ?? {};
+  const { stale, value: res } = await plCoordinator.runReconcile(
+    JSON.stringify({ p: f.projectId ?? null, v: f.versionId ?? null }),
+    () => listProjectLinksAll(plServiceDeps(token), f),
+  );
+  if (stale) return { error: 'Session changed — result discarded.', reason: 'stale-session' };
   if (res.kind === 'failure') return { error: res.message ?? res.reason, reason: res.reason };
   captureAccountId(res.accountId);
   const db = require('./db');
-  const cached = (db.getLinks() as any[]).map((r) => ({ tracking_id: r.tracking_id, account_id: r.account_id ?? null, revoked_at: r.revoked_at ?? null }));
-  const ops = planReconciliation(res.accountId, res.records, cached, res.pageComplete);
+  const cached = (db.getLinks() as any[]).map((r) => ({
+    tracking_id: r.tracking_id, account_id: r.account_id ?? null, revoked_at: r.revoked_at ?? null,
+    project_id: r.project_id ?? null, version_id: r.version_id ?? null,
+  }));
+  // Filter-scoped: a filtered listing can never flag another project's rows.
+  const ops = planReconciliation(res.accountId, res.records, cached, res.pageComplete, f);
   let applied = 0, flagged = 0;
   for (const op of ops) {
     if (op.op === 'apply') {
@@ -1464,28 +1519,41 @@ ipcMain.handle('projectLinks:reconcile', async (_e, filter?: { projectId?: strin
       applied++;
     } else { flagged++; }
   }
-  return { accountId: res.accountId, applied, reconciliationNeeded: flagged, total: res.records.length, pageComplete: res.pageComplete };
+  return { accountId: rendererAccountHandle(), applied, reconciliationNeeded: flagged, total: res.records.length, pageComplete: res.pageComplete };
 });
 
 // Account-scoped rows for the renderer (active account only; legacy separated).
+// Rows are DID-stripped: account_id is replaced with the opaque handle.
 ipcMain.handle('projectLinks:getScoped', () => {
   try {
     const db = require('./db');
     return {
-      accountId: currentAccountId,
-      scoped: currentAccountId ? db.getLinksForAccount(currentAccountId) : [],
-      legacy: db.getLegacyUnscopedLinks(),
+      accountId: rendererAccountHandle(),
+      scoped: currentAccountId ? toRendererRows(db.getLinksForAccount(currentAccountId)) : [],
+      legacy: toRendererRows(db.getLegacyUnscopedLinks()),
     };
-  } catch { return { accountId: currentAccountId, scoped: [], legacy: [] }; }
+  } catch { return { accountId: rendererAccountHandle(), scoped: [], legacy: [] }; }
 });
 
 // Authoritative create — persists account_id ONLY after server confirmation.
+// Create is NOT idempotent: one in-flight request per normalized configuration
+// (double-click shares the promise); no automatic retry; a thrown/aborted fetch
+// is `create-outcome-unknown` (recovery = reconcile); a session change
+// mid-flight discards the response without persisting.
 ipcMain.handle('projectLinks:create', async (_e, opts: {
   projectId: string; projectVersionId?: string; allowDownload?: boolean; expiresAt?: string | null; collaboratorMode?: 'view' | 'comment';
 }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
-  const r = await createProjectLinkFlow(plServiceDeps(token), opts);
+  const { stale, value: r } = await plCoordinator.runCreate(
+    normalizeCreateKey(opts),
+    () => createProjectLinkFlow(plServiceDeps(token), opts),
+  );
+  if (stale) {
+    // The link may exist server-side under the previous session — never persist
+    // under the new one; recovery is the authoritative listing.
+    return { error: 'Session changed while creating — refresh Links to check the result.', reason: 'stale-session' };
+  }
   if (r.kind === 'failure') return { error: r.message ?? r.reason, reason: r.reason };
   captureAccountId(r.accountId);
   const url = `${WEB_BASE}/project-link/${r.item.trackingId}`;
@@ -1498,10 +1566,11 @@ ipcMain.handle('projectLinks:create', async (_e, opts: {
       expires_at: r.item.expiresAt, account_id: r.accountId,
     });
   } catch (e) { mainLog(`[projectLinks] record create failed: ${(e as any)?.message}`); }
-  return { ok: true, accountId: r.accountId, trackingId: r.item.trackingId, url };
+  return { ok: true, accountId: rendererAccountHandle(), trackingId: r.item.trackingId, url };
 });
 
 // Authoritative revoke — verifies ownership server-side; marks local on confirm.
+// (Revoke IS idempotent server-side — alreadyRevoked — so no outcome-unknown.)
 ipcMain.handle('projectLinks:revoke', async (_e, opts: { trackingId: string }) => {
   const token = getDecryptedToken();
   if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
@@ -1509,7 +1578,7 @@ ipcMain.handle('projectLinks:revoke', async (_e, opts: { trackingId: string }) =
   if (r.kind === 'failure') return { error: r.message ?? r.reason, reason: r.reason };
   captureAccountId(r.accountId);
   try { require('./db').markLinkRevokedForAccount(opts.trackingId, r.accountId); } catch { /* best effort */ }
-  return { ok: true, accountId: r.accountId, alreadyRevoked: r.alreadyRevoked };
+  return { ok: true, accountId: rendererAccountHandle(), alreadyRevoked: r.alreadyRevoked };
 });
 
 ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: string }) => {

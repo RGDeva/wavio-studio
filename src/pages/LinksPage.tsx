@@ -121,9 +121,16 @@ export function LinksPage({ visible }: { visible?: boolean }) {
     setConfirmRevoke(null);
     setBusy(trackingId);
     try {
-      const result = await client.revoke(trackingId); // typed; never false success
-      const msg = describeResult(result);
-      if (msg) setActionError(msg);
+      const kind = views?.find((v) => v.record.tracking_id === trackingId)?.record.kind;
+      if (kind === 'listen') {
+        // Listen links are OUTSIDE the Project Link contract — legacy share path.
+        const r = await api.links.revoke({ trackingId });
+        if (r?.error) setActionError(`Revoke failed: ${r.error}`);
+      } else {
+        const result = await client.revoke(trackingId); // authoritative; never false success
+        const msg = describeResult(result);
+        if (msg) setActionError(msg);
+      }
       await refresh();
     } finally { setBusy(null); }
   };

@@ -31,6 +31,8 @@ export default defineConfig({
       'src/lib/projectDetailView.test.ts',
       'electron/links.test.ts',
       'electron/projectLinkService.test.ts',
+      'electron/projectLinkHardening.test.ts',
+      'electron/dbMigration.real.test.ts',
       'electron/native-sqlite.guard.test.ts',
       'electron/mediaProtocol.test.ts',
       'electron/adapters/adapters.test.ts',

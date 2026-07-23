@@ -47,6 +47,35 @@ export const DESKTOP_ACTIONS = {
 export const DEFAULT_LIST_LIMIT = 50;
 const MAX_PAGES = 100; // hard safety cap on pagination
 
+/**
+ * THE authoritative desktop endpoint builder. The locked contract serves
+ * exactly `POST /api/desktop` — never `/desktop`, `/api/api/desktop`, or the
+ * obsolete `/api/desktop/index`. Every environment's base is normalized here:
+ *  - production default  `https://wavi.stream/api`        → …/api/desktop
+ *  - preview/QA          `https://<preview>.vercel.app/api`→ …/api/desktop
+ *  - misconfigured bare origin (no `/api` suffix)          → `/api` is appended
+ *  - trailing slashes are stripped; a double `/api/api` is collapsed.
+ */
+export function buildDesktopEndpoint(apiBase: string): string {
+  let base = (apiBase ?? '').trim().replace(/\/+$/, '');
+  base = base.replace(/\/api\/api$/, '/api');       // collapse accidental double
+  if (!/\/api$/.test(base)) base = `${base}/api`;   // guarantee the /api prefix
+  return `${base}/desktop`;
+}
+
+/**
+ * Opaque renderer-facing account handle. The canonical Privy DID stays in the
+ * main process; the renderer only needs a stable per-account scoping key for
+ * its epoch/resolver — it must never see the DID itself. Deterministic,
+ * non-reversible (sha256 prefix), and shape-compatible with the renderer's
+ * canonical-id validation (`acct_` + hex).
+ */
+export function toRendererAccountHandle(did: string): string {
+  // Lazy import keeps this module dependency-light for pure call sites.
+  const { createHash } = require('crypto') as typeof import('crypto');
+  return `acct_${createHash('sha256').update(did).digest('hex').slice(0, 20)}`;
+}
+
 function str(v: unknown): string | null {
   return typeof v === 'string' && v.trim() ? v : null;
 }
@@ -86,7 +115,14 @@ export function parseItem(raw: unknown): ItemParse {
 }
 
 export type FailureReason =
-  | 'offline' | 'unauthorized' | 'rejected' | 'not-found' | 'conflict' | 'retryable' | 'malformed';
+  | 'offline' | 'unauthorized' | 'rejected' | 'not-found' | 'conflict' | 'retryable' | 'malformed'
+  /** Create-only: the request may or may not have reached the server (thrown
+   *  fetch / timeout mid-flight). Create is NOT idempotent, so this is never
+   *  auto-retried — recovery is the authoritative listing (reconcile). */
+  | 'create-outcome-unknown'
+  /** The session (login/account) changed while the request was in flight; the
+   *  response was discarded and nothing was persisted. */
+  | 'stale-session';
 
 /** Map an HTTP status (contract-pinned) to a typed failure. Offline wins. */
 export function classifyHttpFailure(status: number, online: boolean): FailureReason {
@@ -172,12 +208,23 @@ function parseMutation(res: DesktopResponse, online: boolean): MutationResult {
   return { kind: 'confirmed', accountId, item: p.item, alreadyRevoked: body.alreadyRevoked === true };
 }
 
+export interface CreateFlowOpts {
+  projectId: string; projectVersionId?: string; allowDownload?: boolean;
+  expiresAt?: string | null; collaboratorMode?: 'view' | 'comment';
+}
+
+/** Normalized key for one create configuration — the in-flight dedup unit. */
+export function normalizeCreateKey(opts: CreateFlowOpts): string {
+  return JSON.stringify({
+    p: opts.projectId, v: opts.projectVersionId ?? null,
+    d: opts.allowDownload !== false, e: opts.expiresAt ?? null,
+    m: opts.collaboratorMode ?? 'view',
+  });
+}
+
 export async function createProjectLinkFlow(
   deps: ProjectLinkServiceDeps,
-  opts: {
-    projectId: string; projectVersionId?: string; allowDownload?: boolean;
-    expiresAt?: string | null; collaboratorMode?: 'view' | 'comment';
-  },
+  opts: CreateFlowOpts,
 ): Promise<MutationResult> {
   let res: DesktopResponse;
   try {
@@ -188,7 +235,15 @@ export async function createProjectLinkFlow(
       expiresAt: opts.expiresAt ?? null,
       collaboratorMode: opts.collaboratorMode ?? 'view',
     });
-  } catch { return { kind: 'failure', reason: 'offline' }; }
+  } catch {
+    // Create is NOT idempotent: a thrown fetch/timeout is AMBIGUOUS (the insert
+    // may have landed). Never report plain offline, never auto-retry — surface
+    // outcome-unknown and point recovery at the authoritative listing.
+    return { kind: 'failure', reason: 'create-outcome-unknown', message: 'The link may or may not have been created. Refresh Links (reconcile) to check — do not retry blindly.' };
+  }
+  if (res.threw) {
+    return { kind: 'failure', reason: 'create-outcome-unknown', message: 'The link may or may not have been created. Refresh Links (reconcile) to check — do not retry blindly.' };
+  }
   return parseMutation(res, deps.isOnline());
 }
 
@@ -204,7 +259,13 @@ export async function revokeProjectLinkFlow(
 }
 
 // ── Reconciliation plan (pure) ───────────────────────────────────────────────
-export interface CachedRow { tracking_id: string; account_id: string | null; revoked_at: string | null }
+export interface CachedRow {
+  tracking_id: string;
+  account_id: string | null;
+  revoked_at: string | null;
+  project_id?: string | null;
+  version_id?: string | null;
+}
 export type ReconcileOp =
   | { op: 'apply'; item: AuthoritativeItem }
   | { op: 'reconciliation-needed'; tracking_id: string };
@@ -215,7 +276,9 @@ export type ReconcileOp =
  *  - only records whose owner matches `accountId` are applied (a foreign record
  *    can never rewrite this account's cache);
  *  - a cached row absent from the authoritative set is flagged
- *    `reconciliation-needed` ONLY when the listing was page-complete;
+ *    `reconciliation-needed` ONLY when the listing was page-complete AND the
+ *    row falls inside the listing's filter scope — a project/version-filtered
+ *    listing can never mark another project's rows missing;
  *  - legacy rows (account_id NULL) are left untouched (ownership-unknown).
  */
 export function planReconciliation(
@@ -223,6 +286,7 @@ export function planReconciliation(
   authoritative: AuthoritativeItem[],
   cached: CachedRow[],
   pageComplete: boolean,
+  filter?: { projectId?: string; versionId?: string },
 ): ReconcileOp[] {
   const ops: ReconcileOp[] = [];
   const authById = new Map(authoritative.filter((a) => a.ownerAccountId === accountId).map((a) => [a.trackingId, a]));
@@ -231,8 +295,59 @@ export function planReconciliation(
     for (const row of cached) {
       if (row.account_id !== accountId) continue; // only this account's rows
       if (row.revoked_at) continue;               // already terminal
+      // A filtered listing only proves absence WITHIN its scope.
+      if (filter?.projectId && row.project_id !== filter.projectId) continue;
+      if (filter?.versionId && row.version_id !== filter.versionId) continue;
       if (!authById.has(row.tracking_id)) ops.push({ op: 'reconciliation-needed', tracking_id: row.tracking_id });
     }
   }
   return ops;
+}
+
+// ── In-flight coordination (dedup + session-generation invalidation) ─────────
+
+export interface CoordinatedResult<T> {
+  /** True when login/logout/account change happened mid-flight — the caller
+   *  MUST discard the value and persist nothing. */
+  stale: boolean;
+  value: T;
+}
+
+/**
+ * One coordinator per main-process session. Guarantees:
+ *  - at most ONE in-flight reconcile per filter key and ONE in-flight create
+ *    per normalized configuration (double-click dedup — callers share the same
+ *    promise; no duplicate network requests);
+ *  - a session-generation counter, bumped on logout/token change, marks any
+ *    in-flight response `stale` so it is discarded, never persisted;
+ *  - no automatic retry of anything, ever.
+ */
+export function createLinkOpsCoordinator() {
+  let generation = 0;
+  const inflight = new Map<string, Promise<CoordinatedResult<unknown>>>();
+
+  async function run<T>(key: string, fn: () => Promise<T>): Promise<CoordinatedResult<T>> {
+    const existing = inflight.get(key);
+    if (existing) return existing as Promise<CoordinatedResult<T>>;
+    const startGen = generation;
+    const p = (async () => {
+      try {
+        const value = await fn();
+        return { stale: generation !== startGen, value };
+      } finally {
+        inflight.delete(key);
+      }
+    })();
+    inflight.set(key, p as Promise<CoordinatedResult<unknown>>);
+    return p;
+  }
+
+  return {
+    /** Logout / token replacement / account switch: invalidate everything in flight. */
+    bumpGeneration(): void { generation++; inflight.clear(); },
+    generation(): number { return generation; },
+    inflightCount(): number { return inflight.size; },
+    runReconcile<T>(filterKey: string, fn: () => Promise<T>) { return run(`reconcile:${filterKey}`, fn); },
+    runCreate<T>(createKey: string, fn: () => Promise<T>) { return run(`create:${createKey}`, fn); },
+  };
 }

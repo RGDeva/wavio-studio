@@ -113,3 +113,18 @@ Full server-side spec: `wavio/docs/WAVI_PROJECT_LINKS_SERVER_AUDIT.md` (also unc
 3. Confirm the legacy `create-project-link`/`revoke-project-link` actions on the CURRENT
    production endpoint keep their old response shape until the desktop ships the adapter
    (rollout ordering).
+
+---
+
+# UPDATE — desktop hardened against the LOCKED contract (pre-merge audit)
+
+Contract SHA `d34d5218` is committed on `test/project-links-authoritative-staging`. Desktop
+now: builds the endpoint through one authoritative builder (`/api/desktop`, never
+`/desktop/index` for the PL trio); routes ALL project-link mutations through the single
+service (legacy IPC handlers included); keeps the Privy DID main-process-only (renderer gets
+an opaque `acct_…` handle); dedups in-flight reconcile/create; treats ambiguous create as
+`create-outcome-unknown` (no auto-retry, recovery = listing); and proves the `account_id`
+migration against a real SQLite database using db.ts's own extracted SQL.
+
+**Remaining ask:** the provably isolated staging deployment + one authenticated smoke
+(list/create/revoke with a real token) — the only blocker before merge/production.
