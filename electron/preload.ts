@@ -17,7 +17,7 @@ function readMainProcessArg(flag: string): string | undefined {
 const CHANNEL_PRELOAD = (readMainProcessArg('wavi-channel') as 'production' | 'qa' | 'development' | undefined) ?? 'production';
 const API_BASE_PRELOAD = (readMainProcessArg('wavi-api-base') ?? 'https://wavi.stream/api').replace(/\/$/, '');
 
-const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress', 'project:open-link', 'restore:progress']);
+const ALLOWED_CHANNELS = new Set(['watcher:event', 'sync:progress', 'auth:token-received', 'auth:account', 'update:ready', 'tray:sync-now', 'context:updated', 'copilot:tool:done', 'bounce:detected', 'version:created', 'musehub:session', 'musehub:error', 'main:ready', 'discovery:progress', 'project:open-link', 'restore:progress']);
 const ALLOWED_SETTINGS_KEYS = new Set(['theme', 'autoSync', 'syncInterval', 'serverUrl', 'autoStart', 'syncOnSave', 'chunkSizeMB', 'maxConcurrent', 'dawPaths', 'folderScanMeta']);
 
 contextBridge.exposeInMainWorld('waviAPI', {
@@ -116,6 +116,15 @@ contextBridge.exposeInMainWorld('waviAPI', {
     getAll: () => ipcRenderer.invoke('links:getAll'),
     rename: (opts: { trackingId: string; label: string | null }) => ipcRenderer.invoke('links:rename', opts),
     revoke: (opts: { trackingId: string }) => ipcRenderer.invoke('links:revoke', opts),
+  },
+
+  // Authoritative Project Links (P3-2c, locked Codex contract). The token + DID
+  // stay in main; the renderer gets typed results + account-stamped rows only.
+  projectLinks: {
+    reconcile: (filter?: { projectId?: string; versionId?: string }) => ipcRenderer.invoke('projectLinks:reconcile', filter),
+    getScoped: () => ipcRenderer.invoke('projectLinks:getScoped'),
+    create: (opts: { projectId: string; projectVersionId?: string; allowDownload?: boolean; expiresAt?: string | null; collaboratorMode?: 'view' | 'comment' }) => ipcRenderer.invoke('projectLinks:create', opts),
+    revoke: (opts: { trackingId: string }) => ipcRenderer.invoke('projectLinks:revoke', opts),
   },
 
   // Project Links

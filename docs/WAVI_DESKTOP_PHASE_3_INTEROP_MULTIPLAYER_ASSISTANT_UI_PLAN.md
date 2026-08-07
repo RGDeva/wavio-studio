@@ -253,6 +253,11 @@ when green.
 ## 7. P0 / P1 / P2 risk ledger
 
 ### P0 (release gates — remain OPEN / UNPROVEN; do not claim passed)
+- **P3-2c status ladder:** server contract LOCKED (`wavio` @ d34d5218) ✅ · local desktop
+  behavior PROVEN (596 tests / 0 skips; endpoint `/api/desktop` via one builder; DID
+  main-only; dedup + stale-session discard; create-outcome-unknown) ✅ · REAL SQLite
+  `account_id` migration PROVEN (db.ts-extracted SQL on a real DB) ✅ ·
+  **staging authenticated smoke PENDING** ⏳ · **production deployment BLOCKED** ⛔.
 - Live **Project Link creation** against the server — 🧪 unproven (auth/visibility).
 - **Same-DAW Ableton restore** end-to-end — 🧪 unproven.
 - **No "Temp Project"** state after restore — 🧪 unproven live.

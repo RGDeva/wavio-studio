@@ -27,6 +27,8 @@ export interface LinkListItem {
   expires_at: string | null;
   created_at: string;
   revoked_at: string | null;
+  /** Owning account (server Privy DID); null = legacy/ownership-unknown. */
+  account_id?: string | null;
 }
 
 /** Reply from copilot chat: plain text, or text plus a pending confirmation
@@ -132,6 +134,16 @@ export interface WaviAPI {
     rename: (opts: { trackingId: string; label: string | null }) => Promise<{ success?: boolean; error?: string }>;
     revoke: (opts: { trackingId: string }) => Promise<{ success?: boolean; error?: string }>;
   };
+  /** Authoritative Project Links (locked Codex contract). Token/DID stay in main. */
+  projectLinks: {
+    reconcile: (filter?: { projectId?: string; versionId?: string }) =>
+      Promise<{ accountId?: string; applied?: number; reconciliationNeeded?: number; total?: number; pageComplete?: boolean; error?: string; reason?: string }>;
+    getScoped: () => Promise<{ accountId: string | null; scoped: LinkListItem[]; legacy: LinkListItem[] }>;
+    create: (opts: { projectId: string; projectVersionId?: string; allowDownload?: boolean; expiresAt?: string | null; collaboratorMode?: 'view' | 'comment' }) =>
+      Promise<{ ok?: boolean; accountId?: string; trackingId?: string; url?: string; error?: string; reason?: string }>;
+    revoke: (opts: { trackingId: string }) =>
+      Promise<{ ok?: boolean; accountId?: string; alreadyRevoked?: boolean; error?: string; reason?: string }>;
+  };
   project: {
     publishVersion: (opts: { localProjectId: string }) => Promise<{ versionId?: string; versionNumber?: number; fileCount?: number; created?: boolean; skipped?: boolean; error?: string }>;
     createLink: (opts: {
@@ -236,6 +248,7 @@ const _stub: WaviAPI = {
   shell: { openPath: _noop, openExternal: _noop, revealInFinder: _noop, openWithApp: _noop, pickApp: _noop },
   share: { createLink: _noop, revokeLink: _noop },
   links: { getAll: () => Promise.resolve([]), rename: _noop, revoke: _noop },
+  projectLinks: { reconcile: () => Promise.resolve({}), getScoped: () => Promise.resolve({ accountId: null, scoped: [], legacy: [] }), create: _noop, revoke: _noop },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },

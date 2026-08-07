@@ -162,6 +162,10 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_bounce_candidates_path ON bounce_candidates(file_path)'); } catch { /* already exists */ }
   // Unique constraint on versions to prevent same checksum being stored twice per project
   try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_versions_project_checksum ON versions(project_id, checksum) WHERE checksum IS NOT NULL'); } catch { /* already exists */ }
+  // P3-2c: account-scope Project Link cache rows to their owning account (server
+  // Privy DID). Nullable + additive: existing rows stay account_id=NULL (legacy,
+  // ownership-unknown), never destructively deleted or auto-assigned.
+  try { db.exec('ALTER TABLE links ADD COLUMN account_id TEXT'); } catch { /* already exists */ }
 
   // Allow standalone files (no project) — SQLite doesn't support ALTER COLUMN so we
   // must recreate the table to drop the NOT NULL on project_id.
@@ -488,6 +492,8 @@ export interface LinkRecord {
   expires_at: string | null;
   created_at: string;
   revoked_at: string | null;
+  /** Owning account (server Privy DID); NULL = legacy/ownership-unknown. */
+  account_id: string | null;
 }
 
 /** Records (or refreshes — server may return a reused link) a created link. */
@@ -502,15 +508,18 @@ export function recordLink(link: {
   allow_download?: boolean;
   collaborator_mode?: string | null;
   expires_at?: string | null;
+  /** Owning account (server Privy DID) — stamped on server-confirmed creates. */
+  account_id?: string | null;
 }) {
   db.prepare(`
-    INSERT INTO links (tracking_id, kind, project_id, asset_id, version_id, url, label, allow_download, collaborator_mode, expires_at, created_at)
-    VALUES (@tracking_id, @kind, @project_id, @asset_id, @version_id, @url, @label, @allow_download, @collaborator_mode, @expires_at, @created_at)
+    INSERT INTO links (tracking_id, kind, project_id, asset_id, version_id, url, label, allow_download, collaborator_mode, expires_at, created_at, account_id)
+    VALUES (@tracking_id, @kind, @project_id, @asset_id, @version_id, @url, @label, @allow_download, @collaborator_mode, @expires_at, @created_at, @account_id)
     ON CONFLICT(tracking_id) DO UPDATE SET
       url = excluded.url,
       allow_download = excluded.allow_download,
       collaborator_mode = excluded.collaborator_mode,
       expires_at = excluded.expires_at,
+      account_id = COALESCE(excluded.account_id, links.account_id),
       revoked_at = NULL
   `).run({
     tracking_id: link.tracking_id,
@@ -524,6 +533,7 @@ export function recordLink(link: {
     collaborator_mode: link.collaborator_mode ?? null,
     expires_at: link.expires_at ?? null,
     created_at: new Date().toISOString(),
+    account_id: link.account_id ?? null,
   });
 }
 
@@ -534,6 +544,67 @@ export function getLinks(): Array<LinkRecord & { project_name: string | null }> 
     FROM links l LEFT JOIN projects p ON p.id = l.project_id
     ORDER BY l.created_at DESC
   `).all() as Array<LinkRecord & { project_name: string | null }>;
+}
+
+/**
+ * Links owned by the active account (account_id = ?). Legacy rows with a NULL
+ * account_id are EXCLUDED here — they are ownership-unknown and never leak into
+ * an account's scoped view (fetch them separately via getLegacyUnscopedLinks).
+ */
+export function getLinksForAccount(accountId: string): Array<LinkRecord & { project_name: string | null }> {
+  return db.prepare(`
+    SELECT l.*, p.project_name
+    FROM links l LEFT JOIN projects p ON p.id = l.project_id
+    WHERE l.account_id = ?
+    ORDER BY l.created_at DESC
+  `).all(accountId) as Array<LinkRecord & { project_name: string | null }>;
+}
+
+/** Legacy rows with no owning account — preserved, segregated, ownership-unknown. */
+export function getLegacyUnscopedLinks(): Array<LinkRecord & { project_name: string | null }> {
+  return db.prepare(`
+    SELECT l.*, p.project_name
+    FROM links l LEFT JOIN projects p ON p.id = l.project_id
+    WHERE l.account_id IS NULL
+    ORDER BY l.created_at DESC
+  `).all() as Array<LinkRecord & { project_name: string | null }>;
+}
+
+/**
+ * Apply an authoritative server record to the local cache row (P3-2c
+ * reconciliation). Stamps the owning account and syncs revoked/expiry state.
+ * Only ever moves a row toward server truth; never fabricates one. Scoped to the
+ * owning account so a stale/foreign record cannot rewrite another account's row.
+ */
+export function applyAuthoritativeLink(rec: {
+  tracking_id: string;
+  account_id: string;
+  project_version_id: string | null;
+  revoked: boolean;
+  expires_at: string | null;
+}): void {
+  db.prepare(`
+    UPDATE links
+       SET account_id = @account_id,
+           version_id = COALESCE(@version_id, version_id),
+           expires_at = @expires_at,
+           revoked_at = CASE WHEN @revoked = 1 THEN COALESCE(revoked_at, @now) ELSE revoked_at END
+     WHERE tracking_id = @tracking_id
+       AND (account_id IS NULL OR account_id = @account_id)
+  `).run({
+    tracking_id: rec.tracking_id,
+    account_id: rec.account_id,
+    version_id: rec.project_version_id,
+    expires_at: rec.expires_at,
+    revoked: rec.revoked ? 1 : 0,
+    now: new Date().toISOString(),
+  });
+}
+
+/** Mark a revoke confirmed by the server, scoped to the owning account. */
+export function markLinkRevokedForAccount(trackingId: string, accountId: string): void {
+  db.prepare('UPDATE links SET revoked_at = ? WHERE tracking_id = ? AND account_id = ? AND revoked_at IS NULL')
+    .run(new Date().toISOString(), trackingId, accountId);
 }
 
 export function renameLink(trackingId: string, label: string | null): boolean {

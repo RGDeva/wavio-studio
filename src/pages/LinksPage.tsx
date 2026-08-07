@@ -57,12 +57,16 @@ export function LinksPage({ visible }: { visible?: boolean }) {
   const [actionError, setActionError] = useState<string | null>(null);
   const [duplicating, setDuplicating] = useState<LinkListItem | null>(null);
   const [dupAllowDownload, setDupAllowDownload] = useState(true);
-  const [dupMode, setDupMode] = useState<'view' | 'comment' | 'edit'>('view');
+  const [dupMode, setDupMode] = useState<'view' | 'comment'>('view');
 
   const refresh = useCallback(async () => {
     try {
       setLoadError(null);
-      const rows = await client.list(); // all projects; honest per-record state
+      // Pull authoritative server state first (paginated, account-scoped); the
+      // main process persists reconciliation + stamps account ownership. Failure
+      // here is non-fatal — we still render the last-known local cache.
+      await api.projectLinks.reconcile().catch(() => undefined);
+      const rows = await client.list(); // account-scoped, honest per-record state
       setViews(rows);
     } catch (e) {
       setLoadError((e as Error)?.message ?? 'Could not load links');
@@ -117,9 +121,16 @@ export function LinksPage({ visible }: { visible?: boolean }) {
     setConfirmRevoke(null);
     setBusy(trackingId);
     try {
-      const result = await client.revoke(trackingId); // typed; never false success
-      const msg = describeResult(result);
-      if (msg) setActionError(msg);
+      const kind = views?.find((v) => v.record.tracking_id === trackingId)?.record.kind;
+      if (kind === 'listen') {
+        // Listen links are OUTSIDE the Project Link contract — legacy share path.
+        const r = await api.links.revoke({ trackingId });
+        if (r?.error) setActionError(`Revoke failed: ${r.error}`);
+      } else {
+        const result = await client.revoke(trackingId); // authoritative; never false success
+        const msg = describeResult(result);
+        if (msg) setActionError(msg);
+      }
       await refresh();
     } finally { setBusy(null); }
   };
@@ -315,7 +326,12 @@ export function LinksPage({ visible }: { visible?: boolean }) {
                             <ExternalLink className="w-3.5 h-3.5" />
                           </button>
                           <button
-                            onClick={() => { setDuplicating(link); setDupAllowDownload(!!link.allow_download); setDupMode((link.collaborator_mode as any) || 'view'); }}
+                            onClick={() => {
+                              setDuplicating(link);
+                              setDupAllowDownload(!!link.allow_download);
+                              // Coerce legacy cached modes (e.g. 'edit') to a server-supported one.
+                              setDupMode(link.collaborator_mode === 'comment' ? 'comment' : 'view');
+                            }}
                             disabled={!canDuplicate(link) || isBusy}
                             title={canDuplicate(link) ? 'Duplicate with different permissions' : 'Duplicate unavailable for links created before this version'}
                             aria-label="Duplicate link"
@@ -373,11 +389,12 @@ export function LinksPage({ visible }: { visible?: boolean }) {
               {duplicating.kind === 'project' && (
                 <label className="flex items-center justify-between text-xs text-white/60">
                   Collaborator access
+                  {/* Server supports only view|comment (create-project-link rejects
+                      others) — offering "edit" would claim an unenforced permission. */}
                   <select value={dupMode} onChange={(e) => setDupMode(e.target.value as any)}
                     className="bg-black/40 border border-white/10 rounded px-2 py-1 text-xs text-white/70">
                     <option value="view">View</option>
                     <option value="comment">Comment</option>
-                    <option value="edit">Edit</option>
                   </select>
                 </label>
               )}
