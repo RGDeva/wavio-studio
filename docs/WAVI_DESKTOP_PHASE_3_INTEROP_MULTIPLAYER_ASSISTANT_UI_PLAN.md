@@ -253,11 +253,17 @@ when green.
 ## 7. P0 / P1 / P2 risk ledger
 
 ### P0 (release gates — remain OPEN / UNPROVEN; do not claim passed)
-- **P3-2c status ladder:** server contract LOCKED (`wavio` @ d34d5218) ✅ · local desktop
-  behavior PROVEN (596 tests / 0 skips; endpoint `/api/desktop` via one builder; DID
-  main-only; dedup + stale-session discard; create-outcome-unknown) ✅ · REAL SQLite
-  `account_id` migration PROVEN (db.ts-extracted SQL on a real DB) ✅ ·
-  **staging authenticated smoke PENDING** ⏳ · **production deployment BLOCKED** ⛔.
+- **P3-2c status ladder (updated 2026-08-07):** server contract LOCKED (`wavio` @ d34d5218) ✅ ·
+  local desktop behavior PROVEN (596 tests / 0 skips; endpoint `/api/desktop` via one builder;
+  DID main-only; dedup + stale-session discard; create-outcome-unknown) ✅ · REAL SQLite
+  `account_id` migration PROVEN ✅ · **authenticated isolated staging smoke PASSED** ✅
+  (server SHA `a561dee6…`, deployment `dpl_E2HFE5xsYS7tTKwy23pJBHMxAeYC`, Supabase
+  `qjhzrxgiomctzxdzywhu`, production untouched, server PL tests 19/19) ·
+  **desktop MERGED into development integration** ✅ (merge `ec38ebba`) ·
+  desktop→staging smoke: unauthenticated leg PASSED ✅ / **authenticated in-app leg PENDING
+  (manual, interactive Privy sign-in)** ⏳ · **production deployment remains a SEPARATE gate** ⛔.
+- Assistant Project Link tools remain **blocked pending P3-3b**; recipient page, import token,
+  ZIP/Project Pack and contribution APIs remain **excluded**.
 - Live **Project Link creation** against the server — 🧪 unproven (auth/visibility).
 - **Same-DAW Ableton restore** end-to-end — 🧪 unproven.
 - **No "Temp Project"** state after restore — 🧪 unproven live.

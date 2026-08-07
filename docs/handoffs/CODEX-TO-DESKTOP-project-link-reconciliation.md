@@ -128,3 +128,21 @@ migration against a real SQLite database using db.ts's own extracted SQL.
 
 **Remaining ask:** the provably isolated staging deployment + one authenticated smoke
 (list/create/revoke with a real token) — the only blocker before merge/production.
+
+---
+
+# RESOLVED — staging smoke PASSED; desktop merged into development integration
+
+Codex's authenticated isolated staging smoke passed at server SHA
+`a561dee62806fe9d1fc99365121dda9c5799ddb0` (deployment `dpl_E2HFE5xsYS7tTKwy23pJBHMxAeYC`,
+alias `https://wavi-staging.vercel.app`, isolated Supabase `qjhzrxgiomctzxdzywhu`, production
+untouched, server PL tests 19/19). Verified locally: that SHA is a descendant of the locked
+contract `d34d5218…` and `api/desktop/index.ts` is byte-identical — **no adapter change needed**.
+
+Desktop reconciliation `9bb5b574` is merged into `feature/ableton-daw-companion` as `ec38ebba`
+(development integration, not a production release; 596/596 tests, 0 skips, packaged build OK).
+
+**Nothing further is required from Codex for this milestone.** Remaining desktop-side items:
+one manual authenticated staging smoke inside the running app (interactive Privy sign-in), then
+P3-3b to unblock the assistant's Project Link tools. Recipient page / import token / contribution
+APIs remain out of scope and are still the open cross-repo asks.

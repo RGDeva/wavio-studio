@@ -313,3 +313,59 @@ server-confirmed response. Revoke is exempt (server-side idempotent via `already
 - **Real SQLite migration:** PROVEN (actual-SQL extraction against real DB). ✅
 - **Staging authenticated smoke:** PENDING (Codex is provisioning isolated staging). ⏳
 - **Production deployment:** BLOCKED until staging smoke passes. ⛔
+
+---
+
+# P3-2c MERGED into development integration (staging smoke PASSED)
+
+## Staging validation consumed
+- **Server smoke branch:** `test/project-links-live-staging-smoke`
+- **Staging SHA:** `a561dee62806fe9d1fc99365121dda9c5799ddb0` — verified locally as a **descendant**
+  of the locked contract `d34d5218…`, and `api/desktop/index.ts` is **byte-identical** between the
+  two (zero handler drift; the desktop adapter remains valid without change).
+- **Deployment:** `dpl_E2HFE5xsYS7tTKwy23pJBHMxAeYC` → alias `https://wavi-staging.vercel.app`
+  (project `wavi-staging` / `prj_MuKXyk1UhWHdRbUSA4JPyOAoqZhn`), state READY.
+- **Isolated staging Supabase:** `qjhzrxgiomctzxdzywhu`; the deployed bundle contains the staging
+  reference and **not** the production one. Production Vercel/Supabase untouched; no prod alias.
+- **Authenticated matrix PASSED** (two synthetic `did:privy:` identities): A create; A list;
+  project filter; version filter; cursor pagination; B isolation; B revoke denial; A revoke;
+  repeat revoke → `alreadyRevoked`; revoked state; expired state; canonical Privy DID `accountId`;
+  owner/project/version matching; invalid collaborator mode / invalid cursor / project-version
+  mismatch rejections; unauthenticated 401; safe response projection; synthetic cleanup.
+  Server Project Link tests **19/19**.
+
+## Desktop merge
+- Reconciliation `9bb5b574` merged into `feature/ableton-daw-companion` via merge commit
+  `ec38ebba` (normal `--no-ff`, branch history preserved). Development integration — **not** a
+  production release. The assistant branch was **not** merged.
+- Pre-merge and post-merge gates both green: Node 22; electron + renderer tsc; **596/596 vitest,
+  0 skips**; real-SQLite migration suite; PL networking/hardening; account isolation; pagination;
+  reconciliation; logout/account-switch; uncertain-create; Project Detail; preview isolation;
+  production build; unsigned packaged app; `diff --check`; secret + absolute-path scans.
+
+## Local-cache migration status
+`links.account_id` ships as a **nullable, additive** column. Legacy rows keep `account_id = NULL`
+(ownership-unknown, segregated, never auto-attributed). New server-confirmed creates and
+reconciliation stamp the owning DID. Proven against a real SQLite database using db.ts's own
+extracted SQL (`electron/dbMigration.real.test.ts`): legacy survival, nullable add, NULL backfill,
+idempotent re-init, A/B isolation, foreign-account mutation rejection, failed-ALTER data integrity.
+
+## Desktop → staging smoke status
+- **PASSED (unauthenticated leg):** with the dev-only override `WAVI_API_BASE_URL=
+  https://wavi-staging.vercel.app/api`, the desktop's single endpoint builder resolves to exactly
+  `https://wavi-staging.vercel.app/api/desktop`. Live responses match the locked handler:
+  `list-project-links` without auth → **HTTP 401 `{"error":"Unauthorized"}`**; an unknown action →
+  **HTTP 400 `{"error":"Unknown or missing X-Desktop-Action"}`**. No token, DID, Supabase
+  reference, or storage path appeared in either response. Production defaults were not altered.
+- **PENDING (authenticated leg) — MANUAL:** signed-in list / create / reconcile / revoke /
+  revoked-refresh / logout-account-clearing inside the running app. This requires the interactive
+  Privy deep-link sign-in (`wavi://` callback) against a **staging** identity and cannot be
+  automated headlessly. Exact remaining step: launch a dev build with
+  `WAVI_API_BASE_URL=https://wavi-staging.vercel.app/api`, sign in with a synthetic staging
+  identity, then exercise Links → reconcile → create → revoke → refresh → logout. **Not claimed
+  as passed.**
+
+## Scope boundaries (unchanged)
+Production deployment remains a **separate** gate. Assistant Project Link tools remain
+**blocked pending P3-3b** (they still return `server_contract_pending`). Recipient page,
+import-token issuance, ZIP/Project Pack generation, and contribution APIs remain **excluded**.
