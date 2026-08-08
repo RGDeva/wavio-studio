@@ -224,3 +224,22 @@ open and are **not** claimed by this task.
 Interactive authenticated desktop→staging sign-in smoke; Ableton live P0 gates
 (same-DAW restore round trip, no "Temp Project", revocation denial,
 child-version return, immutability); production deployment.
+
+---
+
+# P3-4 contract design started (spec only) — 2026-08-08
+
+The three still-blocked assistant tools now have an authoritative desktop-side contract request:
+**`docs/handoffs/DESKTOP-TO-CODEX-multiplayer-v1-contracts.md`**.
+
+| Blocked tool | Contract section |
+|---|---|
+| `invite_collaborator` | §3 membership (+ §3.4/[3f] role decision) |
+| `inspect_collaborator_activity` | §4 activity feed |
+| `publish_child_version` | §6 child-version contribution (Option A recommended) + §7 lifecycle |
+
+**Nothing was implemented.** All three still return `blockedReason: server_contract_pending`;
+no IPC handler, server call, or runtime file was added. Unblocking is sequenced P3-4a (pure
+adapter + tests) → P3-4b (service/IPC/SQLite) → P3-4c (tools behind the existing confirmation
+envelope), each gated on Codex landing the contract and passing an isolated authenticated
+staging smoke.

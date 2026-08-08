@@ -277,6 +277,13 @@ when green.
   integration: 670/670 tests / 41 files / 0 skips, packaged build OK, all invariants re-verified.
   Multiplayer (invite / collaborator activity / child publish) is the only remaining assistant
   capability class and stays contract-blocked pending **P3-4**.
+- **P3-3 COMPLETE.** **P3-4 contract design STARTED (spec only, 2026-08-08):**
+  `docs/handoffs/DESKTOP-TO-CODEX-multiplayer-v1-contracts.md` is the authoritative desktop
+  request to Codex for Multiplayer v1 (membership · activity · child-version contribution).
+  **No multiplayer runtime implementation exists** — zero runtime files changed by that packet,
+  and `invite_collaborator` / `inspect_collaborator_activity` / `publish_child_version` still
+  return `server_contract_pending`. **The Codex server contract must land and pass an isolated
+  authenticated staging smoke before those tools can be unblocked (P3-4a→c).**
 - **P3-3 assistant foundation LANDED (2026-08-08):** `feat/assistant-local-tools-foundation`
   (`b0f37ae1`) merged into development integration as `f5a8d316`. Deterministic local tools +
   the three closed safety gaps (no implicit `projects[0]`; no confirmation bypass; no
