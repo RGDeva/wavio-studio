@@ -264,6 +264,14 @@ when green.
   (manual, interactive Privy sign-in)** ⏳ · **production deployment remains a SEPARATE gate** ⛔.
 - Assistant Project Link tools remain **blocked pending P3-3b**; recipient page, import token,
   ZIP/Project Pack and contribution APIs remain **excluded**.
+- **P3-3b DONE (branch `feat/assistant-projectlink-wiring`, unmerged):** `list_project_links`,
+  `create_project_link`, `revoke_project_link` are now implemented against the authoritative
+  service (one execution path shared with the IPC handlers; opaque `plink_…` refs; DID/token/path
+  never model-visible; create/revoke confirmation-gated; ambiguous create → outcome-unknown, no
+  retry). Gate: **670/670 tests / 41 files / 0 skips**, packaged build OK. Multiplayer
+  (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
+  import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
+  smoke and the Ableton live P0 gates remain **separate open release gates**.
 - **P3-3 assistant foundation LANDED (2026-08-08):** `feat/assistant-local-tools-foundation`
   (`b0f37ae1`) merged into development integration as `f5a8d316`. Deterministic local tools +
   the three closed safety gaps (no implicit `projects[0]`; no confirmation bypass; no

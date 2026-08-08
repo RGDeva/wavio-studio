@@ -22,6 +22,7 @@ import { getAdapterForProject } from './adapters';
 import { safeRelativePath, classifyFileRole, findPreviewCandidate, ManifestEntry } from './adapters/common';
 import { discoverAudioFiles, defaultDiscoveryRoots, AUDIO_EXTS as DISCOVERY_AUDIO_EXTS, classifyFolderForImport, FolderClassification } from './discovery';
 import { registerWaviMediaPrivileges, registerWaviMediaProtocol } from './mediaProtocolRegister';
+import { AssistantLinkRefRegistry, toAssistantSafeLink } from './assistantLinkRefs';
 import {
   listProjectLinksAll, createProjectLinkFlow, revokeProjectLinkFlow, planReconciliation,
   buildDesktopEndpoint, toRendererAccountHandle, createLinkOpsCoordinator, normalizeCreateKey,
@@ -31,6 +32,27 @@ import {
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
 let currentAccountId: string | null = null;
+
+// P3-3b: session-scoped assistant link references. The model receives `plink_…`
+// handles instead of canonical trackingIds/DIDs; cleared on logout/switch.
+const assistantLinkRefs = new AssistantLinkRefRegistry();
+
+/** Normalize a service failure reason into the assistant-safe vocabulary. */
+function mapLinkFailure(reason: string):
+  'authentication_required' | 'account_unverified' | 'offline' | 'not_owned' | 'rejected'
+  | 'not_found' | 'conflict' | 'retryable' | 'malformed_response' | 'stale_session' | 'create_outcome_unknown' {
+  switch (reason) {
+    case 'unauthorized': return 'authentication_required';
+    case 'offline': return 'offline';
+    case 'not-found': return 'not_found';
+    case 'conflict': return 'conflict';
+    case 'rejected': return 'rejected';
+    case 'retryable': return 'retryable';
+    case 'stale-session': return 'stale_session';
+    case 'create-outcome-unknown': return 'create_outcome_unknown';
+    default: return 'malformed_response';
+  }
+}
 // Sentry is loaded dynamically to avoid crash during module import
 // (Sentry's normalize.js calls electron.app.getAppPath() on module load)
 let SentryInstance: typeof import('@sentry/electron/main') | null = null;
@@ -547,6 +569,98 @@ app.whenReady().then(async () => {
         } catch { return null; }
       },
       classifyErrors: (projectId: string) => classifyFailedRowsForProject(projectId),
+      // P3-3b: assistant Project Link surface. Calls the SAME authoritative
+      // functions the IPC handlers use (one execution path); projects results
+      // into assistant-safe shapes (no DID, no token, no URL, no paths) and
+      // mints session-scoped refs so the model never handles canonical ids.
+      projectLinks: {
+        listProjectLinksSafe: async (o: { projectId: string; versionId?: string }) => {
+          const token = getDecryptedToken();
+          if (!token) return { kind: 'failure' as const, reason: 'authentication_required' as const };
+          const filter = { projectId: o.projectId, ...(o.versionId ? { versionId: o.versionId } : {}) };
+          const { stale, value: res } = await plCoordinator.runReconcile(
+            JSON.stringify({ p: filter.projectId, v: o.versionId ?? null }),
+            () => listProjectLinksAll(plServiceDeps(token), filter),
+          );
+          if (stale) return { kind: 'failure' as const, reason: 'stale_session' as const };
+          if (res.kind === 'failure') return { kind: 'failure' as const, reason: mapLinkFailure(res.reason) };
+          captureAccountId(res.accountId);
+          const dbm = require('./db');
+          // Persist authoritative truth exactly as the IPC path does.
+          const cachedAll = (dbm.getLinks() as any[]).map((r) => ({
+            tracking_id: r.tracking_id, account_id: r.account_id ?? null, revoked_at: r.revoked_at ?? null,
+            project_id: r.project_id ?? null, version_id: r.version_id ?? null,
+          }));
+          const ops = planReconciliation(res.accountId, res.records, cachedAll, res.pageComplete, filter);
+          let flagged = 0;
+          const needsRecon = new Set<string>();
+          for (const op of ops) {
+            if (op.op === 'apply') {
+              dbm.applyAuthoritativeLink({
+                tracking_id: op.item.trackingId, account_id: op.item.ownerAccountId,
+                project_version_id: op.item.projectVersionId, revoked: op.item.status === 'revoked',
+                expires_at: op.item.expiresAt,
+              });
+            } else { flagged++; needsRecon.add(op.tracking_id); }
+          }
+          const confirmed = new Set(res.records.map((x) => x.trackingId));
+          const rows = (dbm.getLinksForAccount(res.accountId) as any[])
+            .filter((row) => row.project_id === o.projectId && (!o.versionId || row.version_id === o.versionId));
+          const links = rows.map((row) => {
+            const ref = assistantLinkRefs.mint({
+              trackingId: row.tracking_id, accountId: res.accountId,
+              projectId: row.project_id ?? null, epoch: plCoordinator.generation(),
+            });
+            const recon = needsRecon.has(row.tracking_id) ? 'reconciliation-needed'
+              : confirmed.has(row.tracking_id) ? 'server-confirmed' : 'cached';
+            return toAssistantSafeLink(ref, row, recon as any);
+          });
+          return { kind: 'ok' as const, links, pageComplete: res.pageComplete, reconciliationNeeded: flagged };
+        },
+
+        createProjectLinkSafe: async (o: { projectId: string; collaboratorMode: 'view' | 'comment'; allowDownload: boolean; expiresAt: string | null }) => {
+          const project = getProjectById(o.projectId) as any;
+          const cloudProjectId = project?.cloud_id ?? o.projectId;
+          const r = await projectLinksCreateAuthoritative({
+            projectId: cloudProjectId, allowDownload: o.allowDownload,
+            expiresAt: o.expiresAt, collaboratorMode: o.collaboratorMode,
+          });
+          if (!r.ok) return { kind: 'failure' as const, reason: mapLinkFailure(r.reason) };
+          const row = require('./db').getLinkByTrackingId(r.trackingId) ?? {
+            project_id: o.projectId, version_id: null,
+            allow_download: o.allowDownload ? 1 : 0, collaborator_mode: o.collaboratorMode,
+            created_at: new Date().toISOString(), expires_at: o.expiresAt, revoked_at: null,
+          };
+          const ref = assistantLinkRefs.mint({
+            trackingId: r.trackingId, accountId: r.accountId,
+            projectId: row.project_id ?? o.projectId, epoch: plCoordinator.generation(),
+          });
+          return { kind: 'created' as const, link: toAssistantSafeLink(ref, row, 'server-confirmed') };
+        },
+
+        revokeProjectLinkSafe: async (o: { ref: string; projectId: string }) => {
+          // Resolve the assistant ref under the CURRENT account/epoch, pinned to
+          // the active project. Any mismatch fails closed with NO server call.
+          const resolved = assistantLinkRefs.resolve(o.ref, {
+            accountId: currentAccountId, epoch: plCoordinator.generation(), projectId: o.projectId,
+          });
+          if (!resolved.ok) {
+            return {
+              kind: 'failure' as const,
+              reason: resolved.reason === 'stale-session' ? ('stale_session' as const)
+                : resolved.reason === 'account-mismatch' ? ('not_owned' as const)
+                : resolved.reason === 'project-mismatch' ? ('stale_project' as const)
+                : ('malformed_reference' as const),
+            };
+          }
+          // Local account-scoped ownership check before any mutation.
+          const row = require('./db').getLinkByTrackingId(resolved.binding.trackingId);
+          if (!row || row.account_id !== currentAccountId) return { kind: 'failure' as const, reason: 'not_owned' as const };
+          const r = await projectLinksRevokeAuthoritative(resolved.binding.trackingId);
+          if (!r.ok) return { kind: 'failure' as const, reason: mapLinkFailure(r.reason) };
+          return { kind: 'revoked' as const, ref: o.ref, alreadyRevoked: r.alreadyRevoked };
+        },
+      },
     }));
   }
   initCopilot(store);
@@ -1061,6 +1175,7 @@ ipcMain.handle('auth:clearToken', () => {
   // account-context resolver + epoch. Only the null handle crosses the IPC.
   currentAccountId = null;
   plCoordinator.bumpGeneration();
+  assistantLinkRefs.clear(); // every assistant link ref dies with the session
   mainWindow?.webContents.send('auth:account', { accountId: null });
 });
 
@@ -1513,6 +1628,7 @@ function rendererAccountHandle(): string | null {
 function captureAccountId(did: string) {
   if (did && did !== currentAccountId) {
     if (currentAccountId) plCoordinator.bumpGeneration(); // account switch mid-session
+    if (currentAccountId) assistantLinkRefs.clear();
     currentAccountId = did;
     mainWindow?.webContents.send('auth:account', { accountId: toRendererAccountHandle(did) });
   }
@@ -1580,11 +1696,13 @@ ipcMain.handle('projectLinks:getScoped', () => {
 // (double-click shares the promise); no automatic retry; a thrown/aborted fetch
 // is `create-outcome-unknown` (recovery = reconcile); a session change
 // mid-flight discards the response without persisting.
-ipcMain.handle('projectLinks:create', async (_e, opts: {
+// THE authoritative create. Both the IPC handler and the assistant tool call
+// this one function — a single execution path per capability.
+async function projectLinksCreateAuthoritative(opts: {
   projectId: string; projectVersionId?: string; allowDownload?: boolean; expiresAt?: string | null; collaboratorMode?: 'view' | 'comment';
-}) => {
+}): Promise<{ ok: true; trackingId: string; url: string; accountId: string } | { ok: false; reason: string; message?: string }> {
   const token = getDecryptedToken();
-  if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
+  if (!token) return { ok: false, reason: 'unauthorized', message: 'Not authenticated' };
   const { stale, value: r } = await plCoordinator.runCreate(
     normalizeCreateKey(opts),
     () => createProjectLinkFlow(plServiceDeps(token), opts),
@@ -1592,9 +1710,9 @@ ipcMain.handle('projectLinks:create', async (_e, opts: {
   if (stale) {
     // The link may exist server-side under the previous session — never persist
     // under the new one; recovery is the authoritative listing.
-    return { error: 'Session changed while creating — refresh Links to check the result.', reason: 'stale-session' };
+    return { ok: false, reason: 'stale-session', message: 'Session changed while creating — refresh Links to check the result.' };
   }
-  if (r.kind === 'failure') return { error: r.message ?? r.reason, reason: r.reason };
+  if (r.kind === 'failure') return { ok: false, reason: r.reason, message: r.message };
   captureAccountId(r.accountId);
   const url = `${WEB_BASE}/project-link/${r.item.trackingId}`;
   try {
@@ -1606,18 +1724,34 @@ ipcMain.handle('projectLinks:create', async (_e, opts: {
       expires_at: r.item.expiresAt, account_id: r.accountId,
     });
   } catch (e) { mainLog(`[projectLinks] record create failed: ${(e as any)?.message}`); }
-  return { ok: true, accountId: rendererAccountHandle(), trackingId: r.item.trackingId, url };
+  return { ok: true, trackingId: r.item.trackingId, url, accountId: r.accountId };
+}
+
+/** THE authoritative revoke (by canonical trackingId). Shared by IPC + assistant. */
+async function projectLinksRevokeAuthoritative(trackingId: string):
+  Promise<{ ok: true; alreadyRevoked: boolean; accountId: string } | { ok: false; reason: string; message?: string }> {
+  const token = getDecryptedToken();
+  if (!token) return { ok: false, reason: 'unauthorized', message: 'Not authenticated' };
+  const r = await revokeProjectLinkFlow(plServiceDeps(token), trackingId);
+  if (r.kind === 'failure') return { ok: false, reason: r.reason, message: r.message };
+  captureAccountId(r.accountId);
+  try { require('./db').markLinkRevokedForAccount(trackingId, r.accountId); } catch { /* best effort */ }
+  return { ok: true, alreadyRevoked: r.alreadyRevoked, accountId: r.accountId };
+}
+
+ipcMain.handle('projectLinks:create', async (_e, opts: {
+  projectId: string; projectVersionId?: string; allowDownload?: boolean; expiresAt?: string | null; collaboratorMode?: 'view' | 'comment';
+}) => {
+  const r = await projectLinksCreateAuthoritative(opts);
+  if (!r.ok) return { error: r.message ?? r.reason, reason: r.reason };
+  return { ok: true, accountId: rendererAccountHandle(), trackingId: r.trackingId, url: r.url };
 });
 
 // Authoritative revoke — verifies ownership server-side; marks local on confirm.
 // (Revoke IS idempotent server-side — alreadyRevoked — so no outcome-unknown.)
 ipcMain.handle('projectLinks:revoke', async (_e, opts: { trackingId: string }) => {
-  const token = getDecryptedToken();
-  if (!token) return { error: 'Not authenticated', reason: 'unauthorized' };
-  const r = await revokeProjectLinkFlow(plServiceDeps(token), opts.trackingId);
-  if (r.kind === 'failure') return { error: r.message ?? r.reason, reason: r.reason };
-  captureAccountId(r.accountId);
-  try { require('./db').markLinkRevokedForAccount(opts.trackingId, r.accountId); } catch { /* best effort */ }
+  const r = await projectLinksRevokeAuthoritative(opts.trackingId);
+  if (!r.ok) return { error: r.message ?? r.reason, reason: r.reason };
   return { ok: true, accountId: rendererAccountHandle(), alreadyRevoked: r.alreadyRevoked };
 });
 

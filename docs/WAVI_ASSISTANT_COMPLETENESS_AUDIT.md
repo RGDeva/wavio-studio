@@ -135,3 +135,56 @@ Project Link reconciliation (`ec38ebba`). Development integration — **not** a 
   until **P3-3b** wires them to the now-merged `codexLinkContractAdapter` + `reconcileLink`.
   Multiplayer (collaborator invite/activity, child publish) and the live Ableton E2E gates
   remain open; recipient page / import token / contribution APIs remain excluded.
+
+---
+
+# P3-3b — assistant Project Link tools UNBLOCKED (branch `feat/assistant-projectlink-wiring`)
+
+Base: integration `07f6a19b` (P3-2c Project Links + P3-3 assistant both landed).
+Server contract: `wavio` @ `d34d5218` (staging-validated at `a561dee6`); **no server
+contract was added or changed by this task**.
+
+## Now implemented (capability matrix updates)
+
+| Capability | Status | Notes |
+|---|---|---|
+| list Project Links | **implemented** | `list_project_links` — read-only, NO confirmation; explicit project required; runs the authoritative paginated reconcile + account-scoped read; `pageComplete` and `reconciliationNeeded` surfaced honestly; partial pagination never marks links missing |
+| create Project Link | **implemented** | `create_project_link` — **confirmation-gated** (card shows project · version · mode · download · expiry); `edit` rejected before any call; server confirmation required; ambiguous completion → `create_outcome_unknown` with the listing as recovery and **no auto-retry**; duplicate concurrent creates share one in-flight request |
+| revoke Project Link | **implemented** | `revoke_project_link` — **confirmation-gated**; takes an assistant-safe `plink_…` ref; local account-scoped ownership checked before the server call; `alreadyRevoked` treated as authoritative revoked |
+
+## Still blocked (honest declines, no placeholders)
+`invite_collaborator`, `inspect_collaborator_activity`, `publish_child_version` continue to
+return `blockedReason: server_contract_pending`. Recipient page / import token / ZIP /
+contribution APIs remain out of scope.
+
+## One execution path per capability
+Both the IPC handlers and the assistant tools call the SAME main-process functions —
+`projectLinksCreateAuthoritative` / `projectLinksRevokeAuthoritative` / the shared
+`listProjectLinksAll` + `planReconciliation` pipeline. No second HTTP implementation, no
+second canonical link identity; a test asserts each tool name appears exactly once.
+
+## Assistant-safe link references
+`electron/assistantLinkRefs.ts` mints opaque, session-scoped `plink_xxxxxxxx` handles bound to
+{trackingId, account DID, projectId, session epoch}. The model lists → receives refs → revokes
+by ref. Resolution fails closed on malformed/unknown refs, wrong account, wrong project, or a
+changed session epoch; `clear()` runs on logout and account switch. Refs are in-memory only,
+never persisted and never sent to the server — the server's `trackingId` stays the single
+canonical id, main-process-owned.
+
+## Privacy boundary (tested)
+No Bearer token, authorization header, encrypted token, **Privy DID**, Supabase credential,
+absolute path, link URL, or raw server error reaches a model-visible result. Link rows are
+projected through `toAssistantSafeLink`, which allowlists only ref / project / version / status /
+permissions / timestamps / reconciliation state. Errors are normalized to a fixed assistant-safe
+vocabulary (`authentication_required`, `account_unverified`, `offline`, `not_owned`, `rejected`,
+`not_found`, `conflict`, `retryable`, `malformed_response`, `stale_project`, `stale_session`,
+`reconciliation_pending`, `create_outcome_unknown`, `malformed_reference`).
+
+## Gate
+Node 22; electron + renderer tsc clean; **670/670 vitest across 41 files, 0 skips** (640
+baseline + 30 new — no regressions); production build; unsigned packaged app; `diff --check`
+clean; secret + absolute-path scans clean.
+
+## Separate release gates (unchanged)
+The interactive desktop→staging authenticated sign-in smoke and the Ableton live P0 gates remain
+open and are **not** claimed by this task.
