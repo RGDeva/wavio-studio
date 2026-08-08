@@ -127,6 +127,21 @@ contextBridge.exposeInMainWorld('waviAPI', {
     revoke: (opts: { trackingId: string }) => ipcRenderer.invoke('projectLinks:revoke', opts),
   },
 
+  // Multiplayer v1 (P3-4). Server-authoritative membership / activity /
+  // contributions. Collaborators and contributions are addressed by OPAQUE
+  // session refs (`pmember_…` / `pcontrib_…`) — canonical membership and
+  // contribution ids, like the account DID and the auth token, never leave main.
+  multiplayer: {
+    listCollaborators: (opts: { projectId: string; limit?: number }) => ipcRenderer.invoke('multiplayer:listCollaborators', opts),
+    listActivity: (opts: { projectId: string; limit?: number }) => ipcRenderer.invoke('multiplayer:listActivity', opts),
+    inviteCollaborator: (opts: { projectId: string; inviteeAccountId: string; role: 'view' | 'comment'; canContribute?: boolean }) => ipcRenderer.invoke('multiplayer:inviteCollaborator', opts),
+    respondInvite: (opts: { ref: string; accept: boolean }) => ipcRenderer.invoke('multiplayer:respondInvite', opts),
+    revokeCollaborator: (opts: { ref: string }) => ipcRenderer.invoke('multiplayer:revokeCollaborator', opts),
+    publishContribution: (opts: { localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null }) => ipcRenderer.invoke('multiplayer:publishContribution', opts),
+    respondContribution: (opts: { ref: string; accept: boolean; reviewerNote?: string | null }) => ipcRenderer.invoke('multiplayer:respondContribution', opts),
+    withdrawContribution: (opts: { ref: string }) => ipcRenderer.invoke('multiplayer:withdrawContribution', opts),
+  },
+
   // Project Links
   project: {
     publishVersion: (opts: { localProjectId: string }) => ipcRenderer.invoke('project:publishVersion', opts),

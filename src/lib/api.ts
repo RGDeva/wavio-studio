@@ -27,8 +27,65 @@ export interface LinkListItem {
   expires_at: string | null;
   created_at: string;
   revoked_at: string | null;
-  /** Owning account (server Privy DID); null = legacy/ownership-unknown. */
+  /** Owning account as an OPAQUE handle (`acct_…`); null = legacy/ownership-unknown. */
   account_id?: string | null;
+}
+
+// ── Multiplayer v1 renderer-safe shapes ──────────────────────────────────────
+// These mirror what the main process projects out. They deliberately contain no
+// canonical membership/contribution id, no account DID, and no raw server text.
+
+/** Collaborator state, derived from the contract's booleans (also carried). */
+export type CollaboratorState = 'active' | 'pending' | 'declined' | 'revoked' | 'expired' | 'unknown';
+
+export interface SafeCollaborator {
+  /** Opaque session ref (`pmember_…`) — the only way to address this member. */
+  ref: string;
+  projectId: string;
+  role: 'owner' | 'view' | 'comment';
+  /** Separate from `role`; never inferred from `comment`. */
+  canContribute: boolean;
+  state: CollaboratorState;
+  stateFlags: { active: boolean; pending: boolean; declined: boolean; revoked: boolean; expired: boolean };
+  displayName: string | null;
+  avatarUrl: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  acceptedAt: string | null;
+  expiresAt: string | null;
+  revision: string | null;
+}
+
+/** Closed event vocabulary — an unknown server type is dropped, never shown raw. */
+export type ActivityKind =
+  | 'collaborator_invited' | 'collaborator_joined' | 'collaborator_removed'
+  | 'version_published' | 'contribution_submitted' | 'contribution_accepted'
+  | 'contribution_rejected' | 'contribution_withdrawn';
+
+export interface SafeActivity {
+  projectId: string;
+  type: ActivityKind;
+  displayName: string | null;
+  avatarUrl: string | null;
+  subjectKind: 'version' | 'contribution' | 'membership' | 'link' | 'comment' | 'none';
+  occurredAt: string | null;
+  revision: string | null;
+}
+
+export type ContributionState = 'submitted' | 'accepted' | 'rejected' | 'withdrawn' | 'unknown';
+
+export interface SafeContribution {
+  /** Opaque session ref (`pcontrib_…`). */
+  ref: string;
+  projectId: string;
+  state: ContributionState;
+  stateFlags: { submitted: boolean; accepted: boolean; rejected: boolean; withdrawn: boolean };
+  contributorNote: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  reviewedAt: string | null;
+  withdrawnAt: string | null;
+  revision: string | null;
 }
 
 /** Reply from copilot chat: plain text, or text plus a pending confirmation
@@ -146,6 +203,28 @@ export interface WaviAPI {
     revoke: (opts: { trackingId: string }) =>
       Promise<{ ok?: boolean; accountId?: string; alreadyRevoked?: boolean; error?: string; reason?: string }>;
   };
+  /**
+   * Multiplayer v1 (locked server contract). Collaborators and contributions
+   * are addressed by opaque session refs; canonical ids stay in main.
+   */
+  multiplayer: {
+    listCollaborators: (opts: { projectId: string; limit?: number }) =>
+      Promise<{ ok?: boolean; accountId?: string | null; collaborators?: SafeCollaborator[]; pageComplete?: boolean; error?: string; reason?: string }>;
+    listActivity: (opts: { projectId: string; limit?: number }) =>
+      Promise<{ ok?: boolean; accountId?: string | null; events?: SafeActivity[]; pageComplete?: boolean; skippedUnknownEvents?: number; error?: string; reason?: string }>;
+    inviteCollaborator: (opts: { projectId: string; inviteeAccountId: string; role: 'view' | 'comment'; canContribute?: boolean }) =>
+      Promise<{ ok?: boolean; collaborator?: SafeCollaborator; alreadyInvited?: boolean; error?: string; reason?: string }>;
+    respondInvite: (opts: { ref: string; accept: boolean }) =>
+      Promise<{ ok?: boolean; collaborator?: SafeCollaborator; accepted?: boolean; alreadyResponded?: boolean; error?: string; reason?: string }>;
+    revokeCollaborator: (opts: { ref: string }) =>
+      Promise<{ ok?: boolean; collaborator?: SafeCollaborator; alreadyRevoked?: boolean; error?: string; reason?: string }>;
+    publishContribution: (opts: { localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null }) =>
+      Promise<{ ok?: boolean; contribution?: SafeContribution | null; alreadySubmitted?: boolean; error?: string; reason?: string }>;
+    respondContribution: (opts: { ref: string; accept: boolean; reviewerNote?: string | null }) =>
+      Promise<{ ok?: boolean; contribution?: SafeContribution; alreadyResolved?: boolean; error?: string; reason?: string }>;
+    withdrawContribution: (opts: { ref: string }) =>
+      Promise<{ ok?: boolean; contribution?: SafeContribution; alreadyResolved?: boolean; error?: string; reason?: string }>;
+  };
   project: {
     publishVersion: (opts: { localProjectId: string }) => Promise<{ versionId?: string; versionNumber?: number; fileCount?: number; created?: boolean; skipped?: boolean; error?: string }>;
     createLink: (opts: {
@@ -251,6 +330,12 @@ const _stub: WaviAPI = {
   share: { createLink: _noop, revokeLink: _noop },
   links: { getAll: () => Promise.resolve([]), rename: _noop, revoke: _noop },
   projectLinks: { reconcile: () => Promise.resolve({}), getScoped: () => Promise.resolve({ accountId: null, scoped: [], legacy: [] }), create: _noop, revoke: _noop },
+  multiplayer: {
+    listCollaborators: () => Promise.resolve({ ok: false, collaborators: [] }),
+    listActivity: () => Promise.resolve({ ok: false, events: [] }),
+    inviteCollaborator: _noop, respondInvite: _noop, revokeCollaborator: _noop,
+    publishContribution: _noop, respondContribution: _noop, withdrawContribution: _noop,
+  },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
