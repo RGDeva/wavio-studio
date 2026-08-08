@@ -188,3 +188,39 @@ clean; secret + absolute-path scans clean.
 ## Separate release gates (unchanged)
 The interactive desktop→staging authenticated sign-in smoke and the Ableton live P0 gates remain
 open and are **not** claimed by this task.
+
+---
+
+# P3-3b LANDED in development integration (2026-08-08)
+
+`feat/assistant-projectlink-wiring` (`76c6e26d`) merged into
+`feature/ableton-daw-companion` as merge commit `38fe0b99` — **conflict-free**
+(base `07f6a19b`). Development integration only; not a production release.
+
+- **Implemented assistant Project Link tools:** `list_project_links` (read-only,
+  no confirmation), `create_project_link` and `revoke_project_link` (both
+  out-of-band confirmation-gated).
+- **Still blocked, honestly:** `invite_collaborator`,
+  `inspect_collaborator_activity`, `publish_child_version` →
+  `blockedReason: server_contract_pending`. No multiplayer, recipient page,
+  import token, ZIP or contribution work was added.
+- **Gate (pre- and post-merge, identical):** Node 22; electron + renderer tsc
+  clean; **670/670 vitest across 41 files, 0 skips**; named PL / assistant /
+  envelope / migration / Project Detail / preview suites **192/192**; production
+  build; unsigned packaged app; `diff --check` clean; secret + absolute-path
+  scans clean.
+- **Invariants re-verified post-merge:** endpoint resolves to `/api/desktop` via
+  the single builder; no legacy Project Link mutation path; Privy DID stays
+  main-process-only behind the opaque handle; assistant link refs are cleared on
+  logout/account switch; the canonical trackingId never appears in the tool
+  layer; no second HTTP implementation in the assistant tools.
+- **Token boundary note (verified, pre-existing):** the desktop token appears
+  only in the `Authorization` header of the authenticated call to Wavi's own
+  `/assistant/chat`. `buildSystemPrompt` takes only `ProjectContext` (no token or
+  account field), so no token or DID enters the prompt, tool definitions, or
+  tool results.
+
+## Separate release gates (still open — not claimed here)
+Interactive authenticated desktop→staging sign-in smoke; Ableton live P0 gates
+(same-DAW restore round trip, no "Temp Project", revocation denial,
+child-version return, immutability); production deployment.

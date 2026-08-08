@@ -272,6 +272,11 @@ when green.
   (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
   import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
   smoke and the Ableton live P0 gates remain **separate open release gates**.
+- **P3-3b LANDED (2026-08-08):** merged into development integration as `38fe0b99`
+  (conflict-free). Phase 3's assistant foundation + Project Link wiring are now COMPLETE in
+  integration: 670/670 tests / 41 files / 0 skips, packaged build OK, all invariants re-verified.
+  Multiplayer (invite / collaborator activity / child publish) is the only remaining assistant
+  capability class and stays contract-blocked pending **P3-4**.
 - **P3-3 assistant foundation LANDED (2026-08-08):** `feat/assistant-local-tools-foundation`
   (`b0f37ae1`) merged into development integration as `f5a8d316`. Deterministic local tools +
   the three closed safety gaps (no implicit `projects[0]`; no confirmation bypass; no
