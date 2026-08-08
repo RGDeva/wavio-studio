@@ -28,6 +28,12 @@ function fakeDeps(overrides: Partial<ProjectToolDeps> = {}): ProjectToolDeps & {
     getQueueCounts: () => ({}),
     prioritizeProject: () => ({ needsConfirmation: false, bumped: 1, requeued: 0, blockedPermanent: 0, skippedMissing: 0 }),
     publishVersion: async () => ({ versionId: 'v1', versionNumber: 3, fileCount: 12 }),
+    // P3-3 inspection deps
+    revealFileById: () => ({ revealed: true }),
+    openFileById: () => ({ opened: true }),
+    getVersions: () => [],
+    getCapabilities: () => ({ dawType: 'ableton', canRestore: true, canOpen: true, notes: [] }),
+    classifyErrors: () => ({ retryable: [], permanent: [], missing: [] }),
     ...overrides,
   } as any;
 }
@@ -184,12 +190,27 @@ describe('registry integration', () => {
   it('every built tool carries the envelope (audit on every call)', async () => {
     const deps = fakeDeps();
     const tools = buildProjectTools(deps);
-    expect(tools.map((t) => t.name)).toEqual(['search_files', 'open_in_daw', 'inspect_sync_status', 'sync_project', 'publish_version']);
+    // Phase-H cloud/sync tools + P3-3 deterministic inspection tools + honest
+    // typed declines for server-blocked capabilities.
+    expect(tools.map((t) => t.name)).toEqual([
+      'search_files', 'open_in_daw', 'inspect_sync_status', 'sync_project', 'publish_version',
+      'inspect_project', 'reveal_file', 'open_file', 'inspect_package_completeness', 'inspect_daw_compatibility',
+      'list_local_versions', 'explain_project_errors',
+      'list_project_links', 'create_project_link', 'revoke_project_link',
+      'invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version',
+    ]);
+    // Every tool (including gated ones returning needs_confirmation) audits once.
     for (const t of tools) await t.handler({ query: 'x' }, ctxWithProject);
     expect(deps.auditLog.length).toBe(tools.length);
   });
-  it('external-app + cloud actions are confirmation-required; read-only ones are not', () => {
+  it('external-app + cloud actions are confirmation-required; read-only + blocked ones are not', () => {
     const flags = Object.fromEntries(buildProjectTools(fakeDeps()).map((t) => [t.name, t.confirmationRequired]));
-    expect(flags).toEqual({ search_files: false, open_in_daw: true, inspect_sync_status: false, sync_project: false, publish_version: true });
+    expect(flags).toEqual({
+      search_files: false, open_in_daw: true, inspect_sync_status: false, sync_project: false, publish_version: true,
+      inspect_project: false, reveal_file: true, open_file: true, inspect_package_completeness: false,
+      inspect_daw_compatibility: false, list_local_versions: false, explain_project_errors: false,
+      list_project_links: false, create_project_link: false, revoke_project_link: false,
+      invite_collaborator: false, inspect_collaborator_activity: false, publish_child_version: false,
+    });
   });
 });

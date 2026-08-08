@@ -3,10 +3,10 @@ import { contextBridge, ipcRenderer } from 'electron';
 contextBridge.exposeInMainWorld('waviCopilot', {
   close: () => ipcRenderer.invoke('copilot:close'),
 
-  getProjectContext: () => ipcRenderer.invoke('copilot:getContext'),
+  getProjectContext: (projectId?: string | null) => ipcRenderer.invoke('copilot:getContext', projectId ?? null),
 
-  runTool: (toolName: string, params: Record<string, unknown>) =>
-    ipcRenderer.invoke('copilot:runTool', toolName, params),
+  runTool: (toolName: string, params: Record<string, unknown>, projectId?: string | null) =>
+    ipcRenderer.invoke('copilot:runTool', toolName, params, projectId ?? null),
 
   chat: (messages: Array<{ role: string; content: string }>, context: unknown) =>
     ipcRenderer.invoke('copilot:chat', messages, context),

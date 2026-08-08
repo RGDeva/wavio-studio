@@ -3,6 +3,7 @@ import path from 'path';
 import crypto from 'crypto';
 import { getProjects, getFilesByProject, logActivity } from './db';
 import { getToolByName, runAgentChat } from './agentLoop';
+import { sanitizeToolResult, sanitizeArgs } from './copilotTools/envelope';
 import type { ProjectContext } from './copilotTypes';
 
 let overlayWindow: BrowserWindow | null = null;
@@ -125,9 +126,16 @@ function getAuthToken(): string | null {
   } catch { return null; }
 }
 
-async function buildProjectContext(): Promise<ProjectContext> {
+async function buildProjectContext(requestedProjectId?: string | null): Promise<ProjectContext> {
   const projects = getProjects() as any[];
-  const activeProject = projects[0] ?? null; // Most recently modified
+  // Explicit project context (P3-3 hardening): resolve ONLY the project the
+  // caller explicitly named. There is NO implicit "most-recently-modified"
+  // (projects[0]) fallback — if no id is supplied, the context is project-less
+  // and project-sensitive tools fail closed. The active project is chosen
+  // visibly in the renderer and threaded here as `requestedProjectId`.
+  const activeProject = (requestedProjectId
+    ? projects.find((p) => p.id === requestedProjectId)
+    : null) ?? null;
 
   const baseCtx: ProjectContext = {
     projectId: activeProject?.id ?? null,
@@ -211,26 +219,32 @@ function registerIpcHandlers() {
     overlayWindow?.hide();
   });
 
-  ipcMain.handle('copilot:getContext', async () => {
-    return buildProjectContext();
+  ipcMain.handle('copilot:getContext', async (_e, requestedProjectId?: string | null) => {
+    return buildProjectContext(requestedProjectId ?? null);
   });
 
-  ipcMain.handle('copilot:runTool', async (_e, toolName: string, params: Record<string, unknown>) => {
+  ipcMain.handle('copilot:runTool', async (_e, toolName: string, params: Record<string, unknown>, requestedProjectId?: string | null) => {
     const tool = getToolByName(toolName);
     if (!tool) {
       return { status: 'error', error: `Unknown tool: ${toolName}` };
     }
 
-    const ctx = await buildProjectContext();
-    const result = await tool.handler(params, ctx);
+    // Resolve context for the explicitly requested project when provided; the
+    // tool's own resolver then discards the result if the active project no
+    // longer matches what the model targeted (stale-switch guard).
+    const ctx = await buildProjectContext(requestedProjectId ?? (params.projectId as string | undefined) ?? null);
+    // Sanitize the result at the IPC boundary — no absolute path may reach the
+    // renderer, the audit log, or a downstream window (defense-in-depth; the
+    // envelope also sanitizes at source).
+    const result = sanitizeToolResult(await tool.handler(params, ctx));
 
-    // Log to activity
+    // Log to activity (result already path-free).
     logActivity({
       id: crypto.randomUUID(),
       type: 'copilot_tool',
-      message: `Copilot: ${toolName} → ${result.status === 'done' ? result.filePath?.split('/').pop() ?? 'done' : result.error}`,
+      message: `Copilot: ${toolName} → ${result.status === 'done' ? 'done' : result.error}`,
       project_id: ctx.projectId ?? undefined,
-      metadata: { toolName, params, result },
+      metadata: { toolName, params: sanitizeArgs(params), outcome: result.status },
     });
 
     // Notify main window
@@ -252,7 +266,7 @@ function registerIpcHandlers() {
   ipcMain.handle('copilot:confirmTool', async (_e, toolName: string, params: Record<string, unknown>, context: ProjectContext | null) => {
     const tool = getToolByName(toolName);
     if (!tool) return { status: 'error', error: `Unknown tool: ${toolName}` };
-    return tool.handler(params ?? {}, context ?? null, { confirmedOutOfBand: true });
+    return sanitizeToolResult(await tool.handler(params ?? {}, context ?? null, { confirmedOutOfBand: true }));
   });
 
   ipcMain.handle('copilot:toggle', () => {

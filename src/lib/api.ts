@@ -51,10 +51,12 @@ export interface WaviAPI {
   };
   copilot: {
     toggle:     () => Promise<void>;
-    getContext: () => Promise<any>;
+    getContext: (projectId?: string | null) => Promise<any>;
+    runTool:    (toolName: string, params: Record<string, unknown>, projectId?: string | null) =>
+      Promise<{ status: string; message?: string; error?: string; projectId?: string; blockedReason?: string; data?: unknown }>;
     chat:       (messages: Array<{role:string;content:string}>, context: any) => Promise<CopilotChatReply>;
     confirmTool: (toolName: string, params: Record<string, unknown>, context: any) =>
-      Promise<{ status: string; message?: string; error?: string }>;
+      Promise<{ status: string; message?: string; error?: string; projectId?: string; blockedReason?: string; data?: unknown }>;
   };
   folders: {
     getAll: () => Promise<string[]>;
@@ -238,7 +240,7 @@ export interface WaviAPI {
 const _noop = () => Promise.resolve(null as any);
 const _stub: WaviAPI = {
   auth: { getToken: _noop, setToken: _noop, clearToken: _noop },
-  copilot: { toggle: _noop, getContext: _noop, chat: _noop, confirmTool: _noop },
+  copilot: { toggle: _noop, getContext: _noop, runTool: _noop, chat: _noop, confirmTool: _noop },
   folders: { getAll: () => Promise.resolve([]), add: _noop, remove: _noop, discover: () => Promise.resolve([]), addPath: _noop, confirmAmbiguous: _noop, rescan: _noop, scanMeta: () => Promise.resolve({}), fileCounts: () => Promise.resolve({}), excludePath: _noop, getExcluded: () => Promise.resolve([]), unexcludePath: _noop },
   projects: { getAll: () => Promise.resolve([]), getById: _noop, getDemoStatus: _noop },
   daw: { getCapabilities: () => Promise.resolve({ id: 'generic', displayName: 'DAW project', capabilities: { detect: false, packageNative: false, restore: true, sameDawOpen: false, crossDawReconstruct: false, scanPlugins: false, fidelityReport: false } }) },

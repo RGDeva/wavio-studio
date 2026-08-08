@@ -179,7 +179,8 @@ contextBridge.exposeInMainWorld('waviAPI', {
   // Copilot
   copilot: {
     toggle:     () => ipcRenderer.invoke('copilot:toggle'),
-    getContext: () => ipcRenderer.invoke('copilot:getContext'),
+    getContext: (projectId?: string | null) => ipcRenderer.invoke('copilot:getContext', projectId ?? null),
+    runTool: (toolName: string, params: Record<string, unknown>, projectId?: string | null) => ipcRenderer.invoke('copilot:runTool', toolName, params, projectId ?? null),
     chat:       (messages: unknown[], context: unknown) => ipcRenderer.invoke('copilot:chat', messages, context),
     confirmTool: (toolName: string, params: Record<string, unknown>, context: unknown) => ipcRenderer.invoke('copilot:confirmTool', toolName, params, context),
   },

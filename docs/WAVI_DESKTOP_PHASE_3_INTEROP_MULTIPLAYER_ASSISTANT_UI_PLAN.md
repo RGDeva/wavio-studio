@@ -274,10 +274,11 @@ when green.
   `tasks/backlog/MILESTONE_DEFERRED_AND_BLOCKERS.md`).
 
 ### P1
-- No design-token system / component library (blocks consistent UI + state coverage).
-- Assistant tool set incomplete (only 5/24 required).
+- No design-token system / component library (blocks consistent UI + state coverage). — RESOLVED (P3-1a/b/c).
+- Assistant tool set incomplete (only 5/24 required). — PARTLY RESOLVED (P3-3: local deterministic tools added; server/multiplayer tools remain blocked).
 - Server contract gaps #4–#8 block Workstream A live flow.
 - Two broader planning docs uncommitted (documentation gap).
+- **Assistant safety gaps (P3-3 audit): RESOLVED** — implicit `projects[0]` context, confirmation-envelope bypass by static file-open/reveal tools, and raw-path leakage are all closed (explicit project selection + `sanitizeToolResult` + removal of ungated duplicates + gated `open_file`/`reveal_file`). No assistant safety blocker remains open on this branch.
 
 ### P2
 - Low-contrast text / inconsistent radius+spacing.
@@ -308,4 +309,40 @@ committed on the feature branch with a before/after note. **Do not proceed to P3
 
 ---
 
-*End of Phase 3 plan. No Phase 3 features are implemented in this pass.*
+## 9. Phase 3 progress ledger (updated as packets land)
+
+### P3-3 · Assistant completeness — **local tools landed** (`feat/assistant-local-tools-foundation`, off `feature/ableton-daw-companion@45795a81`)
+
+Audit: `docs/WAVI_ASSISTANT_COMPLETENESS_AUDIT.md` (matrix for all 23 required capabilities).
+
+**Implemented local assistant tools (deterministic, server-independent, envelope-gated):**
+- `inspect_project`, `inspect_package_completeness`, `inspect_daw_compatibility`,
+  `list_local_versions`, `explain_project_errors` — read-only, no confirmation.
+- `reveal_file` — confirmation-gated (launches Finder), reveals by opaque id in main; no raw path to model.
+- `search_files`, `inspect_sync_status`, `sync_project`, `publish_version` — pre-existing, retained.
+
+**Project context:** every tool resolves an EXPLICIT project (`copilot:runTool`/`getContext` now take a
+`requestedProjectId`; `buildProjectContext` resolves that project instead of silently `projects[0]`). A
+tool whose targeted project no longer matches the active one returns `stale_project_switch` and is
+discarded. The assistant UI shows the active project chip. Raw absolute paths are redacted to basenames
+in every model-visible result (`redactPath`, verified by test).
+
+**Confirmation:** the out-of-band envelope is preserved — a model-emitted `confirmed:true` is stripped;
+only the renderer's confirmation card sets `confirmedOutOfBand`. Read-only tools need no confirmation.
+
+**Server-blocked assistant tools** (return typed `blockedReason: server_contract_pending`, never a
+fabricated success): `list_project_links`, `create_project_link`, `revoke_project_link`,
+`invite_collaborator`, `inspect_collaborator_activity`, `publish_child_version`.
+
+**Dependencies still pending for the blocked tools:**
+- **Project Link reconciliation** — authoritative `list-project-links` + canonical account identity,
+  uncommitted in `wavio` (`feat/project-links-authoritative-reconciliation`, `CODEX-TO-DESKTOP-…` note).
+- **Multiplayer** — collaborator invite/activity + contribution/child publish (§4 event model).
+- **Live Ableton E2E** — restore + Open-in-DAW round trip verification on real hardware (§7 P0 gates).
+
+Tests: `electron/copilotTools/localTools.test.ts` (19) + `src/lib/assistantToolCard.test.ts` (9); existing
+`copilotTools.test.ts` updated (not weakened) for the expanded registry.
+
+---
+
+*End of Phase 3 plan. Implementation progress is tracked in §9.*
