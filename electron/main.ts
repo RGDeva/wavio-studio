@@ -28,6 +28,16 @@ import {
   buildDesktopEndpoint, toRendererAccountHandle, createLinkOpsCoordinator, normalizeCreateKey,
   type DesktopResponse, type ProjectLinkServiceDeps,
 } from './projectLinkService';
+import {
+  listCollaboratorsAll, listActivityAll, inviteCollaboratorFlow, respondInviteFlow,
+  revokeCollaboratorFlow, publishContributionFlow, respondContributionFlow,
+  withdrawContributionFlow, ContributionOperationLedger,
+  type MultiplayerServiceDeps,
+} from './multiplayerService';
+import {
+  MultiplayerRefRegistry, toSafeMembership, toSafeActivity, toSafeContribution,
+  MULTIPLAYER_FAILURE_MESSAGE,
+} from './multiplayerRefs';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -36,6 +46,12 @@ let currentAccountId: string | null = null;
 // P3-3b: session-scoped assistant link references. The model receives `plink_…`
 // handles instead of canonical trackingIds/DIDs; cleared on logout/switch.
 const assistantLinkRefs = new AssistantLinkRefRegistry();
+
+// Multiplayer v1 (P3-4): session-scoped opaque membership/contribution refs and
+// the retained-operation-key ledger for interrupted contribution publishes.
+// Both die on logout / account switch — a key must never cross accounts.
+const multiplayerRefs = new MultiplayerRefRegistry();
+const contributionOps = new ContributionOperationLedger();
 
 /** Normalize a service failure reason into the assistant-safe vocabulary. */
 function mapLinkFailure(reason: string):
@@ -1176,6 +1192,8 @@ ipcMain.handle('auth:clearToken', () => {
   currentAccountId = null;
   plCoordinator.bumpGeneration();
   assistantLinkRefs.clear(); // every assistant link ref dies with the session
+  multiplayerRefs.clear();   // …as does every pmember_/pcontrib_ handle
+  contributionOps.clear();   // …and every retained contribution operation key
   mainWindow?.webContents.send('auth:account', { accountId: null });
 });
 
@@ -1347,11 +1365,17 @@ function getDecryptedToken(): string | null {
 // reproduces the exact pre-extraction behavior for non-Ableton projects.
 
 
-async function doPublishVersion(opts: { localProjectId: string }) {
-  const token = getDecryptedToken();
-  if (!token) return { error: 'Not authenticated' };
-
-  const project = getProjectById(opts.localProjectId) as any;
+/**
+ * THE publish manifest builder. Every publish path — plain version publish,
+ * publish-on-create-link, and a Multiplayer v1 contribution — goes through this
+ * one function. There is deliberately no second manifest builder: a contribution
+ * is the SAME snapshot with contribution fields added on top (see
+ * buildContributionBody in multiplayerService.ts).
+ */
+function buildPublishManifestBody(localProjectId: string):
+  | { error: string }
+  | { body: Record<string, unknown>; project: any; previewAutoSelected: boolean } {
+  const project = getProjectById(localProjectId) as any;
   if (!project) return { error: 'Project not found locally' };
   if (!project.cloud_id) return { error: 'Project not yet synced to cloud' };
 
@@ -1359,7 +1383,7 @@ async function doPublishVersion(opts: { localProjectId: string }) {
   const projectRoot = path.dirname(projectFilePath);
 
   // Collect all files associated with this project
-  const localFiles = getFilesByProject(opts.localProjectId) as any[];
+  const localFiles = getFilesByProject(localProjectId) as any[];
   const syncedFiles = localFiles.filter((f: any) => f.sync_status === 'synced' && f.cloud_asset_id && f.file_path);
 
   if (!syncedFiles.length) return { error: 'No synced files found for this project' };
@@ -1407,35 +1431,47 @@ async function doPublishVersion(opts: { localProjectId: string }) {
   // server's auto-selection but flag it so a stem is never silently treated as
   // the canonical preview.
   const previewCandidate = findPreviewCandidate(syncedFiles, projectRoot);
-  const previewAssetId = previewCandidate?.cloud_asset_id ?? null;
-  if (!previewCandidate) {
+
+  return {
+    project,
+    previewAutoSelected: !previewCandidate,
+    body: {
+      projectId: project.cloud_id,
+      parentVersionId: project.cloud_version_id ?? null,
+      daw: project.daw_type ?? null,
+      bpm: previewCandidate?.bpm ?? null,
+      sha256: project.checksum ?? null,
+      fileSize: project.file_size ?? null,
+      deviceLabel: `Wavi Studio — ${require('os').hostname()}`,
+      files: fileManifest,
+      versionNotes: null,
+      previewAssetId: previewCandidate?.cloud_asset_id ?? null,
+      previewRelativePath: previewCandidate ? safeRelativePath(previewCandidate.file_path, projectRoot + path.sep) : null,
+      previewDuration: previewCandidate?.duration ?? null,
+      previewFormat: previewCandidate ? path.extname(previewCandidate.file_name).replace(/^\./, '') : null,
+      previewKey: previewCandidate?.key_note ?? null,
+      previewAutoSelected: !previewCandidate,
+    },
+  };
+}
+
+async function doPublishVersion(opts: { localProjectId: string }) {
+  const token = getDecryptedToken();
+  if (!token) return { error: 'Not authenticated' };
+
+  const built = buildPublishManifestBody(opts.localProjectId);
+  if ('error' in built) return { error: built.error };
+
+  if (built.previewAutoSelected) {
     logActivity({
       id: crypto.randomUUID(),
       type: 'preview_auto_selected',
-      message: `No preview.wav/bounce.wav found at project root for "${project.project_name}" — falling back to auto-selected stem as preview`,
+      message: `No preview.wav/bounce.wav found at project root for "${built.project.project_name}" — falling back to auto-selected stem as preview`,
       project_id: opts.localProjectId,
     });
   }
 
-  const result = await desktopApiPost(token, 'publish-project-version', {
-    projectId: project.cloud_id,
-    parentVersionId: project.cloud_version_id ?? null,
-    daw: project.daw_type ?? null,
-    bpm: previewCandidate?.bpm ?? null,
-    sha256: project.checksum ?? null,
-    fileSize: project.file_size ?? null,
-    deviceLabel: `Wavi Studio — ${require('os').hostname()}`,
-    files: fileManifest,
-    versionNotes: null,
-    previewAssetId,
-    previewRelativePath: previewCandidate ? safeRelativePath(previewCandidate.file_path, projectRoot + path.sep) : null,
-    previewDuration: previewCandidate?.duration ?? null,
-    previewFormat: previewCandidate ? path.extname(previewCandidate.file_name).replace(/^\./, '') : null,
-    previewKey: previewCandidate?.key_note ?? null,
-    previewAutoSelected: !previewCandidate,
-  });
-
-  return result;
+  return desktopApiPost(token, 'publish-project-version', built.body);
 }
 
 ipcMain.handle('project:publishVersion', (_e, opts: { localProjectId: string }) => doPublishVersion(opts));
@@ -1456,45 +1492,11 @@ ipcMain.handle('project:createLink', async (_e, opts: {
   // Step 1: ensure a complete immutable version exists with all files populated.
   // If the caller didn't pass an explicit version, publish one now.
   if (!versionId) {
-    const published = await desktopApiPost(token, 'publish-project-version', (() => {
-      const project = getProjectById(opts.projectId) as any;
-      if (!project?.cloud_id) return null;
-      const projectFilePath = project.file_path as string;
-      const projectRoot = path.dirname(projectFilePath) + path.sep;
-      const localFiles = (getFilesByProject(opts.projectId) as any[]).filter(
-        (f: any) => f.sync_status === 'synced' && f.cloud_asset_id && f.file_path
-      );
-      const fileManifest: ManifestEntry[] = [];
-      if (fs.existsSync(projectFilePath)) {
-        fileManifest.push({ relativePath: path.basename(projectFilePath), fileName: path.basename(projectFilePath), fileSize: project.file_size ?? 0, sha256: project.checksum ?? null, role: 'project', mimeType: null, assetId: project.project_asset_id ?? '' });
-      }
-      for (const f of localFiles) {
-        const rel = safeRelativePath(f.file_path, projectRoot);
-        if (!rel) continue;
-        fileManifest.push({ relativePath: rel, fileName: f.file_name, fileSize: f.file_size ?? 0, sha256: f.checksum ?? null, role: classifyFileRole(f.file_name, f.classifier_role ?? 'misc'), mimeType: null, assetId: f.cloud_asset_id });
-      }
-      // Ableton: always include the (possibly empty) "Ableton Project Info" directory
-      // marker — see abletonManifestExtras (adapters/ableton.ts) for why this is required.
-      fileManifest.push(...getAdapterForProject(project.daw_type, projectFilePath).manifestExtras(projectFilePath, path.dirname(projectFilePath)));
-
-      const previewCandidate = findPreviewCandidate(localFiles, path.dirname(projectFilePath));
-      return {
-        projectId: project.cloud_id,
-        parentVersionId: project.cloud_version_id ?? null,
-        daw: project.daw_type ?? null,
-        bpm: previewCandidate?.bpm ?? null,
-        sha256: project.checksum ?? null,
-        fileSize: project.file_size ?? null,
-        deviceLabel: `Wavi Studio — ${require('os').hostname()}`,
-        files: fileManifest,
-        previewAssetId: previewCandidate?.cloud_asset_id ?? null,
-        previewRelativePath: previewCandidate ? safeRelativePath(previewCandidate.file_path, projectRoot) : null,
-        previewDuration: previewCandidate?.duration ?? null,
-        previewFormat: previewCandidate ? path.extname(previewCandidate.file_name).replace(/^\./, '') : null,
-        previewKey: previewCandidate?.key_note ?? null,
-        previewAutoSelected: !previewCandidate,
-      };
-    })() as any);
+    // Same single manifest builder as project:publishVersion — one snapshot
+    // definition for every publish path in the app.
+    const built = buildPublishManifestBody(opts.projectId);
+    if ('error' in built) return { error: built.error };
+    const published = await desktopApiPost(token, 'publish-project-version', built.body);
 
     if (!published || (published as any).error) return { error: (published as any)?.error ?? 'Failed to publish project version' };
     versionId = (published as any).versionId;
@@ -1629,6 +1631,7 @@ function captureAccountId(did: string) {
   if (did && did !== currentAccountId) {
     if (currentAccountId) plCoordinator.bumpGeneration(); // account switch mid-session
     if (currentAccountId) assistantLinkRefs.clear();
+    if (currentAccountId) { multiplayerRefs.clear(); contributionOps.clear(); }
     currentAccountId = did;
     mainWindow?.webContents.send('auth:account', { accountId: toRendererAccountHandle(did) });
   }
@@ -1753,6 +1756,235 @@ ipcMain.handle('projectLinks:revoke', async (_e, opts: { trackingId: string }) =
   const r = await projectLinksRevokeAuthoritative(opts.trackingId);
   if (!r.ok) return { error: r.message ?? r.reason, reason: r.reason };
   return { ok: true, accountId: rendererAccountHandle(), alreadyRevoked: r.alreadyRevoked };
+});
+
+// ── Multiplayer v1 (P3-4 desktop foundation) ─────────────────────────────────
+// Same locked transport as Project Links (postDesktopAction → /api/desktop).
+// Renderer-facing rules, enforced here rather than in the UI:
+//   · no canonical DID, token, membership/contribution id or server error text
+//     crosses the boundary — only opaque refs + a typed reason + safe copy;
+//   · every mutation resolves its target from an opaque ref bound to the ACTIVE
+//     account + session epoch, so a stale or cross-account ref cannot act;
+//   · nothing is fabricated: a failure is a typed failure, never a fake success.
+// The three multiplayer ASSISTANT tools stay blocked in this task — none of the
+// handlers below is exposed to the model.
+
+function mpDeps(token: string): MultiplayerServiceDeps {
+  return { postDesktop: (action, body) => postDesktopAction(token, action, body), isOnline: () => true };
+}
+
+/** Uniform renderer-safe failure: typed reason + safe copy, never server text. */
+function mpFailure(reason: string) {
+  return { error: MULTIPLAYER_FAILURE_MESSAGE[reason] ?? 'That action could not be completed.', reason };
+}
+
+function mpAuth(): { token: string } | { error: ReturnType<typeof mpFailure> } {
+  const token = getDecryptedToken();
+  if (!token) return { error: mpFailure('unauthorized') };
+  return { token };
+}
+
+ipcMain.handle('multiplayer:listCollaborators', async (_e, opts: { projectId: string; limit?: number }) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const epochAtStart = plCoordinator.generation();
+  const res = await listCollaboratorsAll(mpDeps(a.token), { projectId: opts.projectId, limit: opts.limit });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  if (plCoordinator.generation() !== epochAtStart) return mpFailure('stale-session');
+  captureAccountId(res.accountId);
+  const collaborators = res.records.map((m) =>
+    toSafeMembership(
+      multiplayerRefs.mint({
+        kind: 'member', serverId: m.membershipId, accountId: res.accountId,
+        projectId: m.projectId, epoch: plCoordinator.generation(),
+      }),
+      m,
+    ),
+  );
+  return { ok: true, accountId: rendererAccountHandle(), collaborators, pageComplete: res.pageComplete };
+});
+
+ipcMain.handle('multiplayer:listActivity', async (_e, opts: { projectId: string; limit?: number }) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const epochAtStart = plCoordinator.generation();
+  const res = await listActivityAll(mpDeps(a.token), { projectId: opts.projectId, limit: opts.limit });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  if (plCoordinator.generation() !== epochAtStart) return mpFailure('stale-session');
+  captureAccountId(res.accountId);
+  return {
+    ok: true,
+    accountId: rendererAccountHandle(),
+    events: res.records.map(toSafeActivity),
+    pageComplete: res.pageComplete,
+    // Honest: a newer server event type we cannot describe was skipped, not shown raw.
+    skippedUnknownEvents: res.droppedUnknown,
+  };
+});
+
+/**
+ * Invite by CANONICAL account id. There is no directory/lookup action in the
+ * locked contract and email invitations are explicitly unsupported, so the
+ * caller must already hold an account id — recorded as an open contract gap in
+ * docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md rather than papered over here.
+ */
+ipcMain.handle('multiplayer:inviteCollaborator', async (_e, opts: {
+  projectId: string; inviteeAccountId: string; role: 'view' | 'comment'; canContribute?: boolean;
+}) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const res = await inviteCollaboratorFlow(mpDeps(a.token), opts);
+  if (res.kind === 'failure') {
+    // A locally-rejected role/identity carries its own precise explanation.
+    return res.reason === 'rejected' && res.message ? { error: res.message, reason: 'rejected' } : mpFailure(res.reason);
+  }
+  captureAccountId(res.accountId);
+  const ref = multiplayerRefs.mint({
+    kind: 'member', serverId: res.membership.membershipId, accountId: res.accountId,
+    projectId: res.membership.projectId, epoch: plCoordinator.generation(),
+  });
+  return {
+    ok: true, accountId: rendererAccountHandle(),
+    collaborator: toSafeMembership(ref, res.membership), alreadyInvited: res.alreadyInvited,
+  };
+});
+
+/** Resolve an opaque member ref to its server id under the active session. */
+function resolveMemberRef(ref: unknown, projectId?: string | null) {
+  return multiplayerRefs.resolve(ref, {
+    kind: 'member', accountId: currentAccountId, epoch: plCoordinator.generation(), projectId,
+  });
+}
+function resolveContribRef(ref: unknown, projectId?: string | null) {
+  return multiplayerRefs.resolve(ref, {
+    kind: 'contrib', accountId: currentAccountId, epoch: plCoordinator.generation(), projectId,
+  });
+}
+
+ipcMain.handle('multiplayer:respondInvite', async (_e, opts: { ref: string; accept: boolean }) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const r = resolveMemberRef(opts.ref);
+  if (!r.ok) return { error: 'That invitation is no longer available.', reason: r.reason };
+  const res = await respondInviteFlow(mpDeps(a.token), { membershipId: r.binding.serverId, accept: opts.accept });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  captureAccountId(res.accountId);
+  return {
+    ok: true, accountId: rendererAccountHandle(),
+    collaborator: toSafeMembership(opts.ref, res.membership),
+    accepted: res.accepted, alreadyResponded: res.alreadyResponded,
+  };
+});
+
+/** Remove a collaborator — or leave the project yourself; the server decides. */
+ipcMain.handle('multiplayer:revokeCollaborator', async (_e, opts: { ref: string }) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const r = resolveMemberRef(opts.ref);
+  if (!r.ok) return { error: 'That collaborator is no longer available.', reason: r.reason };
+  const res = await revokeCollaboratorFlow(mpDeps(a.token), { membershipId: r.binding.serverId });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  captureAccountId(res.accountId);
+  return {
+    ok: true, accountId: rendererAccountHandle(),
+    collaborator: toSafeMembership(opts.ref, res.membership), alreadyRevoked: res.alreadyRevoked,
+  };
+});
+
+/**
+ * Submit a child version as a CONTRIBUTION.
+ *
+ * Uses the single publish manifest builder, then adds only the contribution
+ * fields. The operation key is acquired from the ledger BEFORE the request and
+ * kept until the outcome is known, so an interrupted submit is retried with the
+ * SAME key — the server replays it (`alreadySubmitted`) instead of creating a
+ * second contribution. `sourceRestoreId` is never sent (it is a local row id).
+ */
+ipcMain.handle('multiplayer:publishContribution', async (_e, opts: {
+  localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null;
+}) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const built = buildPublishManifestBody(opts.localProjectId);
+  if ('error' in built) return { error: built.error, reason: 'rejected' };
+
+  const cloudProjectId = String(built.body.projectId ?? '');
+  const parentVersionId = opts.parentVersionId ?? (built.body.parentVersionId as string | null);
+  if (!parentVersionId) {
+    return { error: 'This project has no parent version to contribute to.', reason: 'rejected' };
+  }
+
+  const seed = { projectId: cloudProjectId, parentVersionId, localProjectId: opts.localProjectId };
+  const op = contributionOps.acquire(seed);
+  const epochAtStart = plCoordinator.generation();
+
+  const res = await publishContributionFlow(mpDeps(a.token), {
+    projectId: cloudProjectId,
+    parentVersionId,
+    operationKey: op.operationKey,
+    clientCorrelationId: op.operationKey,
+    contributorNote: opts.contributorNote ?? null,
+    manifest: built.body,
+  });
+
+  if (res.kind === 'failure') {
+    // Keep the key ONLY while the outcome is genuinely unknown; a terminal
+    // rejection releases it so a corrected submit is a fresh operation.
+    if (res.reason !== 'contribution-outcome-unknown') contributionOps.release(seed);
+    return mpFailure(res.reason);
+  }
+  contributionOps.release(seed);
+  if (plCoordinator.generation() !== epochAtStart) return mpFailure('stale-session');
+  captureAccountId(res.accountId);
+
+  const contribution = res.contribution
+    ? toSafeContribution(
+        multiplayerRefs.mint({
+          kind: 'contrib', serverId: res.contribution.contributionId, accountId: res.accountId,
+          projectId: res.contribution.projectId, epoch: plCoordinator.generation(),
+        }),
+        res.contribution,
+      )
+    : null;
+
+  return {
+    ok: true, accountId: rendererAccountHandle(), contribution,
+    // True when the server replayed the operation key — this is the ORIGINAL
+    // submission, not a second one. The UI must say "already submitted".
+    alreadySubmitted: res.alreadySubmitted,
+  };
+});
+
+ipcMain.handle('multiplayer:respondContribution', async (_e, opts: {
+  ref: string; accept: boolean; reviewerNote?: string | null;
+}) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const r = resolveContribRef(opts.ref);
+  if (!r.ok) return { error: 'That contribution is no longer available.', reason: r.reason };
+  const res = await respondContributionFlow(mpDeps(a.token), {
+    contributionId: r.binding.serverId, accept: opts.accept, reviewerNote: opts.reviewerNote ?? null,
+  });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  captureAccountId(res.accountId);
+  return {
+    ok: true, accountId: rendererAccountHandle(),
+    contribution: toSafeContribution(opts.ref, res.contribution), alreadyResolved: res.alreadyResolved,
+  };
+});
+
+ipcMain.handle('multiplayer:withdrawContribution', async (_e, opts: { ref: string }) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const r = resolveContribRef(opts.ref);
+  if (!r.ok) return { error: 'That contribution is no longer available.', reason: r.reason };
+  const res = await withdrawContributionFlow(mpDeps(a.token), { contributionId: r.binding.serverId });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  captureAccountId(res.accountId);
+  return {
+    ok: true, accountId: rendererAccountHandle(),
+    contribution: toSafeContribution(opts.ref, res.contribution), alreadyResolved: res.alreadyResolved,
+  };
 });
 
 ipcMain.handle('project:getCloudFiles', async (_e, opts: { cloudProjectId: string }) => {

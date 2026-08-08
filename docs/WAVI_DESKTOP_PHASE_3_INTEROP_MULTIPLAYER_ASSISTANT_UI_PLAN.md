@@ -272,6 +272,24 @@ when green.
   (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
   import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
   smoke and the Ableton live P0 gates remain **separate open release gates**.
+- **P3-4a DESKTOP ADAPTER BUILT (2026-08-08, branch `feat/multiplayer-v1-desktop-adapter`
+  off `feature/ableton-daw-companion@baae3454`, UNMERGED):** server-authoritative Multiplayer v1
+  contract/IPC foundation against the locked server (`wavio@6a4a9e8`,
+  `feat/multiplayer-v1-server-contracts`). One adapter (`electron/multiplayerService.ts`, no
+  networking of its own — injected `postDesktop`), opaque `pmember_…`/`pcontrib_…` refs
+  (`electron/multiplayerRefs.ts`), 8 `multiplayer:*` IPC handlers, and the two divergent inline
+  publish-manifest builders in `main.ts` consolidated into ONE `buildPublishManifestBody()` now
+  shared by plain publish, publish-on-create-link, and contribution. Contribution ambiguity is
+  recovered by REPLAYING the retained `operationKey` (server answers `alreadySubmitted` with the
+  original child version) — never by minting a new key, never by fabricating success.
+  `sourceRestoreId` is never sent. Role vocabulary is `owner`/`view`/`comment` with `canContribute`
+  carried separately; `edit` is rejected pre-network. Gate: **782/782 tests / 45 files / 0 skips**
+  (670 baseline + 112 new, none weakened), `tsc` clean ×2. Dev-only staging check: all 8 actions
+  401 vs 400 for an unknown action on `dpl_AWqDPVanoX6sa1z7Q5jxS3CPY9Nd`; no authenticated pass
+  claimed. **Open contract gap:** no account-discovery action exists, so the desktop cannot obtain
+  an invitee's canonical account id — a collaborator-invite UI is blocked on a server addition.
+  See `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md`. The three multiplayer assistant tools remain
+  BLOCKED; no multiplayer UI was built.
 - **P3-3b LANDED (2026-08-08):** merged into development integration as `38fe0b99`
   (conflict-free). Phase 3's assistant foundation + Project Link wiring are now COMPLETE in
   integration: 670/670 tests / 41 files / 0 skips, packaged build OK, all invariants re-verified.
