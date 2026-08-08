@@ -30,6 +30,11 @@ function fakeDeps(over: Partial<ProjectToolDeps> = {}): ProjectToolDeps {
     openFileById: vi.fn(() => ({ opened: true })),
     getVersions: () => [], getCapabilities: () => ({ dawType: 'ableton', canRestore: true, canOpen: true, notes: [] }),
     classifyErrors: () => ({ retryable: [], permanent: [], missing: [] }),
+    projectLinks: {
+      listProjectLinksSafe: async () => ({ kind: 'ok', links: [], pageComplete: true, reconciliationNeeded: 0 }),
+      createProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
+      revokeProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
+    },
     ...over,
   } as any;
 }

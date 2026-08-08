@@ -34,6 +34,11 @@ function fakeDeps(overrides: Partial<ProjectToolDeps> = {}): ProjectToolDeps & {
     getVersions: () => [],
     getCapabilities: () => ({ dawType: 'ableton', canRestore: true, canOpen: true, notes: [] }),
     classifyErrors: () => ({ retryable: [], permanent: [], missing: [] }),
+    projectLinks: {
+      listProjectLinksSafe: async () => ({ kind: 'ok', links: [], pageComplete: true, reconciliationNeeded: 0 }),
+      createProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
+      revokeProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
+    },
     ...overrides,
   } as any;
 }
@@ -209,7 +214,10 @@ describe('registry integration', () => {
       search_files: false, open_in_daw: true, inspect_sync_status: false, sync_project: false, publish_version: true,
       inspect_project: false, reveal_file: true, open_file: true, inspect_package_completeness: false,
       inspect_daw_compatibility: false, list_local_versions: false, explain_project_errors: false,
-      list_project_links: false, create_project_link: false, revoke_project_link: false,
+      // P3-3b: the Project Link trio is implemented — list is read-only, the
+      // two server mutations are confirmation-gated.
+      list_project_links: false, create_project_link: true, revoke_project_link: true,
+      // Still contract-blocked (honest declines, nothing to confirm).
       invite_collaborator: false, inspect_collaborator_activity: false, publish_child_version: false,
     });
   });

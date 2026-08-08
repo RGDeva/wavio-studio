@@ -42,6 +42,11 @@ function fakeDeps(over: Partial<ProjectToolDeps> = {}): ProjectToolDeps & { audi
     getVersions: () => [{ version_number: 1, created_at: '2026-07-01T00:00:00Z', file_count: 3 }],
     getCapabilities: () => ({ dawType: 'Ableton Live', canRestore: true, canOpen: true, notes: [] }),
     classifyErrors: () => ({ retryable: [], permanent: [], missing: [] }),
+    projectLinks: {
+      listProjectLinksSafe: async () => ({ kind: 'ok', links: [], pageComplete: true, reconciliationNeeded: 0 }),
+      createProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
+      revokeProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
+    },
     auditLog,
     ...over,
   } as any;
@@ -88,7 +93,9 @@ describe('project-context resolution', () => {
 
 describe('no fabricated success / honest blocked states', () => {
   it('server-blocked tools return a typed blockedReason, never a success', async () => {
-    for (const name of ['create_project_link', 'revoke_project_link', 'invite_collaborator', 'publish_child_version', 'list_project_links', 'inspect_collaborator_activity']) {
+    // P3-3b: the Project Link trio is implemented and no longer in this set;
+    // multiplayer + contribution capabilities stay contract-blocked.
+    for (const name of ['invite_collaborator', 'publish_child_version', 'inspect_collaborator_activity']) {
       const r = await tool(fakeDeps(), name).handler({}, ctx());
       expect(r.status, name).toBe('error');
       expect(r.blockedReason, name).toBe('server_contract_pending');

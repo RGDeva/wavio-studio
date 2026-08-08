@@ -46,7 +46,7 @@ const ACTION_LABELS: Record<string, string> = {
   explain_project_errors: 'Explain errors',
   open_in_daw: 'Open in DAW',
   publish_version: 'Publish version',
-  list_project_links: 'List Project Links',
+  list_project_links: 'Project Links',
   create_project_link: 'Create Project Link',
   revoke_project_link: 'Revoke Project Link',
   invite_collaborator: 'Invite collaborator',

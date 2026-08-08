@@ -44,6 +44,7 @@ export default defineConfig({
       'src/lib/codexLinkContractAdapter.test.ts',
       'electron/copilotTools/localTools.test.ts',
       'electron/copilotTools/assistantHardening.test.ts',
+      'electron/copilotTools/assistantProjectLinks.test.ts',
       'src/lib/assistantToolCard.test.ts',
     ],
     environment: 'node',
