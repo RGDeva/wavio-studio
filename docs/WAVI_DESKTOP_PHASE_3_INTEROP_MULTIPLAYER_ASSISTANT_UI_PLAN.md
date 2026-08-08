@@ -272,6 +272,35 @@ when green.
   (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
   import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
   smoke and the Ableton live P0 gates remain **separate open release gates**.
+- **🔴 BLOCKER `P3-4-ID` — Collaborator identity resolution (OPEN, server-owned):** the desktop needs
+  a privacy-safe way to resolve a human-entered collaborator identifier into an inviteable
+  server-side account **without exposing canonical Privy DIDs**. Blocked because all four hold at
+  once: invite requires a canonical DID; email invite is contract-rejected (400); no account
+  discovery/resolution action exists; and DIDs may never reach renderer state, UI, or model
+  surfaces. **Blocks:** collaborator invite UI + the `invite_collaborator` assistant tool.
+  **Does NOT block:** listing collaborators, responding to invites received, self-leave, revoke,
+  activity, contributions, review, withdrawal — all landed. **Recommended fix:** an additive
+  `resolve-invite-target` desktop action returning an opaque, project-scoped, short-TTL
+  `invt_…` reference plus display-only name/avatar (never a DID), with
+  `invite-project-collaborator` extended to accept `inviteTarget` as an alternative to
+  `inviteeAccountId`; non-existent accounts must be indistinguishable from unresolved and
+  rate-limited so the action cannot enumerate Wavi accounts. Must be staging-validated before the
+  desktop unblocks anything. Full statement: §11 of `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md`.
+  **Do not work around this** by prompting for a DID, showing/storing DIDs in the renderer, sending
+  email to the existing invite action, querying Privy from the renderer, inventing local user
+  discovery, or weakening the privacy boundary.
+- **P3-4a MULTIPLAYER v1 DESKTOP ADAPTER LANDED (2026-08-08):**
+  `feat/multiplayer-v1-desktop-adapter@68584d26` merged into `feature/ableton-daw-companion` as
+  `--no-ff` merge `64ea4230` (base `baae3454`; **zero conflicts** — merge-base was integration
+  HEAD). Server contract consumed at `wavio@6a4a9e8`. Membership / activity / contribution desktop
+  foundation is **complete**; version lineage remains **server-authoritative** (no local schema
+  migration); operation-key recovery implemented (retained key replayed, never re-minted, so an
+  interrupted contribution cannot duplicate). **No authenticated desktop staging smoke is
+  claimed** — only an unauthenticated contract probe (8 actions 401, unknown action 400).
+  Multiplayer assistant tools remain blocked; collaborator UI blocked specifically by `P3-4-ID`.
+  Post-merge gate: 782/782 tests / 45 files / 0 skips, tsc ×2 clean, packaged app built,
+  Project Link + assistant lanes 199/199 with no regression.
+  <details><summary>original pre-merge branch entry</summary>
 - **P3-4a DESKTOP ADAPTER BUILT (2026-08-08, branch `feat/multiplayer-v1-desktop-adapter`
   off `feature/ableton-daw-companion@baae3454`, UNMERGED):** server-authoritative Multiplayer v1
   contract/IPC foundation against the locked server (`wavio@6a4a9e8`,
@@ -290,6 +319,7 @@ when green.
   an invitee's canonical account id — a collaborator-invite UI is blocked on a server addition.
   See `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md`. The three multiplayer assistant tools remain
   BLOCKED; no multiplayer UI was built.
+  </details>
 - **P3-3b LANDED (2026-08-08):** merged into development integration as `38fe0b99`
   (conflict-free). Phase 3's assistant foundation + Project Link wiring are now COMPLETE in
   integration: 670/670 tests / 41 files / 0 skips, packaged build OK, all invariants re-verified.

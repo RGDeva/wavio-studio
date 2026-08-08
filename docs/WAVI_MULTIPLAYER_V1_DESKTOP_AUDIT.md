@@ -1,8 +1,16 @@
 # Wavi Desktop — Multiplayer v1 Adapter Audit
 
-Status: **desktop contract/IPC foundation implemented; no UI, no assistant exposure**
-Date: 2026-08-08 · Repo: `wavio-studio` · Branch: `feat/multiplayer-v1-desktop-adapter`
-Base: `feature/ableton-daw-companion` @ `baae3454`
+Status: **LANDED in development integration — desktop contract/IPC foundation complete;
+no UI, no assistant exposure**
+Date: 2026-08-08 · Repo: `wavio-studio`
+Landed: `feat/multiplayer-v1-desktop-adapter` @ `68584d26` → `feature/ableton-daw-companion`
+via `--no-ff` merge `64ea4230` (base `baae3454`; **zero conflicts** — the merge-base *was*
+integration HEAD). Server contract consumed at `wavio @ 6a4a9e8`.
+
+**The Multiplayer desktop FOUNDATION is complete. The Multiplayer FEATURE is not** — the
+collaborator invite UI and the `invite_collaborator` assistant tool stay blocked on **P3-4-ID**
+(§11). Everything reachable without knowing another user's identity works; nothing that requires
+knowing it does.
 
 Server authority (read-only, never modified): `wavio` @ `6a4a9e8050902cd9f16cd3d4e067ef56eb6ca584`,
 branch `feat/multiplayer-v1-server-contracts`, file `api/desktop/multiplayer.ts`, dispatched from
@@ -121,15 +129,7 @@ invented speculatively (and with DR-015: no second musical-session schema).
 | Single membership `state` enum | Booleans | Booleans authoritative; display state derived on top |
 | `sourceRestoreId` as parent hint | Not part of the contract | Never sent; stripped defensively |
 
-## 8. Open contract gap (recorded, not worked around)
-
-**There is no account-discovery action.** `invite-project-collaborator` requires a canonical
-`inviteeAccountId` (Privy DID), email is explicitly unsupported, and the locked contract has no
-lookup/search/handle-resolution action. The desktop therefore has **no way to obtain an invitee's
-account id**, so a collaborator-invite UI cannot be completed by the desktop alone. The adapter
-accepts an explicit account id and validates its shape; it does not invent a lookup. Resolving this
-needs a server-side contract addition (a directory/handle-resolution action, or an invite-by-email
-capability) — to be raised with Codex as a follow-up packet.
+## 8. See §11 — blocker P3-4-ID
 
 ## 9. Verification
 
@@ -151,4 +151,88 @@ The three multiplayer assistant tools (`invite_collaborator`, `inspect_collabora
 `publish_child_version`) **remain blocked** — a test asserts no assistant tool references any
 `multiplayer:` channel. No collaborator UI, no Project Detail redesign, no recipient pages, no
 import-token/package flows, no realtime presence, no simultaneous DAW editing, no WebSockets, no
-comments. No server contract was modified; `wavio` was read-only throughout. Not merged.
+comments. No server contract was modified; `wavio` was read-only throughout.
+
+---
+
+## 11. BLOCKER — `P3-4-ID` · Collaborator identity resolution
+
+**Severity: blocks the Multiplayer v1 collaborator FEATURE (not the foundation).**
+**Owner: server (Codex). Desktop cannot resolve this alone.**
+
+### The problem
+
+The desktop needs a privacy-safe way to turn a **human-entered collaborator identifier** into an
+**inviteable server-side account reference**, without ever exposing a canonical Privy DID to the
+renderer, the model, or the person doing the inviting.
+
+Today that is impossible, because all four of these hold at once:
+
+1. `invite-project-collaborator` requires `inviteeAccountId` — a **canonical Privy DID**.
+2. Email invitation is **explicitly rejected** by the contract
+   (400 "Email invitations are not supported by this contract").
+3. The locked contract has **no account discovery / lookup / handle-resolution action**.
+4. The desktop's own privacy boundary forbids canonical DIDs in renderer state, UI, or model
+   surfaces — so even if a DID were somehow obtained, it could not be typed in, displayed, or stored.
+
+There is no legitimate path from "the user wants to invite their collaborator" to a value the
+server will accept.
+
+### Rejected workarounds — do not implement any of these
+
+| Workaround | Why it is rejected |
+|---|---|
+| Prompt the user to paste a Privy DID | Puts a canonical identity in the UI and renderer state; users don't have it anyway |
+| Show DIDs anywhere in the UI | Violates the renderer privacy boundary |
+| Cache DIDs in renderer state | Same, and it persists the leak |
+| Send an email address to the existing invite action | Contract-rejected (400); pretending otherwise fabricates a capability |
+| Query Privy directly from the renderer | Bypasses the main-process credential boundary entirely |
+| Invent local user discovery / a desktop-side directory | Fabricates identity the server never authorised; unverifiable and unsafe |
+| Weaken the boundary "just for invites" | The boundary is the feature's security model |
+
+The adapter therefore accepts an explicit account id, **validates its shape**, and rejects an email
+locally with the contract's own reason. It does not invent a lookup.
+
+### Recommended contract addition (additive, staging-validated)
+
+A single new desktop action, in the same locked transport
+(`POST /api/desktop` + `X-Desktop-Action`), that resolves a **user-typeable** identifier into an
+**opaque, server-minted, short-lived invite reference** — never a DID:
+
+```
+X-Desktop-Action: resolve-invite-target
+request  { projectId, identifier }        // identifier = email or @handle, user-typed
+response 200 { accountId,                 // the CALLER's own DID (as every action returns)
+               resolved: true,
+               inviteTarget: "invt_…",    // opaque, single-project, short-TTL, server-minted
+               display: { displayName, avatarUrl } }   // display-only, safe to render
+         200 { accountId, resolved: false }            // no account — do NOT reveal existence
+         403 non-owner   ·   429 rate-limited
+```
+
+Then extend the existing invite action **additively**:
+
+```
+invite-project-collaborator
+  accepts EITHER inviteeAccountId (unchanged, server-internal callers)
+              OR inviteTarget     (new, desktop path)
+```
+
+Required properties:
+- `inviteTarget` is **opaque and non-reversible** — it must not encode the DID.
+- **Scoped to one project and short-lived**, so a leaked reference has minimal blast radius.
+- `resolved: false` must be **indistinguishable from a non-existent account** and rate-limited, so
+  the action cannot be used to enumerate who has a Wavi account.
+- Only `displayName` / `avatarUrl` are returned for rendering — never the canonical identity.
+
+With that in place the desktop can build the invite UI with no boundary change: the user types an
+email or handle, the main process resolves it, the renderer only ever sees `invt_…` plus display
+fields, and the DID never leaves the server.
+
+### Until then
+
+- Collaborator **invite UI**: blocked.
+- `invite_collaborator` assistant tool: **stays blocked**.
+- Everything else in Multiplayer v1 (listing collaborators, responding to invites received,
+  self-leave, revoke, activity, contributions, review, withdrawal) is **unblocked and landed** —
+  none of it requires resolving a stranger's identity.
