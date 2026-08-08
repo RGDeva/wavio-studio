@@ -264,6 +264,13 @@ when green.
   (manual, interactive Privy sign-in)** ⏳ · **production deployment remains a SEPARATE gate** ⛔.
 - Assistant Project Link tools remain **blocked pending P3-3b**; recipient page, import token,
   ZIP/Project Pack and contribution APIs remain **excluded**.
+- **P3-3 assistant foundation LANDED (2026-08-08):** `feat/assistant-local-tools-foundation`
+  (`b0f37ae1`) merged into development integration as `f5a8d316`. Deterministic local tools +
+  the three closed safety gaps (no implicit `projects[0]`; no confirmation bypass; no
+  model-visible raw paths) are now in integration. Merged-tree gate: **640/640 vitest across
+  40 files, 0 skips**, tsc x2 clean, prod + unsigned packaged build, scans clean. The single
+  expected `vitest.config.ts` add/add conflict was resolved as a union of both branches'
+  suites. Assistant Project Link tools still return `server_contract_pending` (P3-3b).
 - Live **Project Link creation** against the server — 🧪 unproven (auth/visibility).
 - **Same-DAW Ableton restore** end-to-end — 🧪 unproven.
 - **No "Temp Project"** state after restore — 🧪 unproven live.

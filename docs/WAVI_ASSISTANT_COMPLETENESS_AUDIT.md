@@ -112,3 +112,26 @@ All side-effecting tools share the same out-of-band confirmation gate and path s
 
 **Mergeability:** the three safety gaps are resolved; the branch remains unmerged pending Project
 Link reconciliation (server-blocked tools still return `server_contract_pending`).
+
+---
+
+# LANDED — assistant foundation merged into development integration (2026-08-08)
+
+`feat/assistant-local-tools-foundation` (`b0f37ae1`) merged into
+`feature/ableton-daw-companion` as merge commit `f5a8d316`, on top of the landed P3-2c
+Project Link reconciliation (`ec38ebba`). Development integration — **not** a production release.
+
+- **Conflict:** exactly one, as predicted by the merge-readiness audit — `vitest.config.ts`
+  `test.include` add/add — resolved as a **union** retaining every suite from both branches.
+- **Merged-tree gate:** Node 22; electron + renderer tsc clean; **640/640 vitest across 40 files,
+  0 skips** (543 base + 53 Project Link reconciliation + 44 assistant); production build;
+  unsigned packaged app; `diff --check` clean; secret + absolute-path scans clean.
+- **Invariants re-verified post-merge:** the three safety gaps stay closed (no implicit
+  `projects[0]` — the only textual match is an explanatory comment, the code resolves to `null`;
+  no ungated static open/reveal; `sanitizeToolResult` active at the envelope) AND the Project
+  Link invariants survive the merge (endpoint exactly `/api/desktop` via the single builder;
+  no legacy PL mutation path; Privy DID main-process-only behind the opaque handle).
+- **Still blocked:** assistant Project Link tools continue to return `server_contract_pending`
+  until **P3-3b** wires them to the now-merged `codexLinkContractAdapter` + `reconcileLink`.
+  Multiplayer (collaborator invite/activity, child publish) and the live Ableton E2E gates
+  remain open; recipient page / import token / contribution APIs remain excluded.
