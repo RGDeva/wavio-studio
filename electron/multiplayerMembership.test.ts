@@ -133,12 +133,20 @@ describe('inviteCollaboratorFlow', () => {
 });
 
 describe('respondInviteFlow', () => {
-  it('sends the accept decision explicitly', async () => {
+  // The wire field is `response: 'accept' | 'decline'` — a boolean 400s.
+  it("sends the decision as response: 'accept'", async () => {
     const deps = fakeDeps({ status: 200, json: { accountId: DID, accepted: true, item: MEMBER } });
     const res = await respondInviteFlow(deps, { membershipId: 'mem-1', accept: true });
     expect(deps.calls[0].action).toBe('respond-project-invite');
-    expect(deps.calls[0].body).toEqual({ membershipId: 'mem-1', accept: true });
+    expect(deps.calls[0].body).toEqual({ membershipId: 'mem-1', response: 'accept' });
     expect(res.kind === 'responded' && res.accepted).toBe(true);
+  });
+
+  it("sends response: 'decline' when declining, never a boolean", async () => {
+    const deps = fakeDeps({ status: 200, json: { accountId: DID, declined: true, item: MEMBER } });
+    await respondInviteFlow(deps, { membershipId: 'mem-1', accept: false });
+    expect(deps.calls[0].body).toEqual({ membershipId: 'mem-1', response: 'decline' });
+    expect('accept' in deps.calls[0].body).toBe(false);
   });
 
   it('treats alreadyAccepted as a responded+accepted echo, not a new acceptance', async () => {

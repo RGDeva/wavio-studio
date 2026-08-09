@@ -31,13 +31,14 @@ import {
 import {
   listCollaboratorsAll, listActivityAll, inviteCollaboratorFlow, respondInviteFlow,
   revokeCollaboratorFlow, publishContributionFlow, respondContributionFlow,
-  withdrawContributionFlow, ContributionOperationLedger,
+  withdrawContributionFlow, ContributionOperationLedger, resolveInviteTargetFlow,
   type MultiplayerServiceDeps,
 } from './multiplayerService';
 import {
   MultiplayerRefRegistry, toSafeMembership, toSafeActivity, toSafeContribution,
-  MULTIPLAYER_FAILURE_MESSAGE,
+  toSafeInviteTarget, MULTIPLAYER_FAILURE_MESSAGE, INVITE_TARGET_UNRESOLVED_MESSAGE,
 } from './multiplayerRefs';
+import type { AssistantLinkFailure } from './copilotTools/localTools';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -66,6 +67,33 @@ function mapLinkFailure(reason: string):
     case 'retryable': return 'retryable';
     case 'stale-session': return 'stale_session';
     case 'create-outcome-unknown': return 'create_outcome_unknown';
+    default: return 'malformed_response';
+  }
+}
+
+/**
+ * Normalize a MULTIPLAYER failure into the assistant-safe vocabulary.
+ *
+ * Kept separate from mapLinkFailure because multiplayer has reasons Project
+ * Links does not: `forbidden` (permission, not sign-in), `rate-limited`,
+ * `invite-expired` / `invite-target-expired`, and the contribution-specific
+ * ambiguity. Collapsing them would let the assistant say the wrong thing —
+ * e.g. telling a non-owner to sign in again.
+ */
+function mapMpFailure(reason: string): AssistantLinkFailure {
+  switch (reason) {
+    case 'unauthorized': return 'authentication_required';
+    case 'forbidden': return 'not_owned';
+    case 'offline': return 'offline';
+    case 'not-found': return 'not_found';
+    case 'conflict': return 'conflict';
+    case 'rejected': return 'rejected';
+    case 'retryable': return 'retryable';
+    case 'rate-limited': return 'rate_limited';
+    case 'invite-expired':
+    case 'invite-target-expired': return 'invite_target_expired';
+    case 'contribution-outcome-unknown': return 'contribution_outcome_unknown';
+    case 'stale-session': return 'stale_session';
     default: return 'malformed_response';
   }
 }
@@ -675,6 +703,93 @@ app.whenReady().then(async () => {
           const r = await projectLinksRevokeAuthoritative(resolved.binding.trackingId);
           if (!r.ok) return { kind: 'failure' as const, reason: mapLinkFailure(r.reason) };
           return { kind: 'revoked' as const, ref: o.ref, alreadyRevoked: r.alreadyRevoked };
+        },
+      },
+
+      // ── Multiplayer v1 assistant surface (P3-4) ─────────────────────────
+      // Shares the SAME authoritative flows as the IPC handlers. Every value
+      // the model can see is projected here; DIDs, `invt_…` capabilities and
+      // canonical server ids never cross this boundary.
+      multiplayer: {
+        resolveInviteTargetSafe: async (o: { projectId: string; identifier: string }) => {
+          const token = getDecryptedToken();
+          if (!token) return { kind: 'failure' as const, reason: 'authentication_required' as const };
+          const epochAtStart = plCoordinator.generation();
+          const res = await resolveInviteTargetFlow(mpDeps(token), o);
+          if (res.kind === 'failure') return { kind: 'failure' as const, reason: mapMpFailure(res.reason) };
+          if (plCoordinator.generation() !== epochAtStart) return { kind: 'failure' as const, reason: 'stale_session' as const };
+          captureAccountId(res.accountId);
+          if (res.kind === 'unresolved') return { kind: 'unresolved' as const };
+          const ref = multiplayerRefs.mint({
+            kind: 'invite', serverId: res.inviteTarget, accountId: res.accountId,
+            projectId: o.projectId, epoch: plCoordinator.generation(), expiresAtMs: res.expiresAtMs,
+          });
+          // Only the opaque ref + a display name. No handle, email, or DID.
+          return { kind: 'resolved' as const, target: { ref, displayName: res.display.displayName } };
+        },
+
+        inviteCollaboratorSafe: async (o: {
+          projectId: string; targetRef: string; role: 'view' | 'comment'; canContribute: boolean;
+        }) => {
+          const token = getDecryptedToken();
+          if (!token) return { kind: 'failure' as const, reason: 'authentication_required' as const };
+          const resolved = multiplayerRefs.resolve(o.targetRef, {
+            kind: 'invite', accountId: currentAccountId, epoch: plCoordinator.generation(), projectId: o.projectId,
+          });
+          if (!resolved.ok) {
+            return {
+              kind: 'failure' as const,
+              reason: resolved.reason === 'stale-session' ? ('stale_session' as const)
+                : resolved.reason === 'account-mismatch' ? ('not_owned' as const)
+                : resolved.reason === 'project-mismatch' ? ('stale_project' as const)
+                : ('malformed_reference' as const),
+            };
+          }
+          const res = await inviteCollaboratorFlow(mpDeps(token), {
+            projectId: o.projectId, inviteTarget: resolved.binding.serverId,
+            role: o.role, canContribute: o.canContribute,
+          });
+          if (res.kind === 'failure') return { kind: 'failure' as const, reason: mapMpFailure(res.reason) };
+          multiplayerRefs.forget(o.targetRef);
+          captureAccountId(res.accountId);
+          return {
+            kind: 'ok' as const,
+            displayName: res.membership.actor.displayName,
+            role: res.membership.role === 'owner' ? ('view' as const) : res.membership.role,
+            canContribute: res.membership.canContribute,
+            alreadyInvited: res.alreadyInvited,
+          };
+        },
+
+        listActivitySafe: async (o: { projectId: string; limit?: number }) => {
+          const token = getDecryptedToken();
+          if (!token) return { kind: 'failure' as const, reason: 'authentication_required' as const };
+          const epochAtStart = plCoordinator.generation();
+          const res = await listActivityAll(mpDeps(token), o);
+          if (res.kind === 'failure') return { kind: 'failure' as const, reason: mapMpFailure(res.reason) };
+          if (plCoordinator.generation() !== epochAtStart) return { kind: 'failure' as const, reason: 'stale_session' as const };
+          captureAccountId(res.accountId);
+          return {
+            kind: 'ok' as const,
+            // Closed enum + display-only actor; subject ids are dropped entirely.
+            events: res.records.map((e) => ({
+              type: e.type, displayName: e.actor.displayName, occurredAt: e.occurredAt,
+            })),
+            pageComplete: res.pageComplete,
+            skippedUnknownEvents: res.droppedUnknown,
+          };
+        },
+
+        publishChildVersionSafe: async (o: { projectId: string; contributorNote: string | null }) => {
+          const r = await publishContributionAuthoritative({
+            localProjectId: o.projectId, contributorNote: o.contributorNote,
+          });
+          if (!r.ok) return { kind: 'failure' as const, reason: mapMpFailure(r.reason) };
+          return {
+            kind: 'ok' as const,
+            state: r.state,
+            alreadySubmitted: r.alreadySubmitted,
+          };
         },
       },
     }));
@@ -1823,21 +1938,85 @@ ipcMain.handle('multiplayer:listActivity', async (_e, opts: { projectId: string;
 });
 
 /**
- * Invite by CANONICAL account id. There is no directory/lookup action in the
- * locked contract and email invitations are explicitly unsupported, so the
- * caller must already hold an account id — recorded as an open contract gap in
- * docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md rather than papered over here.
+ * P3-4-ID · Resolve a human-entered identifier into an inviteable target.
+ *
+ * The user types an email or @handle. The server answers with an OPAQUE,
+ * project-scoped, 10-minute capability plus display-only fields. The target's
+ * DID, email and handle never come back, and the `invt_…` capability itself
+ * never crosses to the renderer — it is held here behind a `pinvite_…` ref.
+ *
+ * `resolved: false` is a single, deliberately uninformative state: the server
+ * makes "no such account" and "not discoverable" indistinguishable, and this
+ * handler must not add any signal that would separate them.
+ *
+ * Rate-limited server-side (10 per 15 min per owner+project), so this must only
+ * ever run from an explicit user action — never a background or automatic search.
+ */
+ipcMain.handle('multiplayer:resolveInviteTarget', async (_e, opts: { projectId: string; identifier: string }) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  const epochAtStart = plCoordinator.generation();
+  const res = await resolveInviteTargetFlow(mpDeps(a.token), {
+    projectId: opts?.projectId ?? '', identifier: opts?.identifier ?? '',
+  });
+  if (res.kind === 'failure') {
+    return res.reason === 'rejected' && res.message
+      ? { error: res.message, reason: 'rejected' }
+      : mpFailure(res.reason);
+  }
+  if (plCoordinator.generation() !== epochAtStart) return mpFailure('stale-session');
+  captureAccountId(res.accountId);
+  if (res.kind === 'unresolved') {
+    return { ok: true, resolved: false, message: INVITE_TARGET_UNRESOLVED_MESSAGE };
+  }
+  const ref = multiplayerRefs.mint({
+    kind: 'invite',
+    serverId: res.inviteTarget,          // opaque capability, main-process only
+    accountId: res.accountId,
+    projectId: opts.projectId,
+    epoch: plCoordinator.generation(),
+    expiresAtMs: res.expiresAtMs,
+  });
+  return {
+    ok: true,
+    resolved: true,
+    target: toSafeInviteTarget(ref, opts.projectId, res.display, res.expiresAtMs),
+  };
+});
+
+/**
+ * Invite a collaborator using a resolved target ref.
+ *
+ * The renderer and the model only ever pass `pinvite_…`; the canonical DID is
+ * never handled by the invite UX. The ref is spent on success so the same
+ * lookup cannot be silently reused after the server capability is consumed.
  */
 ipcMain.handle('multiplayer:inviteCollaborator', async (_e, opts: {
-  projectId: string; inviteeAccountId: string; role: 'view' | 'comment'; canContribute?: boolean;
+  projectId: string; targetRef: string; role: 'view' | 'comment'; canContribute?: boolean;
 }) => {
   const a = mpAuth();
   if ('error' in a) return a.error;
-  const res = await inviteCollaboratorFlow(mpDeps(a.token), opts);
+  const r = multiplayerRefs.resolve(opts?.targetRef, {
+    kind: 'invite', accountId: currentAccountId, epoch: plCoordinator.generation(), projectId: opts?.projectId,
+  });
+  if (!r.ok) {
+    return {
+      error: MULTIPLAYER_FAILURE_MESSAGE[r.reason] ?? 'That collaborator lookup is no longer valid.',
+      reason: r.reason,
+    };
+  }
+  const res = await inviteCollaboratorFlow(mpDeps(a.token), {
+    projectId: opts.projectId,
+    inviteTarget: r.binding.serverId,
+    role: opts.role,
+    canContribute: opts.canContribute === true,
+  });
   if (res.kind === 'failure') {
-    // A locally-rejected role/identity carries its own precise explanation.
+    // A locally-rejected role/target carries its own precise explanation.
     return res.reason === 'rejected' && res.message ? { error: res.message, reason: 'rejected' } : mpFailure(res.reason);
   }
+  // The server capability is single-use in effect; drop our handle to it.
+  multiplayerRefs.forget(opts.targetRef);
   captureAccountId(res.accountId);
   const ref = multiplayerRefs.mint({
     kind: 'member', serverId: res.membership.membershipId, accountId: res.accountId,
@@ -1882,7 +2061,11 @@ ipcMain.handle('multiplayer:revokeCollaborator', async (_e, opts: { ref: string 
   if ('error' in a) return a.error;
   const r = resolveMemberRef(opts.ref);
   if (!r.ok) return { error: 'That collaborator is no longer available.', reason: r.reason };
-  const res = await revokeCollaboratorFlow(mpDeps(a.token), { membershipId: r.binding.serverId });
+  // The locked handler needs BOTH ids; projectId comes from the ref's own
+  // binding, so a caller can never revoke across projects.
+  const res = await revokeCollaboratorFlow(mpDeps(a.token), {
+    projectId: r.binding.projectId, membershipId: r.binding.serverId,
+  });
   if (res.kind === 'failure') return mpFailure(res.reason);
   captureAccountId(res.accountId);
   return {
@@ -1900,25 +2083,30 @@ ipcMain.handle('multiplayer:revokeCollaborator', async (_e, opts: { ref: string 
  * SAME key — the server replays it (`alreadySubmitted`) instead of creating a
  * second contribution. `sourceRestoreId` is never sent (it is a local row id).
  */
-ipcMain.handle('multiplayer:publishContribution', async (_e, opts: {
+// THE authoritative contribution publish. Both the IPC handler and the
+// assistant tool call this one function — a single execution path.
+async function publishContributionAuthoritative(opts: {
   localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null;
-}) => {
-  const a = mpAuth();
-  if ('error' in a) return a.error;
+}): Promise<
+  | { ok: true; contribution: ReturnType<typeof toSafeContribution> | null; alreadySubmitted: boolean; state: string }
+  | { ok: false; reason: string; message?: string }
+> {
+  const token = getDecryptedToken();
+  if (!token) return { ok: false, reason: 'unauthorized' };
   const built = buildPublishManifestBody(opts.localProjectId);
-  if ('error' in built) return { error: built.error, reason: 'rejected' };
+  if ('error' in built) return { ok: false, reason: 'rejected', message: built.error };
 
   const cloudProjectId = String(built.body.projectId ?? '');
   const parentVersionId = opts.parentVersionId ?? (built.body.parentVersionId as string | null);
   if (!parentVersionId) {
-    return { error: 'This project has no parent version to contribute to.', reason: 'rejected' };
+    return { ok: false, reason: 'rejected', message: 'This project has no parent version to contribute to.' };
   }
 
   const seed = { projectId: cloudProjectId, parentVersionId, localProjectId: opts.localProjectId };
   const op = contributionOps.acquire(seed);
   const epochAtStart = plCoordinator.generation();
 
-  const res = await publishContributionFlow(mpDeps(a.token), {
+  const res = await publishContributionFlow(mpDeps(token), {
     projectId: cloudProjectId,
     parentVersionId,
     operationKey: op.operationKey,
@@ -1931,10 +2119,10 @@ ipcMain.handle('multiplayer:publishContribution', async (_e, opts: {
     // Keep the key ONLY while the outcome is genuinely unknown; a terminal
     // rejection releases it so a corrected submit is a fresh operation.
     if (res.reason !== 'contribution-outcome-unknown') contributionOps.release(seed);
-    return mpFailure(res.reason);
+    return { ok: false, reason: res.reason, message: res.message };
   }
   contributionOps.release(seed);
-  if (plCoordinator.generation() !== epochAtStart) return mpFailure('stale-session');
+  if (plCoordinator.generation() !== epochAtStart) return { ok: false, reason: 'stale-session' };
   captureAccountId(res.accountId);
 
   const contribution = res.contribution
@@ -1948,22 +2136,47 @@ ipcMain.handle('multiplayer:publishContribution', async (_e, opts: {
     : null;
 
   return {
-    ok: true, accountId: rendererAccountHandle(), contribution,
+    ok: true,
+    contribution,
+    alreadySubmitted: res.alreadySubmitted,
+    state: contribution?.state ?? 'submitted',
+  };
+}
+
+/**
+ * Submit a child version as a CONTRIBUTION.
+ *
+ * Uses the single publish manifest builder, then adds only the contribution
+ * fields. The operation key is acquired from the ledger BEFORE the request and
+ * kept until the outcome is known, so an interrupted submit is retried with the
+ * SAME key — the server replays it (`alreadySubmitted`) instead of creating a
+ * second contribution. `sourceRestoreId` is never sent (it is a local row id).
+ */
+ipcMain.handle('multiplayer:publishContribution', async (_e, opts: {
+  localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null;
+}) => {
+  const r = await publishContributionAuthoritative(opts);
+  if (!r.ok) {
+    return r.reason === 'rejected' && r.message ? { error: r.message, reason: 'rejected' } : mpFailure(r.reason);
+  }
+  return {
+    ok: true, accountId: rendererAccountHandle(), contribution: r.contribution,
     // True when the server replayed the operation key — this is the ORIGINAL
     // submission, not a second one. The UI must say "already submitted".
-    alreadySubmitted: res.alreadySubmitted,
+    alreadySubmitted: r.alreadySubmitted,
   };
 });
 
-ipcMain.handle('multiplayer:respondContribution', async (_e, opts: {
-  ref: string; accept: boolean; reviewerNote?: string | null;
-}) => {
+// Accept / reject. The locked contract carries NO reviewer note, so none is
+// accepted here — silently dropping something a reviewer typed would be worse
+// than not offering the field.
+ipcMain.handle('multiplayer:respondContribution', async (_e, opts: { ref: string; accept: boolean }) => {
   const a = mpAuth();
   if ('error' in a) return a.error;
   const r = resolveContribRef(opts.ref);
   if (!r.ok) return { error: 'That contribution is no longer available.', reason: r.reason };
   const res = await respondContributionFlow(mpDeps(a.token), {
-    contributionId: r.binding.serverId, accept: opts.accept, reviewerNote: opts.reviewerNote ?? null,
+    contributionId: r.binding.serverId, accept: opts.accept,
   });
   if (res.kind === 'failure') return mpFailure(res.reason);
   captureAccountId(res.accountId);

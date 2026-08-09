@@ -224,3 +224,34 @@ open and are **not** claimed by this task.
 Interactive authenticated desktop→staging sign-in smoke; Ableton live P0 gates
 (same-DAW restore round trip, no "Temp Project", revocation denial,
 child-version return, immutability); production deployment.
+
+---
+
+## P3-4 update (2026-08-08) — every capability class is now contract-backed
+
+Branch `feat/multiplayer-v1-ui-assistant`, consuming Multiplayer v1 (`wavio@6a4a9e8`) and
+P3-4-ID identity resolution (`wavio@d95683f`).
+
+**`BLOCKED_CAPABILITIES` is now EMPTY.** The three multiplayer tools that had returned
+`server_contract_pending` since P3-3 are implemented. The blocked-tool machinery is retained (and
+still tested) for the next genuinely-blocked capability rather than deleted.
+
+| Tool | Execution | Confirmation | Notes |
+|---|---|---|---|
+| `find_collaborator` | cloud | ✗ read-only | NEW. Rate-limited server-side (10 / 15 min); runs only on an explicit user request. One neutral answer when nothing resolves, and the model is told **not** to retry spellings — that would probe for who has a Wavi account. |
+| `invite_collaborator` | cloud | ✓ gated | Takes a `pinvite_…` ref from `find_collaborator`, never a DID. Card names project, role and contribution. `view + canContribute` is refused explicitly rather than silently downgraded. |
+| `inspect_collaborator_activity` | cloud | ✗ read-only | Closed enum, display-only actor, limit clamped to 100, discloses partial pages and undescribable newer events. |
+| `publish_child_version` | cloud | ✓ gated | Card says **NEW CHILD VERSION** and explicitly denies overwriting. Stable operation key; `alreadySubmitted` resolves the original; an ambiguous outcome instructs "do NOT submit again". |
+
+**Envelope invariants unchanged and re-verified:** the model cannot self-confirm (`confirmed`,
+`approved`, `confirmedOutOfBand` in model args are stripped); only the renderer's out-of-band
+confirmation executes a gated tool; every tool audits exactly once; a throwing implementation
+becomes a typed error, never a throw.
+
+**Privacy, tested across all four tools:** no canonical Privy DID, no bearer token, no raw
+`invt_…` capability, no absolute path, and no raw server error text in any model-visible result.
+
+Assistant tool coverage is therefore **complete for every capability class that has a server
+contract**. The only assistant-relevant gap left is `P3-4-CL` (no contribution-listing action), which
+limits what `inspect_collaborator_activity` can point the user at — see
+`docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md` §14.

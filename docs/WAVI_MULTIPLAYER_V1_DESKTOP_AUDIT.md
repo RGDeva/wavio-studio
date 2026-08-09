@@ -7,10 +7,12 @@ Landed: `feat/multiplayer-v1-desktop-adapter` @ `68584d26` → `feature/ableton-
 via `--no-ff` merge `64ea4230` (base `baae3454`; **zero conflicts** — the merge-base *was*
 integration HEAD). Server contract consumed at `wavio @ 6a4a9e8`.
 
-**The Multiplayer desktop FOUNDATION is complete. The Multiplayer FEATURE is not** — the
-collaborator invite UI and the `invite_collaborator` assistant tool stay blocked on **P3-4-ID**
-(§11). Everything reachable without knowing another user's identity works; nothing that requires
-knowing it does.
+**UPDATE (2026-08-08) — `P3-4-ID` IS RESOLVED.** Codex shipped
+`resolve-invite-target` at `wavio@d95683f2ff6d64d1442c579153f8a22faad63ce1`
+(deployment `dpl_HTcciPB8SjcHrbeADah3qGecKrEK`). Branch
+`feat/multiplayer-v1-ui-assistant` consumes it and delivers the first complete user-facing
+collaboration workflow. See §12 for what landed, §13 for the four adapter defects that reading the
+real server exposed, and §14 for the one remaining contract gap (`P3-4-CL`).
 
 Server authority (read-only, never modified): `wavio` @ `6a4a9e8050902cd9f16cd3d4e067ef56eb6ca584`,
 branch `feat/multiplayer-v1-server-contracts`, file `api/desktop/multiplayer.ts`, dispatched from
@@ -236,3 +238,122 @@ fields, and the DID never leaves the server.
 - Everything else in Multiplayer v1 (listing collaborators, responding to invites received,
   self-leave, revoke, activity, contributions, review, withdrawal) is **unblocked and landed** —
   none of it requires resolving a stranger's identity.
+
+---
+
+## 12. P3-4 · User-facing collaboration workflow (branch `feat/multiplayer-v1-ui-assistant`)
+
+Base: `feature/ableton-daw-companion @ 8b5129b0`.
+Contracts consumed: Multiplayer v1 `wavio@6a4a9e8` + **P3-4-ID `wavio@d95683f`**.
+
+### Identity resolution
+`resolve-invite-target` is served by the SAME injected transport as every other action — still one
+HTTP implementation. The desktop validates the identifier locally first (mirroring the server's
+own `parseInviteIdentifier`) so a malformed entry never burns one of the user's 10 lookups per
+15 minutes. Resolution runs **only** from an explicit user action: never on keystroke, blur, mount,
+or as a model-initiated retry.
+
+`resolved: false` is a **single** state with a **single** message
+(`INVITE_TARGET_UNRESOLVED_MESSAGE`). The server deliberately makes a hidden account and a
+nonexistent one indistinguishable; there is exactly one string in the codebase for this case and a
+test asserts it contains no hidden/exists wording.
+
+### The `invt_…` capability never leaves main
+The raw server capability is stored only inside a `pinvite_…` ref bound to
+`{account, project, epoch, expiresAtMs}`. It fails closed on malformed, unknown, wrong-kind,
+cross-account, cross-project, stale-epoch, **and expiry** (checked locally against the server's
+10-minute TTL, before a request that would waste a lookup). `forget()` spends the ref on a
+successful invite so a consumed capability cannot be replayed. Logout and account switch clear it.
+
+### Roles
+`view` | `comment`; no `edit`. The server computes
+`can_contribute = role === 'comment' && canContribute`, so a `view` invite **never** claims
+contribution — the UI disables the toggle and the assistant refuses the combination explicitly
+rather than letting the request be silently downgraded.
+
+### Role editing is NOT offered
+The contract has no update-membership action. Rather than shipping a control that would secretly
+revoke-and-reinvite, `roleChangeSupport()` returns `supported: false` and the UI states that
+changing a role means removing and re-inviting.
+
+### Surfaces
+- **Project Detail → Collaborators** — resolve → invite (role + separate contribution toggle),
+  roster with role/contribution/state, owner-only remove. Real states for idle / resolving /
+  resolved / unresolved / rate-limited / offline / auth-required / error, and for empty / pending /
+  expired / revoked / offline / auth-required rosters.
+- **Project Detail → Activity** — server collaborator activity (closed enum, safe actor,
+  `Load more`, honest "N newer events could not be shown") kept **separate** from this device's
+  local sync history so a local event is never mistaken for a collaborator's.
+- **Project Detail → Versions** — compact lineage (`Based on v12 · Contribution · Accepted`) plus
+  contribution accept / reject / withdraw. No optimistic state: every mutation re-reads server
+  truth, and a 409 reconciles instead of reporting success.
+
+Ownership is **server-authoritative** — derived from the roster's own `owner` row, defaulting to
+non-owner so owner-only controls never flash on before truth arrives.
+
+### Assistant
+`BLOCKED_CAPABILITIES` is now **empty**. Four tools: `find_collaborator` (read-only),
+`invite_collaborator` (gated), `inspect_collaborator_activity` (read-only),
+`publish_child_version` (gated). The model receives only `pinvite_…` / display names; it can never
+self-confirm, and the publish card says **NEW CHILD VERSION** and explicitly denies overwriting.
+An unresolved lookup instructs the model **not** to retry spellings — that would probe for who has
+a Wavi account.
+
+## 13. Four adapter defects found by reading the real server
+
+The Multiplayer adapter landed at `64ea4230` had four wire-format bugs. They were not caught
+earlier because the tests asserted the shapes I had assumed, not the server's. All four are fixed
+here and the tests now assert the server's actual contract.
+
+| # | Defect | Reality | Effect if shipped |
+|---|---|---|---|
+| 1 | `respond-project-invite` sent `accept: boolean` | wants `response: 'accept' \| 'decline'` | every invite response 400s |
+| 2 | `respond-project-contribution` sent `accept: boolean` (+ a `reviewerNote` the server ignores) | wants `response: 'accept' \| 'reject'`, no note | every review 400s |
+| 3 | `revoke-project-collaborator` sent only `membershipId` | requires `projectId` **and** `membershipId` | every revoke 400s |
+| 4 | invite sent `canContribute` for `view` | server forces false unless `comment` | silently weaker permission than the UI implied |
+
+**Lesson recorded:** a fake that encodes our own assumption proves nothing about the contract. The
+new suites assert request bodies field-by-field against the locked handler.
+
+## 14. Remaining contract gap — `P3-4-CL` · Contribution listing
+
+There is **no `list-project-contributions` action**. Contributions are only returned by
+`publish-project-version`, `respond-project-contribution`, and `withdraw-project-contribution`,
+and the activity feed's safe projection deliberately drops subject ids.
+
+Consequence: the Contributions section can only show contributions **this device submitted or acted
+on in the current session**. The UI says exactly that and points at the Activity tab; no listing is
+faked. An owner cannot currently see a full queue of pending contributions in one place.
+
+**Requested (additive):** `list-project-contributions { projectId, state?, limit, cursor }` →
+`{ accountId, items: [mapContribution…], pageInfo }` with the same cursor contract as the other
+listings. The desktop already has the parser, the `pcontrib_…` refs, and the review controls; only
+the listing is missing.
+
+## 15. Verification (P3-4)
+
+- **874/874 tests · 48 files · 0 skips** (baseline `8b5129b0` was 782 → **+92**). No test weakened;
+  7 pre-existing assertions were **corrected** to the server's real contract (§13).
+- `tsc --noEmit` clean for both projects · `git diff --check` clean · production build OK ·
+  unsigned packaged `Wavi Studio.app` built.
+- Secret scan and absolute-path scan clean across the new source.
+- **Staging contract check** against `https://wavi-staging-62hpiqw9z-rgdevas-projects.vercel.app/api`
+  (`dpl_HTcciPB8SjcHrbeADah3qGecKrEK`): all **nine** actions — including
+  `resolve-invite-target` — return `401 {"error":"Unauthorized"}`, while an unregistered action
+  returns `400 {"error":"Unknown or missing X-Desktop-Action"}`, proving all nine are registered.
+- **No authenticated desktop smoke was performed and none is claimed.** The desktop token is
+  written by an interactive Privy login into Electron `safeStorage`; there is no non-interactive way
+  to mint one here. **Remaining manual step:** sign in to a staging build, then exercise
+  resolve → invite → roster → activity → contribution submit → accept/reject/withdraw against
+  `dpl_HTcciPB8SjcHrbeADah3qGecKrEK`.
+- **Packaging issue still open, deliberately untouched:** 11 compiled `.test.js` files ship inside
+  `app.asar` (3 containing a developer home path). Pre-existing, no runtime path leak, tracked as a
+  separate packaging-hardening task.
+
+## 16. Remaining release gates
+
+1. Authenticated desktop staging smoke (above) — the only functional gate left.
+2. `P3-4-CL` contribution listing, for a complete owner review queue.
+3. Packaging hardening (compiled test files in `app.asar`).
+4. Merge into development integration (this branch is intentionally **unmerged**).
+5. No production release; no production deployment.

@@ -29,6 +29,7 @@ import type { DesktopResponse } from './projectLinkService';
 // ── Locked action + event vocabulary (mirrors the server constants exactly) ──
 
 export const MULTIPLAYER_ACTIONS = {
+  resolveInviteTarget: 'resolve-invite-target',
   listCollaborators: 'list-project-collaborators',
   invite: 'invite-project-collaborator',
   respondInvite: 'respond-project-invite',
@@ -278,6 +279,10 @@ export type MpFailureReason =
    * KEY — never to mint a new one and never to report success.
    */
   | 'contribution-outcome-unknown'
+  /** 429 — the server's invite-lookup rate limit (10 per 15 min per owner+project). */
+  | 'rate-limited'
+  /** The opaque invite target expired (10 min TTL) or was never valid. */
+  | 'invite-target-expired'
   | 'stale-session';
 
 /**
@@ -292,6 +297,7 @@ export function classifyMultiplayerHttpFailure(status: number, online: boolean):
   if (status === 404) return 'not-found';
   if (status === 409) return 'conflict';
   if (status === 410) return 'invite-expired';
+  if (status === 429) return 'rate-limited';
   if (status === 400) return 'rejected';
   if (status >= 500) return 'retryable';
   return 'malformed';
@@ -408,10 +414,102 @@ export function listActivityAll(
   );
 }
 
-// ── Membership mutations ─────────────────────────────────────────────────────
+// ── Identity resolution (P3-4-ID) ────────────────────────────────────────────
 
-/** Canonical Privy DID shape — the ONLY accepted invitee identity. */
+/** Canonical Privy DID — main-process/server-side only, never a UI input. */
 const PRIVY_DID_RE = /^did:privy:[A-Za-z0-9]+$/;
+
+/** Opaque server-minted invite capability. Never parsed for identity. */
+export const INVITE_TARGET_RE = /^invt_[A-Za-z0-9_-]{32}$/;
+
+/** Server TTL for a minted invite target (10 minutes). */
+export const INVITE_TARGET_TTL_MS = 10 * 60 * 1000;
+
+export type IdentifierCheck =
+  | { ok: true; kind: 'email' | 'handle' }
+  | { ok: false; reason: string };
+
+/**
+ * Mirror of the server's `parseInviteIdentifier` — validated locally so an
+ * obviously malformed entry never consumes one of the user's 10 lookups per
+ * 15 minutes. This is validation ONLY: the raw identifier is passed through
+ * untransformed apart from trimming, and the server's own normalization
+ * (lowercasing, `@` stripping) remains authoritative.
+ */
+export function checkInviteIdentifier(value: unknown): IdentifierCheck {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) return { ok: false, reason: 'Enter an email address or @handle.' };
+  if (raw.length > 254) return { ok: false, reason: 'That identifier is too long.' };
+  const lowered = raw.toLowerCase();
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(lowered)) return { ok: true, kind: 'email' };
+  if (/^@[a-z0-9][a-z0-9._-]{1,38}[a-z0-9]$/.test(lowered)) return { ok: true, kind: 'handle' };
+  return { ok: false, reason: 'Enter a valid email address or @handle.' };
+}
+
+/**
+ * Result of a lookup. `resolved: false` is deliberately ONE state covering both
+ * "no such account" and "account is not discoverable" — the server makes them
+ * indistinguishable on purpose and the desktop must not try to tell them apart
+ * or word them differently.
+ */
+export type ResolveInviteTargetResult =
+  | {
+      kind: 'resolved';
+      accountId: string;
+      /** Opaque capability. Stays in the main process. */
+      inviteTarget: string;
+      /** Display-only. Never an identity. */
+      display: ActorView;
+      /** Local expiry derived from the server's stated TTL. */
+      expiresAtMs: number;
+    }
+  | { kind: 'unresolved'; accountId: string }
+  | Failure;
+
+export async function resolveInviteTargetFlow(
+  deps: MultiplayerServiceDeps,
+  opts: { projectId: string; identifier: string },
+  now = Date.now(),
+): Promise<ResolveInviteTargetResult> {
+  if (!opts.projectId) {
+    return { kind: 'failure', reason: 'rejected', message: 'Select a project first.' };
+  }
+  const check = checkInviteIdentifier(opts.identifier);
+  if (!check.ok) return { kind: 'failure', reason: 'rejected', message: check.reason };
+
+  let res: DesktopResponse;
+  try {
+    res = await deps.postDesktop(MULTIPLAYER_ACTIONS.resolveInviteTarget, {
+      projectId: opts.projectId,
+      identifier: opts.identifier.trim(),
+    });
+  } catch { return { kind: 'failure', reason: 'offline' }; }
+
+  const online = deps.isOnline();
+  if (res.threw || res.status !== 200) {
+    const f = failureFrom(res, online);
+    return { kind: 'failure', reason: f.reason, message: f.message };
+  }
+  const json = (res.json ?? {}) as Record<string, any>;
+  const accountId = str(json.accountId);
+  if (!accountId) return { kind: 'failure', reason: 'malformed', message: 'missing accountId' };
+
+  if (json.resolved !== true) return { kind: 'unresolved', accountId };
+
+  const inviteTarget = str(json.inviteTarget);
+  if (!inviteTarget || !INVITE_TARGET_RE.test(inviteTarget)) {
+    return { kind: 'failure', reason: 'malformed', message: 'invalid invite target' };
+  }
+  return {
+    kind: 'resolved',
+    accountId,
+    inviteTarget,
+    display: parseActor(json.display),
+    expiresAtMs: now + INVITE_TARGET_TTL_MS,
+  };
+}
+
+// ── Membership mutations ─────────────────────────────────────────────────────
 
 export type RoleCheck = { ok: true; role: AssignableRole } | { ok: false; reason: string };
 
@@ -428,37 +526,77 @@ export function normalizeAssignableRole(role: unknown): RoleCheck {
   return { ok: false, reason: `Unsupported role: ${typeof role === 'string' ? role : 'null'}. Use "view" or "comment".` };
 }
 
+/**
+ * The server computes `can_contribute = role === 'comment' && canContribute === true`.
+ * A `view` collaborator therefore can NEVER contribute — asking for it is
+ * silently downgraded server-side, so the desktop must not offer or imply it.
+ */
+export function contributionAllowedForRole(role: AssignableRole): boolean {
+  return role === 'comment';
+}
+
 export type InviteResult =
   | { kind: 'invited'; accountId: string; membership: Membership; alreadyInvited: boolean }
   | Failure;
 
 /**
- * Invite by canonical account id. The contract is explicit that EMAIL
- * INVITATIONS ARE NOT SUPPORTED (400), so the desktop never sends an address —
- * a non-DID input fails locally with an honest message instead of a raw 400.
+ * Invite a collaborator.
+ *
+ * The DESKTOP path always uses an opaque `inviteTarget` minted by
+ * `resolve-invite-target` — it never handles a canonical DID for invite UX.
+ * The direct-DID form remains supported by the server for other callers, and is
+ * accepted here only so main-process/internal code paths keep working; the UI
+ * and the assistant must never reach it. The server rejects supplying both.
  */
 export async function inviteCollaboratorFlow(
   deps: MultiplayerServiceDeps,
-  opts: { projectId: string; inviteeAccountId: string; role: unknown; canContribute?: boolean },
+  opts: {
+    projectId: string;
+    /** Preferred: opaque server-minted target from resolve-invite-target. */
+    inviteTarget?: string;
+    /** Legacy/internal only — never sourced from renderer or model input. */
+    inviteeAccountId?: string;
+    role: unknown;
+    canContribute?: boolean;
+  },
 ): Promise<InviteResult> {
   const roleCheck = normalizeAssignableRole(opts.role);
   if (!roleCheck.ok) return { kind: 'failure', reason: 'rejected', message: roleCheck.reason };
-  if (!PRIVY_DID_RE.test(opts.inviteeAccountId ?? '')) {
+
+  const hasTarget = typeof opts.inviteTarget === 'string' && opts.inviteTarget.length > 0;
+  const hasDid = typeof opts.inviteeAccountId === 'string' && opts.inviteeAccountId.length > 0;
+  if (hasTarget === hasDid) {
+    // The server 400s on both-or-neither; fail locally with a clearer reason.
     return {
       kind: 'failure',
       reason: 'rejected',
-      message: opts.inviteeAccountId?.includes('@')
-        ? 'Email invitations are not supported by this contract — an account id is required.'
+      message: hasDid
+        ? 'Provide exactly one invite identity.'
+        : 'Find the collaborator first — an invite needs a resolved target.',
+    };
+  }
+  if (hasTarget && !INVITE_TARGET_RE.test(opts.inviteTarget!)) {
+    return { kind: 'failure', reason: 'invite-target-expired', message: 'That collaborator lookup is no longer valid. Search again.' };
+  }
+  if (hasDid && !PRIVY_DID_RE.test(opts.inviteeAccountId!)) {
+    return {
+      kind: 'failure',
+      reason: 'rejected',
+      message: opts.inviteeAccountId!.includes('@')
+        ? 'Email invitations are not supported by this contract — resolve the collaborator first.'
         : 'A canonical account id is required to invite a collaborator.',
     };
   }
+
   let res: DesktopResponse;
   try {
     res = await deps.postDesktop(MULTIPLAYER_ACTIONS.invite, {
       projectId: opts.projectId,
-      inviteeAccountId: opts.inviteeAccountId,
+      ...(hasTarget ? { inviteTarget: opts.inviteTarget } : { inviteeAccountId: opts.inviteeAccountId }),
       role: roleCheck.role,
-      canContribute: opts.canContribute === true,
+      // Server forces false unless the role is `comment`; mirror that here so
+      // the request never claims a permission the server will not grant.
+      canContribute: contributionAllowedForRole(roleCheck.role) && opts.canContribute === true,
     });
   } catch {
     // Invite IS deduplicated server-side (duplicate pending → alreadyInvited),
@@ -485,7 +623,12 @@ export type RespondInviteResult =
   | { kind: 'responded'; accountId: string; membership: Membership; accepted: boolean; alreadyResponded: boolean }
   | Failure;
 
-/** Accept or decline an invite addressed to the ACTIVE account (server-enforced). */
+/**
+ * Accept or decline an invite addressed to the ACTIVE account (server-enforced).
+ *
+ * The wire field is `response: 'accept' | 'decline'` — NOT a boolean. Verified
+ * against the locked handler, which 400s on anything else.
+ */
 export async function respondInviteFlow(
   deps: MultiplayerServiceDeps,
   opts: { membershipId: string; accept: boolean },
@@ -494,7 +637,7 @@ export async function respondInviteFlow(
   try {
     res = await deps.postDesktop(MULTIPLAYER_ACTIONS.respondInvite, {
       membershipId: opts.membershipId,
-      accept: opts.accept === true,
+      response: opts.accept === true ? 'accept' : 'decline',
     });
   } catch { return { kind: 'failure', reason: 'offline' }; }
   const online = deps.isOnline();
@@ -531,11 +674,15 @@ export type RevokeMembershipResult =
  */
 export async function revokeCollaboratorFlow(
   deps: MultiplayerServiceDeps,
-  opts: { membershipId: string },
+  opts: { projectId: string; membershipId: string },
 ): Promise<RevokeMembershipResult> {
   let res: DesktopResponse;
   try {
-    res = await deps.postDesktop(MULTIPLAYER_ACTIONS.revokeCollaborator, { membershipId: opts.membershipId });
+    // The locked handler requires BOTH ids — it 400s without projectId.
+    res = await deps.postDesktop(MULTIPLAYER_ACTIONS.revokeCollaborator, {
+      projectId: opts.projectId,
+      membershipId: opts.membershipId,
+    });
   } catch { return { kind: 'failure', reason: 'offline' }; }
   const online = deps.isOnline();
   if (res.threw || res.status !== 200) {
@@ -738,24 +885,31 @@ function parseContributionMutation(res: DesktopResponse, online: boolean, flags:
   if (!accountId) return { kind: 'failure', reason: 'malformed', message: 'missing accountId' };
   const confirmed = flags.some((f) => json[f] === true);
   if (!confirmed) return { kind: 'failure', reason: 'malformed', message: 'no confirmation flag' };
-  const p = parseContribution(json.item ?? json.contribution);
+  // Contribution mutations return the row under `contribution`; membership
+  // mutations use `item`. Accept either so one parser serves both.
+  const p = parseContribution(json.contribution ?? json.item);
   if (!p.ok) return { kind: 'failure', reason: 'malformed', message: p.reason };
   const alreadyResolved =
     json.alreadyAccepted === true || json.alreadyRejected === true || json.alreadyWithdrawn === true;
   return { kind: 'confirmed', accountId, contribution: p.value, alreadyResolved };
 }
 
-/** Owner-only accept/reject of a submitted contribution (403 otherwise). */
+/**
+ * Owner-only accept/reject of a submitted contribution (403 otherwise).
+ *
+ * Wire field is `response: 'accept' | 'reject'` — not a boolean. The locked
+ * handler accepts NO reviewer note, so the desktop does not offer one rather
+ * than silently discarding what a reviewer typed.
+ */
 export async function respondContributionFlow(
   deps: MultiplayerServiceDeps,
-  opts: { contributionId: string; accept: boolean; reviewerNote?: string | null },
+  opts: { contributionId: string; accept: boolean },
 ): Promise<ContributionMutationResult> {
   let res: DesktopResponse;
   try {
     res = await deps.postDesktop(MULTIPLAYER_ACTIONS.respondContribution, {
       contributionId: opts.contributionId,
-      accept: opts.accept === true,
-      reviewerNote: opts.reviewerNote ?? null,
+      response: opts.accept === true ? 'accept' : 'reject',
     });
   } catch { return { kind: 'failure', reason: 'offline' }; }
   return parseContributionMutation(res, deps.isOnline(), ['accepted', 'rejected', 'alreadyAccepted', 'alreadyRejected']);

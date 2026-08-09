@@ -149,11 +149,15 @@ export const BLOCKED_TOOL_MESSAGE: Record<BlockedReason, string> = {
  * and is implemented below against the authoritative main-process service;
  * multiplayer + contribution capabilities remain contract-blocked.
  */
-export const BLOCKED_CAPABILITIES: { name: string; description: string; reason: BlockedReason }[] = [
-  { name: 'invite_collaborator', description: 'Invite a collaborator to a project.', reason: 'server_contract_pending' },
-  { name: 'inspect_collaborator_activity', description: 'Show collaborator activity on a project.', reason: 'server_contract_pending' },
-  { name: 'publish_child_version', description: 'Publish a contribution / child version back to the owner.', reason: 'server_contract_pending' },
-];
+/**
+ * Capabilities that still have no server contract.
+ *
+ * EMPTY as of P3-4: the three multiplayer tools were unblocked once the
+ * Multiplayer v1 contract (wavio@6a4a9e8) and the P3-4-ID identity-resolution
+ * contract (wavio@d95683f) shipped. Kept as the mechanism for the next
+ * genuinely-blocked capability rather than deleted.
+ */
+export const BLOCKED_CAPABILITIES: { name: string; description: string; reason: BlockedReason }[] = [];
 
 // ── Assistant Project Link surface (P3-3b) ───────────────────────────────────
 // The tools below call the SAME authoritative main-process functions the IPC
@@ -165,10 +169,12 @@ export type AssistantLinkFailure =
   | 'authentication_required' | 'account_unverified' | 'offline' | 'not_owned'
   | 'rejected' | 'not_found' | 'conflict' | 'retryable' | 'malformed_response'
   | 'stale_project' | 'stale_session' | 'reconciliation_pending'
-  | 'create_outcome_unknown' | 'malformed_reference';
+  | 'create_outcome_unknown' | 'malformed_reference'
+  // Multiplayer-specific (P3-4)
+  | 'rate_limited' | 'invite_target_expired' | 'contribution_outcome_unknown';
 
 export const ASSISTANT_LINK_FAILURE_MESSAGE: Record<AssistantLinkFailure, string> = {
-  authentication_required: 'Sign in to Wavi to manage Project Links.',
+  authentication_required: 'Sign in to Wavi to do that.',
   account_unverified: 'Your account could not be verified yet — refresh Links once, then try again.',
   offline: "You appear to be offline. Nothing was changed on the server.",
   not_owned: 'That link is not owned by the signed-in account.',
@@ -181,7 +187,11 @@ export const ASSISTANT_LINK_FAILURE_MESSAGE: Record<AssistantLinkFailure, string
   stale_session: 'The session changed before this finished — the result was discarded.',
   reconciliation_pending: 'The authoritative listing is incomplete, so this view may be out of date.',
   create_outcome_unknown: 'The link may or may not have been created. Refresh Links to check — it was NOT retried automatically.',
-  malformed_reference: "That link reference isn't valid for the active project and account.",
+  malformed_reference: "That reference isn't valid for the active project and account.",
+  rate_limited: 'Too many collaborator lookups recently. Tell the user to wait a few minutes — do not retry automatically.',
+  invite_target_expired: 'That collaborator lookup expired. Run find_collaborator again before inviting.',
+  contribution_outcome_unknown:
+    'The contribution may or may not have been submitted. Do NOT submit again — tell the user to refresh the project and check.',
 };
 
 export type AssistantListResult =
@@ -208,6 +218,59 @@ export interface AssistantProjectLinkDeps {
   revokeProjectLinkSafe: (opts: { ref: string; projectId: string }) => Promise<AssistantRevokeResult>;
 }
 
+// ── Assistant Multiplayer surface (P3-4) ─────────────────────────────────────
+// Same discipline as Project Links: these call the SAME authoritative
+// main-process functions the IPC handlers use. The model never sees a canonical
+// DID, a raw `invt_…` capability, a membership id, or a contribution id.
+
+/** What the model is allowed to know about a resolved invite target. */
+export interface AssistantInviteTarget {
+  /** Opaque, project- and session-scoped. Safe to echo back to the model. */
+  ref: string;
+  displayName: string | null;
+}
+
+export type AssistantResolveResult =
+  | { kind: 'resolved'; target: AssistantInviteTarget }
+  /** Deliberately indistinguishable from "no such account". */
+  | { kind: 'unresolved' }
+  | { kind: 'failure'; reason: AssistantLinkFailure };
+
+export type AssistantInviteResult =
+  | { kind: 'ok'; displayName: string | null; role: 'view' | 'comment'; canContribute: boolean; alreadyInvited: boolean }
+  | { kind: 'failure'; reason: AssistantLinkFailure };
+
+/** One activity row as the model may see it — closed enum, display-only actor. */
+export interface AssistantActivityRow {
+  type: string;
+  displayName: string | null;
+  occurredAt: string | null;
+}
+
+export type AssistantActivityResult =
+  | { kind: 'ok'; events: AssistantActivityRow[]; pageComplete: boolean; skippedUnknownEvents: number }
+  | { kind: 'failure'; reason: AssistantLinkFailure };
+
+export type AssistantContributionResult =
+  | { kind: 'ok'; state: string; alreadySubmitted: boolean }
+  | { kind: 'failure'; reason: AssistantLinkFailure };
+
+export interface AssistantMultiplayerDeps {
+  /**
+   * Resolve a user-typed email/@handle. Rate-limited server-side, so this must
+   * run only from an explicit user request — never speculatively.
+   */
+  resolveInviteTargetSafe: (opts: { projectId: string; identifier: string }) => Promise<AssistantResolveResult>;
+  /** Invite using a ref from resolveInviteTargetSafe. Never a DID. */
+  inviteCollaboratorSafe: (opts: {
+    projectId: string; targetRef: string; role: 'view' | 'comment'; canContribute: boolean;
+  }) => Promise<AssistantInviteResult>;
+  listActivitySafe: (opts: { projectId: string; limit?: number }) => Promise<AssistantActivityResult>;
+  publishChildVersionSafe: (opts: {
+    projectId: string; contributorNote: string | null;
+  }) => Promise<AssistantContributionResult>;
+}
+
 // ── Tool specs (deterministic, envelope-wrapped by the caller) ───────────────
 
 export interface LocalInspectionDeps extends EnvelopeDeps {
@@ -228,6 +291,7 @@ export interface LocalInspectionDeps extends EnvelopeDeps {
   classifyErrors: (projectId: string) => { retryable: string[]; permanent: string[]; missing: string[] };
   /** P3-3b: authoritative Project Link operations (assistant-safe projections). */
   projectLinks: AssistantProjectLinkDeps;
+  multiplayer: AssistantMultiplayerDeps;
 }
 
 function staleResult(res: Extract<ProjectContextResolution, { ok: false }>): CopilotToolResult {
@@ -475,8 +539,178 @@ export function buildLocalInspectionToolSpecs(deps: LocalInspectionDeps): Copilo
         };
       },
     },
+
+    // ── Multiplayer v1 (P3-4) — previously blocked, now contract-backed ──────
+    {
+      name: 'find_collaborator',
+      description:
+        'Look up a person by email or @handle to see whether they can be invited to the current project. Read-only. Rate-limited — only run when the user explicitly asks to find or invite someone.',
+      parameters: {
+        identifier: { type: 'string', description: 'An email address or @handle, exactly as the user typed it.' },
+        ...projectIdParam,
+      },
+      execution: 'cloud',
+      // Read-only lookup: no confirmation. Rate limiting is enforced server-side.
+      run: async (params, ctx): Promise<CopilotToolResult> => {
+        const r = resolveToolProjectContext(ctx as ProjectContext | null, params.projectId);
+        if (!r.ok) return staleResult(r);
+        const identifier = typeof params.identifier === 'string' ? params.identifier.trim() : '';
+        if (!identifier) {
+          return { status: 'error', projectId: r.projectId, error: 'Ask the user for an email address or @handle first.' };
+        }
+        const res = await deps.multiplayer.resolveInviteTargetSafe({ projectId: r.projectId, identifier });
+        if (res.kind === 'failure') return linkFailure(res.reason, r.projectId);
+        if (res.kind === 'unresolved') {
+          // One neutral answer. Never speculate about why, and never retry with
+          // variations — that would probe for who has an account.
+          return {
+            status: 'done',
+            projectId: r.projectId,
+            message: 'No inviteable Wavi account found. Do not try other spellings — ask the user to check the address or handle with the person directly.',
+            data: { resolved: false },
+          };
+        }
+        return {
+          status: 'done',
+          projectId: r.projectId,
+          message: `Found ${res.target.displayName ?? 'a Wavi account'} (${res.target.ref}). This lookup expires in about 10 minutes — invite now or search again.`,
+          data: { resolved: true, target: res.target },
+        };
+      },
+    },
+    {
+      name: 'invite_collaborator',
+      description:
+        'Invite someone to the current project using a reference from find_collaborator. Gives another person access — asks for your confirmation first.',
+      parameters: {
+        ref: { type: 'string', description: 'The target reference from find_collaborator (e.g. pinvite_00000001).' },
+        role: { type: 'string', description: 'Access level: view or comment. There is no edit role.', required: false },
+        canContribute: { type: 'boolean', description: 'Allow them to submit contribution versions. Only possible with the comment role.', required: false },
+        ...projectIdParam,
+      },
+      execution: 'cloud',
+      // Grants another human access to the user's project: always gated.
+      requiresConfirmation: true,
+      confirmationSummary: (params, ctx) => {
+        const c = ctx as ProjectContext | null;
+        const m = normalizeMode(params.role);
+        const role = m.mode ?? 'view';
+        const contribute = role === 'comment' && params.canContribute === true;
+        return `Invite ${String(params.ref ?? 'this person')} to “${c?.projectName ?? 'the selected project'}” as ${role}${contribute ? ', allowed to submit contribution versions' : ', not allowed to contribute versions'}? They will be able to open this project.`;
+      },
+      run: async (params, ctx): Promise<CopilotToolResult> => {
+        const r = resolveToolProjectContext(ctx as ProjectContext | null, params.projectId);
+        if (!r.ok) return staleResult(r);
+        const m = normalizeMode(params.role);
+        if (!m.ok) {
+          return { status: 'error', projectId: r.projectId, error: `Role “${m.given}” is not supported. Use view or comment.` };
+        }
+        // The server forces can_contribute false unless the role is comment.
+        // Say so rather than letting the request be silently downgraded.
+        if (params.canContribute === true && m.mode !== 'comment') {
+          return {
+            status: 'error',
+            projectId: r.projectId,
+            error: 'Only a “comment” collaborator can contribute versions. Re-run with role “comment”, or invite as view without contribution.',
+          };
+        }
+        const res = await deps.multiplayer.inviteCollaboratorSafe({
+          projectId: r.projectId,
+          targetRef: String(params.ref ?? ''),
+          role: m.mode,
+          canContribute: params.canContribute === true,
+        });
+        if (res.kind === 'failure') return linkFailure(res.reason, r.projectId);
+        const who = res.displayName ?? 'They';
+        return {
+          status: 'done',
+          projectId: r.projectId,
+          message: res.alreadyInvited
+            ? `${who} already has a pending invitation to “${r.projectName}” — nothing changed.`
+            : `Invited ${who} to “${r.projectName}” as ${res.role}${res.canContribute ? ', able to submit contribution versions' : ''}. They must accept before they get access.`,
+          data: { role: res.role, canContribute: res.canContribute, alreadyInvited: res.alreadyInvited },
+        };
+      },
+    },
+    {
+      name: 'inspect_collaborator_activity',
+      description: 'Show recent collaborator activity on the current project. Read-only.',
+      parameters: {
+        limit: { type: 'number', description: 'How many recent events to show (default 20, max 100).', required: false },
+        ...projectIdParam,
+      },
+      execution: 'cloud',
+      run: async (params, ctx): Promise<CopilotToolResult> => {
+        const r = resolveToolProjectContext(ctx as ProjectContext | null, params.projectId);
+        if (!r.ok) return staleResult(r);
+        const limit = typeof params.limit === 'number' && Number.isFinite(params.limit)
+          ? Math.max(1, Math.min(100, Math.floor(params.limit)))
+          : 20;
+        const res = await deps.multiplayer.listActivitySafe({ projectId: r.projectId, limit });
+        if (res.kind === 'failure') return linkFailure(res.reason, r.projectId);
+        if (!res.events.length) {
+          return { status: 'done', projectId: r.projectId, message: `No collaborator activity on “${r.projectName}” yet.`, data: { events: [] } };
+        }
+        const lines = res.events.map((e) =>
+          `• ${ACTIVITY_PHRASE[e.type] ?? e.type}${e.displayName ? ` — ${e.displayName}` : ''}${e.occurredAt ? ` · ${e.occurredAt}` : ''}`).join('\n');
+        const notes: string[] = [];
+        if (!res.pageComplete) notes.push('there is more activity than shown');
+        if (res.skippedUnknownEvents > 0) notes.push(`${res.skippedUnknownEvents} newer event type(s) could not be described and were skipped`);
+        return {
+          status: 'done',
+          projectId: r.projectId,
+          message: `Recent activity on “${r.projectName}”:\n${lines}${notes.length ? `\n(${notes.join('; ')})` : ''}`,
+          data: { events: res.events, pageComplete: res.pageComplete, skippedUnknownEvents: res.skippedUnknownEvents },
+        };
+      },
+    },
+    {
+      name: 'publish_child_version',
+      description:
+        'Submit your local changes to the current project as a NEW CHILD VERSION for the owner to review. Does not change the version you started from. Asks for your confirmation first.',
+      parameters: {
+        note: { type: 'string', description: 'A short note for the owner describing the changes.', required: false },
+        ...projectIdParam,
+      },
+      execution: 'cloud',
+      // Publishes the user's work to someone else's project: gated.
+      requiresConfirmation: true,
+      confirmationSummary: (params, ctx) => {
+        const c = ctx as ProjectContext | null;
+        const note = typeof params.note === 'string' && params.note.trim() ? ` Note: “${params.note.trim()}”.` : '';
+        const parent = c?.versionId ? ` based on version ${c.versionId}` : ' based on the version you started from';
+        return `Submit “${c?.projectName ?? 'the selected project'}” as a NEW CHILD VERSION${parent} for the owner to review?${note} This creates a new version — it does NOT overwrite or edit the original.`;
+      },
+      run: async (params, ctx): Promise<CopilotToolResult> => {
+        const r = resolveToolProjectContext(ctx as ProjectContext | null, params.projectId);
+        if (!r.ok) return staleResult(r);
+        const note = typeof params.note === 'string' && params.note.trim() ? params.note.trim() : null;
+        const res = await deps.multiplayer.publishChildVersionSafe({ projectId: r.projectId, contributorNote: note });
+        if (res.kind === 'failure') return linkFailure(res.reason, r.projectId);
+        return {
+          status: 'done',
+          projectId: r.projectId,
+          message: res.alreadySubmitted
+            ? `This contribution was already submitted for “${r.projectName}” — the original submission stands. No second version was created.`
+            : `Submitted a new child version of “${r.projectName}” for review (${res.state}). The version you started from is unchanged.`,
+          data: { state: res.state, alreadySubmitted: res.alreadySubmitted },
+        };
+      },
+    },
   ];
 }
+
+/** Human phrasing for the locked activity enum. Unknown types never reach here. */
+const ACTIVITY_PHRASE: Record<string, string> = {
+  collaborator_invited: 'Collaborator invited',
+  collaborator_joined: 'Collaborator joined',
+  collaborator_removed: 'Collaborator removed',
+  version_published: 'Version published',
+  contribution_submitted: 'Contribution submitted',
+  contribution_accepted: 'Contribution accepted',
+  contribution_rejected: 'Contribution rejected',
+  contribution_withdrawn: 'Contribution withdrawn',
+};
 
 /** Collaborator modes the server accepts; `edit` is rejected before any call. */
 function normalizeMode(v: unknown): { ok: true; mode: 'view' | 'comment' } | { ok: false; given: string; mode?: undefined } {

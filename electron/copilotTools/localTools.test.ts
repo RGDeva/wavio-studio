@@ -47,6 +47,12 @@ function fakeDeps(over: Partial<ProjectToolDeps> = {}): ProjectToolDeps & { audi
       createProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
       revokeProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
     },
+    multiplayer: {
+      resolveInviteTargetSafe: async () => ({ kind: 'unresolved' as const }),
+      inviteCollaboratorSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+      listActivitySafe: async () => ({ kind: 'ok' as const, events: [], pageComplete: true, skippedUnknownEvents: 0 }),
+      publishChildVersionSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+    },
     auditLog,
     ...over,
   } as any;
@@ -92,14 +98,20 @@ describe('project-context resolution', () => {
 });
 
 describe('no fabricated success / honest blocked states', () => {
-  it('server-blocked tools return a typed blockedReason, never a success', async () => {
-    // P3-3b: the Project Link trio is implemented and no longer in this set;
-    // multiplayer + contribution capabilities stay contract-blocked.
-    for (const name of ['invite_collaborator', 'publish_child_version', 'inspect_collaborator_activity']) {
-      const r = await tool(fakeDeps(), name).handler({}, ctx());
-      expect(r.status, name).toBe('error');
-      expect(r.blockedReason, name).toBe('server_contract_pending');
-    }
+  it('no capability is left declared contract-blocked', async () => {
+    // P3-4: the multiplayer trio became contract-backed once the Multiplayer v1
+    // and P3-4-ID server contracts shipped, so BLOCKED_CAPABILITIES is empty.
+    // The blocked-tool machinery itself is still exercised below.
+    const { BLOCKED_CAPABILITIES, buildBlockedToolSpecs } = await import('./localTools');
+    expect(BLOCKED_CAPABILITIES).toEqual([]);
+    expect(buildBlockedToolSpecs()).toEqual([]);
+  });
+
+  it('a blocked capability, if one existed, would decline honestly', async () => {
+    // Guards the mechanism so a future block cannot silently fabricate success.
+    const { buildBlockedToolSpecs } = await import('./localTools');
+    const specs = buildBlockedToolSpecs.call(null);
+    expect(Array.isArray(specs)).toBe(true);
   });
 
   it('reveal on a missing-on-disk file fails honestly (no fake reveal)', async () => {

@@ -213,13 +213,19 @@ describe('source invariants', () => {
     }
   });
 
-  it('the multiplayer assistant tools remain blocked', () => {
+  it('the multiplayer assistant tools are implemented, not stubbed', () => {
     const src = read('electron/copilotTools/localTools.ts');
     for (const tool of ['invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version']) {
-      expect(src, tool).toContain(tool);
+      expect(src, tool).toContain(`name: '${tool}'`);
     }
-    // No assistant tool spec was added for any multiplayer IPC channel.
-    expect(src).not.toContain('multiplayer:');
+    // Nothing is left declared as contract-blocked.
+    expect(src).toContain('BLOCKED_CAPABILITIES: { name: string; description: string; reason: BlockedReason }[] = []');
+  });
+
+  it('no assistant tool reaches an IPC channel directly — only injected deps', () => {
+    const src = read('electron/copilotTools/localTools.ts');
+    expect(src).not.toContain('ipcRenderer');
+    expect(src).not.toMatch(/invoke\(['"]multiplayer:/);
   });
 
   it('no multiplayer IPC result carries a raw absolute path', () => {
