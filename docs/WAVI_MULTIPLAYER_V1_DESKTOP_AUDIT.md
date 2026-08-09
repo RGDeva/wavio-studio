@@ -1,18 +1,28 @@
 # Wavi Desktop — Multiplayer v1 Adapter Audit
 
-Status: **LANDED in development integration — desktop contract/IPC foundation complete;
-no UI, no assistant exposure**
+Status: **LANDED in development integration — adapter, UI, and assistant all complete**
 Date: 2026-08-08 · Repo: `wavio-studio`
-Landed: `feat/multiplayer-v1-desktop-adapter` @ `68584d26` → `feature/ableton-daw-companion`
-via `--no-ff` merge `64ea4230` (base `baae3454`; **zero conflicts** — the merge-base *was*
-integration HEAD). Server contract consumed at `wavio @ 6a4a9e8`.
 
-**UPDATE (2026-08-08) — `P3-4-ID` IS RESOLVED.** Codex shipped
-`resolve-invite-target` at `wavio@d95683f2ff6d64d1442c579153f8a22faad63ce1`
-(deployment `dpl_HTcciPB8SjcHrbeADah3qGecKrEK`). Branch
-`feat/multiplayer-v1-ui-assistant` consumes it and delivers the first complete user-facing
-collaboration workflow. See §12 for what landed, §13 for the four adapter defects that reading the
-real server exposed, and §14 for the one remaining contract gap (`P3-4-CL`).
+Landed in two merges onto `feature/ableton-daw-companion`:
+1. `feat/multiplayer-v1-desktop-adapter` @ `68584d26` → `--no-ff` `64ea4230` (base `baae3454`) —
+   contract/IPC foundation. Consumed `wavio @ 6a4a9e8`.
+2. `feat/multiplayer-v1-ui-assistant` @ `eb591e21` → `--no-ff` `f0c7bb74` (base `8b5129b0`) —
+   UI + assistant + the four contract corrections. Consumed `wavio @ d95683f`.
+
+Both merges were conflict-free (each merge-base *was* integration HEAD).
+
+**UPDATE (2026-08-08) — `P3-4-ID` IS RESOLVED, AND THE UI + ASSISTANT ARE LANDED.**
+Codex shipped `resolve-invite-target` at `wavio@d95683f2ff6d64d1442c579153f8a22faad63ce1`
+(deployment `dpl_HTcciPB8SjcHrbeADah3qGecKrEK`).
+`feat/multiplayer-v1-ui-assistant @ eb591e21` merged into `feature/ableton-daw-companion`
+as `--no-ff` merge **`f0c7bb74`** (base `8b5129b0`; **zero conflicts**).
+
+**Multiplayer v1 is now landed in development integration.** See §12 for the workflow, §13 for the
+four adapter defects that reading the real server exposed and which this merge repairs, and §14 for
+the one remaining server-owned gap (`P3-4-CL`).
+
+**Not a release.** Three gates remain open: the authenticated desktop staging smoke (never
+claimed), `P3-4-CL`, and the pre-existing `.test.js` packaging issue. Production is untouched.
 
 Server authority (read-only, never modified): `wavio` @ `6a4a9e8050902cd9f16cd3d4e067ef56eb6ca584`,
 branch `feat/multiplayer-v1-server-contracts`, file `api/desktop/multiplayer.ts`, dispatched from
@@ -31,7 +41,8 @@ Where the earlier desktop packet
 | Pure contract adapter | `electron/multiplayerService.ts` | Locked actions/vocabulary, fail-closed parsers, status mapping, pagination, mutation flows, operation-key ledger. **No networking of its own.** |
 | Boundary + projections | `electron/multiplayerRefs.ts` | `pmember_…` / `pcontrib_…` opaque refs, renderer-safe views, honest failure copy |
 | Wiring | `electron/main.ts` | 8 IPC handlers, session/epoch invalidation, single manifest builder |
-| Renderer surface | `electron/preload.ts`, `src/lib/api.ts` | `window.wavi.multiplayer.*` + types. **No component consumes it yet.** |
+| Renderer surface | `electron/preload.ts`, `src/lib/api.ts` | `window.wavi.multiplayer.*` + types |
+| UI (added in P3-4, §12) | `src/components/CollaboratorsPanel.tsx`, `src/lib/collaborationView.ts` | Collaborators / activity / contributions / lineage, over a pure tested view-model |
 
 There is **one** HTTP implementation in the app (`postDesktopAction` in `main.ts`, endpoint from
 `buildDesktopEndpoint`). The multiplayer service takes an injected `postDesktop` dependency; a test
@@ -357,3 +368,68 @@ the listing is missing.
 3. Packaging hardening (compiled test files in `app.asar`).
 4. Merge into development integration (this branch is intentionally **unmerged**).
 5. No production release; no production deployment.
+
+---
+
+## 17. LANDED in development integration (2026-08-08)
+
+`feat/multiplayer-v1-ui-assistant @ eb591e21` → `feature/ableton-daw-companion`
+via `--no-ff` merge **`f0c7bb74`**. Base `8b5129b0`; merge-base *was* integration HEAD, so the
+merge was conflict-free by construction. 24 files, no unrelated files.
+
+### The four contract corrections survived the merge (re-verified post-merge)
+
+| Fix | Post-merge state | Cross-checked against `wavio@d95683f` |
+|---|---|---|
+| respond-invite | sends `response: 'accept' \| 'decline'`; no `accept` on the wire | server reads `text(body.response)` |
+| respond-contribution | sends `response: 'accept' \| 'reject'`; **no** `reviewerNote` | server reads `text(body.response)`; no note field exists |
+| revoke-collaborator | sends **both** `projectId` and `membershipId` | server reads both and 400s without either |
+| contribution permission | `view` can never contribute; `comment` only with explicit `canContribute`; `owner` contributes by ownership | server: `can_contribute = role === 'comment' && body.canContribute === true`, and publish allows `access.owner \|\| membership.can_contribute` |
+
+These are repairs, not preferences: without them every invite response, contribution review and
+collaborator revoke would have returned 400, and a `view` invite would have carried a silently
+weaker permission than the UI implied.
+
+### Invariants re-verified post-merge
+
+- **Networking** — zero `fetch(`/header/credential code in `multiplayerService.ts`; exactly one
+  `DESKTOP_ENDPOINT`; all nine actions use the injected transport.
+- **Privacy** — runtime test proves no canonical DID, bearer token, raw `invt_…`, absolute path or
+  raw server error in any model-visible result. The only occurrences of `invt_` in renderer/model
+  source are doc comments forbidding it.
+- **Identity** — one neutral `resolved:false` message, present exactly twice (main + view-model) and
+  nowhere else; 429 normalized to its own reason; `pinvite_…` refs scoped by
+  account/project/epoch/expiry and spent on success.
+- **Lineage** — server-authoritative; **no** local schema migration (`electron/db.ts` untouched by
+  this merge). Contribution language never implies overwriting a parent.
+- **Manifest** — still exactly one `buildPublishManifestBody`; `sourceRestoreId` present only as the
+  field being stripped.
+- **Assistant** — `BLOCKED_CAPABILITIES` empty; no multiplayer tool returns
+  `server_contract_pending`. (The `BlockedReason` type and its message are retained as machinery for
+  a future block, and are still tested.)
+- **Project Link** — no regression; PL and assistant-PL suites green.
+
+### Post-merge gate
+
+**874/874 tests · 48 files · 0 skips.** `tsc --noEmit` clean for both projects ·
+`git diff --check` clean · production build OK · unsigned packaged `Wavi Studio.app` built ·
+secret and absolute-path scans clean.
+
+## 18. `P3-4-CL` — the remaining server-owned gap (OPEN)
+
+**Landing this feature did not close it.** There is still no `list-project-contributions` action.
+
+What the desktop deliberately does **not** do:
+- it does not fabricate a contribution-review queue;
+- it does not derive canonical contribution ids from the activity feed (the safe projection drops
+  subject ids on purpose);
+- it does not persist an invented local contribution list;
+- it does not present session-local contribution state as complete project history.
+
+What it does: shows only contributions known to this session, and **says so in the UI**.
+
+**Consequence:** a project owner still cannot see a durable queue of pending contributions awaiting
+review. That is a feature-completeness and release gate — not a development-integration blocker.
+
+Proposed additive contract and acceptance criteria:
+`docs/handoffs/DESKTOP-TO-CODEX-P3-4-CL-contribution-listing.md`.

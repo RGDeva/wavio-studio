@@ -255,3 +255,19 @@ Assistant tool coverage is therefore **complete for every capability class that 
 contract**. The only assistant-relevant gap left is `P3-4-CL` (no contribution-listing action), which
 limits what `inspect_collaborator_activity` can point the user at — see
 `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md` §14.
+
+### LANDED (2026-08-08)
+
+`feat/multiplayer-v1-ui-assistant@eb591e21` merged into `feature/ableton-daw-companion` as
+`--no-ff` **`f0c7bb74`**. Post-merge re-verification: `BLOCKED_CAPABILITIES` is empty, no multiplayer
+tool returns `server_contract_pending`, and a runtime privacy test proves no canonical DID, bearer
+token, raw `invt_…` capability, absolute path or raw server error appears in any model-visible
+result. Gate: 874/874 · 48 files · 0 skips.
+
+The `BlockedReason` type and its message are deliberately retained (and still tested) as the
+mechanism for the next genuinely-blocked capability — an empty list is not a deleted safety net.
+
+Remaining assistant-relevant limitation: `P3-4-CL`. With no `list-project-contributions` action,
+`inspect_collaborator_activity` can tell a user that contributions happened but cannot point them at
+a durable review queue, and `publish_child_version` results are only visible for the current
+session. The assistant states this honestly rather than implying a complete history.

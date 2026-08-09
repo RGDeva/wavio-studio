@@ -281,8 +281,20 @@ when green.
   `{ accountId, items, pageInfo }` on the existing cursor contract. The desktop already has the
   parser, `pcontrib_…` refs, and review controls. Detail:
   `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md` §14.
-- **✅ P3-4 MULTIPLAYER v1 UI + ASSISTANT BUILT (2026-08-08, branch
-  `feat/multiplayer-v1-ui-assistant` off `feature/ableton-daw-companion@8b5129b0`, UNMERGED):**
+- **✅ P3-4 MULTIPLAYER v1 UI + ASSISTANT LANDED (2026-08-08):**
+  `feat/multiplayer-v1-ui-assistant@eb591e21` merged into `feature/ableton-daw-companion` as
+  `--no-ff` merge **`f0c7bb74`** (base `8b5129b0`; **zero conflicts**). **Multiplayer v1 is now
+  landed in development integration** — adapter, UI and assistant complete. The four contract
+  corrections were re-verified post-merge against `wavio@d95683f` (respond-invite and
+  respond-contribution use `response:'…'`; revoke sends `projectId`+`membershipId`; `view` can never
+  contribute, `comment` only with explicit `canContribute`, `owner` by ownership). Post-merge gate:
+  **874/874 / 48 files / 0 skips**, tsc ×2 clean, packaged app built, scans clean, Project Link
+  regression green, no local lineage migration (`electron/db.ts` untouched).
+  **Release still blocked on:** authenticated desktop staging smoke (never claimed), `P3-4-CL`, and
+  the `.test.js` packaging issue. Production untouched.
+  <details><summary>original pre-merge branch entry</summary>
+- **P3-4 built (branch `feat/multiplayer-v1-ui-assistant` off
+  `feature/ableton-daw-companion@8b5129b0`):**
   first complete user-facing checkpoint-collaboration workflow. Consumes Multiplayer v1
   (`wavio@6a4a9e8`) + **P3-4-ID `wavio@d95683f`** (deployment `dpl_HTcciPB8SjcHrbeADah3qGecKrEK`).
   Delivered: identity resolution behind opaque 10-minute `pinvite_…` refs (raw `invt_…` never
@@ -300,6 +312,7 @@ when green.
   corrected, none weakened), tsc ×2 clean, packaged app built, scans clean. Staging probe: all
   **nine** actions 401 vs 400 for an unknown action. **No authenticated desktop smoke claimed** —
   interactive Privy login required; the exact manual step is recorded in the audit §15.
+  </details>
 - **🔴 BLOCKER `P3-4-ID` — Collaborator identity resolution (RESOLVED 2026-08-08 by
   `wavio@d95683f`; kept for history):** the desktop needs
   a privacy-safe way to resolve a human-entered collaborator identifier into an inviteable
