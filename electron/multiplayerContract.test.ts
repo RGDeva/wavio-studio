@@ -59,12 +59,15 @@ const okPage = (items: any[], hasMore = false, nextCursor: string | null = null)
 });
 
 describe('locked action + event vocabulary', () => {
-  it('uses exactly the eight server action names', () => {
+  it('uses exactly the nine server action names', () => {
+    // Nine as of the P3-4-ID contract (wavio@d95683f), which added
+    // resolve-invite-target ahead of the original eight.
     expect([...Object.values(MULTIPLAYER_ACTIONS)].sort()).toEqual([
       'invite-project-collaborator',
       'list-project-activity',
       'list-project-collaborators',
       'publish-project-version',
+      'resolve-invite-target',
       'respond-project-contribution',
       'respond-project-invite',
       'revoke-project-collaborator',

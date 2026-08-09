@@ -35,6 +35,12 @@ function fakeDeps(over: Partial<ProjectToolDeps> = {}): ProjectToolDeps {
       createProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
       revokeProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
     },
+    multiplayer: {
+      resolveInviteTargetSafe: async () => ({ kind: 'unresolved' as const }),
+      inviteCollaboratorSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+      listActivitySafe: async () => ({ kind: 'ok' as const, events: [], pageComplete: true, skippedUnknownEvents: 0 }),
+      publishChildVersionSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+    },
     ...over,
   } as any;
 }

@@ -272,7 +272,36 @@ when green.
   (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
   import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
   smoke and the Ableton live P0 gates remain **separate open release gates**.
-- **🔴 BLOCKER `P3-4-ID` — Collaborator identity resolution (OPEN, server-owned):** the desktop needs
+- **🟡 OPEN GAP `P3-4-CL` — Contribution listing (server-owned, non-blocking):** there is no
+  `list-project-contributions` action. Contributions are returned only by publish / respond /
+  withdraw, and the activity feed's safe projection drops subject ids by design. The desktop
+  therefore shows only contributions submitted or acted on **in the current session**, and says so
+  in the UI — no listing is faked. An owner cannot yet see a full pending-contribution queue.
+  **Requested (additive):** `list-project-contributions { projectId, state?, limit, cursor }` →
+  `{ accountId, items, pageInfo }` on the existing cursor contract. The desktop already has the
+  parser, `pcontrib_…` refs, and review controls. Detail:
+  `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md` §14.
+- **✅ P3-4 MULTIPLAYER v1 UI + ASSISTANT BUILT (2026-08-08, branch
+  `feat/multiplayer-v1-ui-assistant` off `feature/ableton-daw-companion@8b5129b0`, UNMERGED):**
+  first complete user-facing checkpoint-collaboration workflow. Consumes Multiplayer v1
+  (`wavio@6a4a9e8`) + **P3-4-ID `wavio@d95683f`** (deployment `dpl_HTcciPB8SjcHrbeADah3qGecKrEK`).
+  Delivered: identity resolution behind opaque 10-minute `pinvite_…` refs (raw `invt_…` never
+  leaves main); Project Detail **Collaborators** tab (resolve → invite with role + separate
+  contribution toggle, roster, owner-only remove); server collaborator **Activity** feed kept
+  separate from this device's local history; **Versions** lineage + contribution
+  accept/reject/withdraw with no optimistic state; and **all three multiplayer assistant tools
+  unblocked** (`BLOCKED_CAPABILITIES` is now empty) plus a new read-only `find_collaborator`.
+  Role editing is deliberately **not** offered — the contract has no update-membership action, so
+  the UI states that changing a role means remove + re-invite.
+  **Also fixed four wire-format defects in the previously-landed adapter** that the earlier tests
+  had masked by asserting assumed shapes: respond-invite and respond-contribution use
+  `response: '…'` not `accept: boolean`; revoke requires `projectId`; and `view` can never carry
+  `canContribute`. Gate: **874/874 tests / 48 files / 0 skips** (782 baseline + 92; 7 assertions
+  corrected, none weakened), tsc ×2 clean, packaged app built, scans clean. Staging probe: all
+  **nine** actions 401 vs 400 for an unknown action. **No authenticated desktop smoke claimed** —
+  interactive Privy login required; the exact manual step is recorded in the audit §15.
+- **🔴 BLOCKER `P3-4-ID` — Collaborator identity resolution (RESOLVED 2026-08-08 by
+  `wavio@d95683f`; kept for history):** the desktop needs
   a privacy-safe way to resolve a human-entered collaborator identifier into an inviteable
   server-side account **without exposing canonical Privy DIDs**. Blocked because all four hold at
   once: invite requires a canonical DID; email invite is contract-rejected (400); no account

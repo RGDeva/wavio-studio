@@ -19,6 +19,9 @@ import { createProjectLinkClient } from '../lib/projectLinkClientFactory';
 import { StatusBadge } from './ui/StatusBadge';
 import { Button } from './ui/Button';
 import { Tabs } from './ui/Tabs';
+import { CollaboratorsPanel, CollaboratorActivityFeed, ContributionsList } from './CollaboratorsPanel';
+import { lineageCaption } from '../lib/collaborationView';
+import type { SafeContribution } from '../lib/api';
 import { Progress } from './ui/Progress';
 import { SectionHeader } from './ui/SectionHeader';
 import { FileRow } from './ui/FileRow';
@@ -49,11 +52,12 @@ const TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'files', label: 'Files' },
   { id: 'versions', label: 'Versions' },
+  { id: 'collaborators', label: 'Collaborators' },
   { id: 'dependencies', label: 'Dependencies' },
   { id: 'compatibility', label: 'Compatibility' },
   { id: 'activity', label: 'Activity' },
 ];
-type Tab = 'overview' | 'files' | 'versions' | 'dependencies' | 'compatibility' | 'activity';
+type Tab = 'overview' | 'files' | 'versions' | 'collaborators' | 'dependencies' | 'compatibility' | 'activity';
 
 interface ProjectDetailProps {
   project: Project;
@@ -65,6 +69,12 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   const [tab, setTab] = useState<Tab>('overview');
   const [files, setFiles] = useState<DetailFile[]>([]);
   const [versions, setVersions] = useState<any[]>([]);
+  // Multiplayer v1. Ownership is server-authoritative: it comes from the
+  // roster's own `owner` row, never from a local guess. Until the roster
+  // loads we assume NOT owner, so owner-only controls never flash on.
+  const [isProjectOwner, setIsProjectOwner] = useState(false);
+  // Session-scoped only — see the note in the Contributions section (P3-4-CL).
+  const [contributions, setContributions] = useState<SafeContribution[]>([]);
   const [links, setLinks] = useState<LinkListItem[]>([]);
   const [activity, setActivity] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -476,24 +486,61 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               })}
             </div>
           ) : tab === 'versions' ? (
-            <div className="p-4">
-              {versions.length === 0 ? (
-                <EmptyState icon={CheckCircle2} title="No versions yet"
-                  description="Publish Version creates an immutable snapshot you can share and restore." />
-              ) : (
-                <div className="space-y-2">
-                  {versions.map((v: any) => (
-                    <div key={v.id} className="flex items-center gap-3 py-2.5 border-b border-border-subtle">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-primary/50 flex-shrink-0" />
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-foreground/75">{v.label ?? 'Version'} <span className="text-[10px] text-muted-fg ml-1 font-mono">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span></p>
-                        {v.file_size ? <p className="text-[10px] text-muted-fg font-mono">{formatBytes(v.file_size)}</p> : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="p-4 space-y-6">
+              <section>
+                <SectionHeader label="Versions" count={versions.length} />
+                {versions.length === 0 ? (
+                  <EmptyState icon={CheckCircle2} title="No versions yet"
+                    description="Publish Version creates an immutable snapshot you can share and restore." />
+                ) : (
+                  <div className="space-y-2">
+                    {versions.map((v: any, i: number) => {
+                      // Compact lineage: the server stays authoritative; this
+                      // only labels what it already told us. Restoring an older
+                      // version creates a NEW descendant — never a rewrite.
+                      const parentLabel = i + 1 < versions.length
+                        ? (versions[i + 1].label ?? `v${versions.length - i - 1}`)
+                        : null;
+                      const caption = lineageCaption({ parentVersionLabel: parentLabel, isContribution: false });
+                      return (
+                        <div key={v.id} className="flex items-center gap-3 py-2.5 border-b border-border-subtle">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-primary/50 flex-shrink-0" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-foreground/75">{v.label ?? 'Version'} <span className="text-[10px] text-muted-fg ml-1 font-mono">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span></p>
+                            <p className="text-[10px] text-muted-fg font-mono">
+                              {caption ? `${caption}${v.file_size ? ' · ' : ''}` : ''}{v.file_size ? formatBytes(v.file_size) : ''}
+                            </p>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+
+              <section>
+                <SectionHeader label="Contributions" count={contributions.length} />
+                <ContributionsList
+                  projectId={project.id}
+                  contributions={contributions}
+                  isOwner={isProjectOwner}
+                  onChanged={() => setContributions((c) => [...c])}
+                />
+                {/* Honest limitation: the locked contract has no
+                    list-project-contributions action, so this shows only
+                    contributions this device submitted or acted on in the
+                    current session. Tracked as P3-4-CL. */}
+                <p className="mt-2 text-[10px] text-muted-fg">
+                  Shows contributions from this device this session. A full list across
+                  collaborators needs a server action that does not exist yet — watch the
+                  Activity tab for contribution events in the meantime.
+                </p>
+              </section>
             </div>
+          ) : tab === 'collaborators' ? (
+            // Server-authoritative roster + invite flow. Ownership comes from
+            // the server's own membership rows, not a local guess.
+            <CollaboratorsPanel projectId={project.id} isOwner={isProjectOwner} onOwnershipResolved={setIsProjectOwner} />
           ) : tab === 'dependencies' ? (
             <div className="p-5 space-y-4">
               <div>
@@ -544,19 +591,27 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               )}
             </div>
           ) : (
-            <div className="p-4">
-              {activity.length === 0 ? (
-                <EmptyState icon={AlertTriangle} title="No activity yet" description="Sync, publish, and link events for this project will appear here." />
-              ) : (
-                <div className="space-y-1">
-                  {activity.map((a: any) => (
-                    <div key={a.id} className="flex items-start gap-2 py-1.5 border-b border-border-subtle last:border-0">
-                      <span className="text-[10px] text-muted-fg w-32 flex-shrink-0 font-mono">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
-                      <span className="text-[11px] text-foreground/55 min-w-0 truncate" title={a.message}>{a.message}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+            <div className="p-4 space-y-6">
+              {/* Server-authoritative collaborator events (Multiplayer v1). */}
+              <CollaboratorActivityFeed projectId={project.id} />
+
+              {/* This machine's own local sync/publish history — kept separate
+                  so a local event is never mistaken for a collaborator's. */}
+              <section>
+                <SectionHeader label="This device" count={activity.length} />
+                {activity.length === 0 ? (
+                  <EmptyState icon={AlertTriangle} title="No local activity yet" description="Sync, publish, and link events from this device will appear here." />
+                ) : (
+                  <div className="space-y-1">
+                    {activity.map((a: any) => (
+                      <div key={a.id} className="flex items-start gap-2 py-1.5 border-b border-border-subtle last:border-0">
+                        <span className="text-[10px] text-muted-fg w-32 flex-shrink-0 font-mono">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
+                        <span className="text-[11px] text-foreground/55 min-w-0 truncate" title={a.message}>{a.message}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
             </div>
           )}
         </div>

@@ -134,11 +134,12 @@ contextBridge.exposeInMainWorld('waviAPI', {
   multiplayer: {
     listCollaborators: (opts: { projectId: string; limit?: number }) => ipcRenderer.invoke('multiplayer:listCollaborators', opts),
     listActivity: (opts: { projectId: string; limit?: number }) => ipcRenderer.invoke('multiplayer:listActivity', opts),
-    inviteCollaborator: (opts: { projectId: string; inviteeAccountId: string; role: 'view' | 'comment'; canContribute?: boolean }) => ipcRenderer.invoke('multiplayer:inviteCollaborator', opts),
+    resolveInviteTarget: (opts: { projectId: string; identifier: string }) => ipcRenderer.invoke('multiplayer:resolveInviteTarget', opts),
+    inviteCollaborator: (opts: { projectId: string; targetRef: string; role: 'view' | 'comment'; canContribute?: boolean }) => ipcRenderer.invoke('multiplayer:inviteCollaborator', opts),
     respondInvite: (opts: { ref: string; accept: boolean }) => ipcRenderer.invoke('multiplayer:respondInvite', opts),
     revokeCollaborator: (opts: { ref: string }) => ipcRenderer.invoke('multiplayer:revokeCollaborator', opts),
     publishContribution: (opts: { localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null }) => ipcRenderer.invoke('multiplayer:publishContribution', opts),
-    respondContribution: (opts: { ref: string; accept: boolean; reviewerNote?: string | null }) => ipcRenderer.invoke('multiplayer:respondContribution', opts),
+    respondContribution: (opts: { ref: string; accept: boolean }) => ipcRenderer.invoke('multiplayer:respondContribution', opts),
     withdrawContribution: (opts: { ref: string }) => ipcRenderer.invoke('multiplayer:withdrawContribution', opts),
   },
 

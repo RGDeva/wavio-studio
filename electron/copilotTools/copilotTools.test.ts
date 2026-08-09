@@ -39,6 +39,12 @@ function fakeDeps(overrides: Partial<ProjectToolDeps> = {}): ProjectToolDeps & {
       createProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
       revokeProjectLinkSafe: async () => ({ kind: 'failure', reason: 'offline' }),
     },
+    multiplayer: {
+      resolveInviteTargetSafe: async () => ({ kind: 'unresolved' as const }),
+      inviteCollaboratorSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+      listActivitySafe: async () => ({ kind: 'ok' as const, events: [], pageComplete: true, skippedUnknownEvents: 0 }),
+      publishChildVersionSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+    },
     ...overrides,
   } as any;
 }
@@ -202,7 +208,9 @@ describe('registry integration', () => {
       'inspect_project', 'reveal_file', 'open_file', 'inspect_package_completeness', 'inspect_daw_compatibility',
       'list_local_versions', 'explain_project_errors',
       'list_project_links', 'create_project_link', 'revoke_project_link',
-      'invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version',
+      // P3-4: multiplayer, now contract-backed. find_collaborator precedes
+      // invite_collaborator because an invite needs a resolved target.
+      'find_collaborator', 'invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version',
     ]);
     // Every tool (including gated ones returning needs_confirmation) audits once.
     for (const t of tools) await t.handler({ query: 'x' }, ctxWithProject);
@@ -217,8 +225,10 @@ describe('registry integration', () => {
       // P3-3b: the Project Link trio is implemented — list is read-only, the
       // two server mutations are confirmation-gated.
       list_project_links: false, create_project_link: true, revoke_project_link: true,
-      // Still contract-blocked (honest declines, nothing to confirm).
-      invite_collaborator: false, inspect_collaborator_activity: false, publish_child_version: false,
+      // P3-4 multiplayer: lookup and activity are read-only; granting someone
+      // access and submitting a child version are gated mutations.
+      find_collaborator: false, invite_collaborator: true,
+      inspect_collaborator_activity: false, publish_child_version: true,
     });
   });
 });

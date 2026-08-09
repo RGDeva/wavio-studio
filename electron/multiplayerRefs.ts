@@ -17,25 +17,35 @@
 
 import type { ActivityEvent, Contribution, Membership, MembershipRole } from './multiplayerService';
 
-export type RefKind = 'member' | 'contrib';
+export type RefKind = 'member' | 'contrib' | 'invite';
 
 export interface MpRefBinding {
   kind: RefKind;
-  /** Canonical server id — main-process only. */
+  /**
+   * Canonical server id — main-process only. For `invite` refs this is the
+   * opaque server `invt_…` capability, which is never parsed for identity and
+   * never leaves the main process.
+   */
   serverId: string;
   /** Canonical account DID — main-process only, never emitted. */
   accountId: string;
   projectId: string;
   /** Session epoch at mint time. */
   epoch: number;
+  /**
+   * Absolute local expiry (ms). Set for `invite` refs from the server's stated
+   * 10-minute TTL: an expired capability must fail closed BEFORE a request that
+   * would waste one of the caller's rate-limited lookups.
+   */
+  expiresAtMs?: number;
 }
 
 export type MpRefResolution =
   | { ok: true; binding: MpRefBinding }
-  | { ok: false; reason: 'malformed-reference' | 'unknown-reference' | 'account-mismatch' | 'project-mismatch' | 'stale-session' | 'wrong-kind' };
+  | { ok: false; reason: 'malformed-reference' | 'unknown-reference' | 'account-mismatch' | 'project-mismatch' | 'stale-session' | 'wrong-kind' | 'expired' };
 
-const PREFIX: Record<RefKind, string> = { member: 'pmember_', contrib: 'pcontrib_' };
-const REF_RE = /^(pmember|pcontrib)_[0-9a-z]{8}$/;
+const PREFIX: Record<RefKind, string> = { member: 'pmember_', contrib: 'pcontrib_', invite: 'pinvite_' };
+const REF_RE = /^(pmember|pcontrib|pinvite)_[0-9a-z]{8}$/;
 
 export class MultiplayerRefRegistry {
   private refs = new Map<string, MpRefBinding>();
@@ -55,7 +65,7 @@ export class MultiplayerRefRegistry {
 
   resolve(
     ref: unknown,
-    ctx: { kind: RefKind; accountId: string | null; epoch: number; projectId?: string | null },
+    ctx: { kind: RefKind; accountId: string | null; epoch: number; projectId?: string | null; now?: number },
   ): MpRefResolution {
     if (typeof ref !== 'string' || !REF_RE.test(ref)) return { ok: false, reason: 'malformed-reference' };
     const binding = this.refs.get(ref);
@@ -64,7 +74,18 @@ export class MultiplayerRefRegistry {
     if (binding.epoch !== ctx.epoch) return { ok: false, reason: 'stale-session' };
     if (!ctx.accountId || binding.accountId !== ctx.accountId) return { ok: false, reason: 'account-mismatch' };
     if (ctx.projectId != null && binding.projectId !== ctx.projectId) return { ok: false, reason: 'project-mismatch' };
+    if (binding.expiresAtMs != null && (ctx.now ?? Date.now()) >= binding.expiresAtMs) {
+      return { ok: false, reason: 'expired' };
+    }
     return { ok: true, binding };
+  }
+
+  /** Drop a single ref once its capability has been spent or invalidated. */
+  forget(ref: string): void {
+    const binding = this.refs.get(ref);
+    if (!binding) return;
+    this.refs.delete(ref);
+    this.byServerId.delete(`${binding.epoch}:${binding.accountId}:${binding.kind}:${binding.serverId}`);
   }
 
   clear(): void {
@@ -204,6 +225,35 @@ export function toSafeContribution(ref: string, c: Contribution): SafeContributi
   };
 }
 
+/**
+ * A resolved invite target as the renderer/model may see it: an opaque ref plus
+ * display-only fields. The `invt_…` capability, the target's DID, and the raw
+ * identifier that was searched for are all absent by construction.
+ */
+export interface SafeInviteTargetView {
+  ref: string;
+  projectId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  /** So the UI can say the lookup went stale rather than failing opaquely. */
+  expiresAtMs: number;
+}
+
+export function toSafeInviteTarget(
+  ref: string,
+  projectId: string,
+  display: { displayName: string | null; avatarUrl: string | null },
+  expiresAtMs: number,
+): SafeInviteTargetView {
+  return {
+    ref,
+    projectId,
+    displayName: display.displayName,
+    avatarUrl: display.avatarUrl,
+    expiresAtMs,
+  };
+}
+
 /** Honest, non-raw failure text for the renderer, keyed by the typed reason. */
 export const MULTIPLAYER_FAILURE_MESSAGE: Record<string, string> = {
   offline: 'You appear to be offline — collaborator data could not be checked.',
@@ -218,4 +268,21 @@ export const MULTIPLAYER_FAILURE_MESSAGE: Record<string, string> = {
   'contribution-outcome-unknown':
     'The contribution may or may not have been submitted. Refresh the project to check before retrying.',
   'stale-session': 'Your session changed — the result was discarded.',
+  'rate-limited': 'Too many collaborator lookups. Wait a few minutes and try again.',
+  'invite-target-expired': 'That collaborator lookup expired. Search again to invite them.',
+  expired: 'That collaborator lookup expired. Search again to invite them.',
+  'malformed-reference': 'That item is no longer available.',
+  'unknown-reference': 'That item is no longer available.',
+  'account-mismatch': 'That item is no longer available.',
+  'project-mismatch': 'That item is no longer available.',
+  'wrong-kind': 'That item is no longer available.',
 };
+
+/**
+ * The ONE message shown when a lookup does not resolve.
+ *
+ * The server deliberately makes "no such account" and "account exists but is
+ * not discoverable" indistinguishable. This single string is the desktop's
+ * half of that guarantee — there must be no second, more specific variant.
+ */
+export const INVITE_TARGET_UNRESOLVED_MESSAGE = 'No inviteable Wavi account found.';

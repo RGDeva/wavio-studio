@@ -72,6 +72,20 @@ export interface SafeActivity {
   revision: string | null;
 }
 
+/**
+ * A resolved invite target. The `invt_…` server capability, the target's DID,
+ * and the identifier that was searched for are all absent by construction.
+ */
+export interface SafeInviteTarget {
+  /** Opaque, project- and session-scoped (`pinvite_…`). */
+  ref: string;
+  projectId: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  /** Local expiry from the server's 10-minute TTL. */
+  expiresAtMs: number;
+}
+
 export type ContributionState = 'submitted' | 'accepted' | 'rejected' | 'withdrawn' | 'unknown';
 
 export interface SafeContribution {
@@ -212,7 +226,16 @@ export interface WaviAPI {
       Promise<{ ok?: boolean; accountId?: string | null; collaborators?: SafeCollaborator[]; pageComplete?: boolean; error?: string; reason?: string }>;
     listActivity: (opts: { projectId: string; limit?: number }) =>
       Promise<{ ok?: boolean; accountId?: string | null; events?: SafeActivity[]; pageComplete?: boolean; skippedUnknownEvents?: number; error?: string; reason?: string }>;
-    inviteCollaborator: (opts: { projectId: string; inviteeAccountId: string; role: 'view' | 'comment'; canContribute?: boolean }) =>
+    /**
+     * P3-4-ID. Resolves a user-typed email/@handle into an opaque, 10-minute,
+     * project-scoped target ref. Rate-limited server-side (10 per 15 min) —
+     * call ONLY from an explicit user action, never speculatively.
+     * `resolved: false` covers both "no account" and "not discoverable" and
+     * must never be presented as two different outcomes.
+     */
+    resolveInviteTarget: (opts: { projectId: string; identifier: string }) =>
+      Promise<{ ok?: boolean; resolved?: boolean; target?: SafeInviteTarget; message?: string; error?: string; reason?: string }>;
+    inviteCollaborator: (opts: { projectId: string; targetRef: string; role: 'view' | 'comment'; canContribute?: boolean }) =>
       Promise<{ ok?: boolean; collaborator?: SafeCollaborator; alreadyInvited?: boolean; error?: string; reason?: string }>;
     respondInvite: (opts: { ref: string; accept: boolean }) =>
       Promise<{ ok?: boolean; collaborator?: SafeCollaborator; accepted?: boolean; alreadyResponded?: boolean; error?: string; reason?: string }>;
@@ -220,7 +243,8 @@ export interface WaviAPI {
       Promise<{ ok?: boolean; collaborator?: SafeCollaborator; alreadyRevoked?: boolean; error?: string; reason?: string }>;
     publishContribution: (opts: { localProjectId: string; parentVersionId?: string | null; contributorNote?: string | null }) =>
       Promise<{ ok?: boolean; contribution?: SafeContribution | null; alreadySubmitted?: boolean; error?: string; reason?: string }>;
-    respondContribution: (opts: { ref: string; accept: boolean; reviewerNote?: string | null }) =>
+    // The locked contract carries no reviewer note, so none is accepted.
+    respondContribution: (opts: { ref: string; accept: boolean }) =>
       Promise<{ ok?: boolean; contribution?: SafeContribution; alreadyResolved?: boolean; error?: string; reason?: string }>;
     withdrawContribution: (opts: { ref: string }) =>
       Promise<{ ok?: boolean; contribution?: SafeContribution; alreadyResolved?: boolean; error?: string; reason?: string }>;
@@ -333,6 +357,7 @@ const _stub: WaviAPI = {
   multiplayer: {
     listCollaborators: () => Promise.resolve({ ok: false, collaborators: [] }),
     listActivity: () => Promise.resolve({ ok: false, events: [] }),
+    resolveInviteTarget: () => Promise.resolve({ ok: false, resolved: false }),
     inviteCollaborator: _noop, respondInvite: _noop, revokeCollaborator: _noop,
     publishContribution: _noop, respondContribution: _noop, withdrawContribution: _noop,
   },

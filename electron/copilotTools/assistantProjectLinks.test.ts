@@ -41,6 +41,12 @@ function deps(over: Partial<ProjectToolDeps> = {}, pl: Partial<ProjectToolDeps['
       revokeProjectLinkSafe: async (): Promise<AssistantRevokeResult> => ({ kind: 'revoked', ref: 'plink_00000001', alreadyRevoked: false }),
       ...pl,
     },
+    multiplayer: {
+      resolveInviteTargetSafe: async () => ({ kind: 'unresolved' as const }),
+      inviteCollaboratorSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+      listActivitySafe: async () => ({ kind: 'ok' as const, events: [], pageComplete: true, skippedUnknownEvents: 0 }),
+      publishChildVersionSafe: async () => ({ kind: 'failure' as const, reason: 'offline' as const }),
+    },
     ...over,
   } as any;
 }
@@ -247,12 +253,17 @@ describe('registry + privacy invariants', () => {
     }
     expect(new Set(names).size).toBe(names.length);
   });
-  it('multiplayer + contribution tools remain blocked and honest', async () => {
-    expect(BLOCKED_CAPABILITIES.map((c) => c.name)).toEqual(['invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version']);
+  // P3-4: the multiplayer trio is now contract-backed and no capability is
+  // left declared blocked.
+  it('nothing remains contract-blocked', () => {
+    expect(BLOCKED_CAPABILITIES.map((c) => c.name)).toEqual([]);
+  });
+  it('the multiplayer trio is registered and never returns server_contract_pending', async () => {
     for (const n of ['invite_collaborator', 'inspect_collaborator_activity', 'publish_child_version']) {
-      const r = await tool(deps(), n).handler({}, ctx());
-      expect(r.status, n).toBe('error');
-      expect(r.blockedReason, n).toBe('server_contract_pending');
+      const spec = tool(deps(), n);
+      expect(spec, n).toBeTruthy();
+      const r = await spec.handler({}, ctx());
+      expect(r.blockedReason, n).not.toBe('server_contract_pending');
     }
   });
   it('the PL trio is no longer in the blocked list', () => {
