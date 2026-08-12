@@ -185,12 +185,47 @@ export function activityFootnote(pageComplete: boolean, skippedUnknownEvents: nu
 
 // ── Contributions + lineage ──────────────────────────────────────────────────
 
+/** Filter tabs over the authoritative queue. `all` omits the server filter. */
+export type ContributionFilter = 'all' | 'submitted' | 'accepted' | 'rejected' | 'withdrawn';
+
+export const CONTRIBUTION_FILTERS: { id: ContributionFilter; label: string }[] = [
+  { id: 'submitted', label: 'Awaiting review' },
+  { id: 'accepted', label: 'Accepted' },
+  { id: 'rejected', label: 'Rejected' },
+  { id: 'withdrawn', label: 'Withdrawn' },
+  { id: 'all', label: 'All' },
+];
+
+/** `all` means "send no state filter" — the server 400s on an unknown value. */
+export function filterToServerState(f: ContributionFilter): string | null {
+  return f === 'all' ? null : f;
+}
+
+/**
+ * Empty-state copy that reflects WHY the queue is empty. An owner with no
+ * pending reviews is a different (and reassuring) situation from a contributor
+ * who has submitted nothing.
+ */
+export function contributionsEmptyText(filter: ContributionFilter, isOwner: boolean): string {
+  if (filter === 'submitted') {
+    return isOwner ? 'Nothing is waiting for your review.' : 'You have no contributions awaiting review.';
+  }
+  if (filter === 'all') {
+    return isOwner ? 'No contributions have been submitted to this project.' : 'You have not submitted any contributions.';
+  }
+  return `No ${filter} contributions.`;
+}
+
 export type ContributionAction = 'accept' | 'reject' | 'withdraw';
 
 /**
  * Which controls to render. Only a submitted contribution is actionable; the
  * owner reviews, the contributor withdraws. Anything already resolved offers
  * nothing — the UI must not imply a decision can be reversed.
+ *
+ * `isContributor` is safe to derive from "not the owner": the server only
+ * returns a non-owner their OWN contributions, so any row a non-owner can see
+ * is by definition theirs. The server re-checks on the mutation regardless.
  */
 export function contributionActions(
   c: Pick<SafeContribution, 'state'>,

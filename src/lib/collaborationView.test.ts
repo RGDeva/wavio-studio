@@ -9,7 +9,8 @@ import {
   collaboratorTone, COLLABORATOR_STATE_LABEL, permissionSummary, canRemoveCollaborator,
   sortRoster, roleChangeSupport, ACTIVITY_LABEL, activityLine, activityFootnote,
   contributionActions, CONTRIBUTION_STATE_LABEL, contributionTone, lineageCaption,
-  mutationOutcome, type ResolveState,
+  mutationOutcome, CONTRIBUTION_FILTERS, filterToServerState, contributionsEmptyText,
+  type ResolveState,
 } from './collaborationView';
 import type { SafeCollaborator, SafeActivity } from './api';
 
@@ -206,5 +207,37 @@ describe('mutation outcomes (never optimistic)', () => {
   it('any other failure is a failure, never a silent success', () => {
     expect(mutationOutcome({ reason: 'offline', error: 'offline' }).kind).toBe('failed');
     expect(mutationOutcome({}).kind).toBe('failed');
+  });
+});
+
+describe('contribution queue filters (P3-4-CL)', () => {
+  it('offers a submitted-first filter set', () => {
+    expect(CONTRIBUTION_FILTERS[0].id).toBe('submitted');
+    expect(CONTRIBUTION_FILTERS.map((f) => f.id)).toEqual(
+      ['submitted', 'accepted', 'rejected', 'withdrawn', 'all']);
+  });
+
+  it('maps "all" to no server filter, never to a literal string', () => {
+    expect(filterToServerState('all')).toBeNull();
+    for (const f of ['submitted', 'accepted', 'rejected', 'withdrawn'] as const) {
+      expect(filterToServerState(f)).toBe(f);
+    }
+  });
+
+  it('empty copy distinguishes an owner with a clear queue from a contributor', () => {
+    expect(contributionsEmptyText('submitted', true)).toMatch(/waiting for your review/i);
+    expect(contributionsEmptyText('submitted', false)).toMatch(/you have no contributions/i);
+    expect(contributionsEmptyText('all', true)).toMatch(/no contributions have been submitted/i);
+    expect(contributionsEmptyText('all', false)).toMatch(/you have not submitted/i);
+    expect(contributionsEmptyText('rejected', true)).toMatch(/no rejected contributions/i);
+  });
+
+  it('a non-owner may withdraw a listed row — the server only returns them their own', () => {
+    // Visibility is server-enforced, so "not owner" is sufficient here and no
+    // contributor identity is inferred. The server re-checks on the mutation.
+    expect(contributionActions({ state: 'submitted' }, { isOwner: false, isContributor: true }))
+      .toEqual(['withdraw']);
+    expect(contributionActions({ state: 'accepted' }, { isOwner: false, isContributor: true }))
+      .toEqual([]);
   });
 });

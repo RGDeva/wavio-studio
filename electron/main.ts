@@ -32,6 +32,7 @@ import {
   listCollaboratorsAll, listActivityAll, inviteCollaboratorFlow, respondInviteFlow,
   revokeCollaboratorFlow, publishContributionFlow, respondContributionFlow,
   withdrawContributionFlow, ContributionOperationLedger, resolveInviteTargetFlow,
+  listContributionsAll, isContributionStateFilter,
   type MultiplayerServiceDeps,
 } from './multiplayerService';
 import {
@@ -1934,6 +1935,49 @@ ipcMain.handle('multiplayer:listActivity', async (_e, opts: { projectId: string;
     pageComplete: res.pageComplete,
     // Honest: a newer server event type we cannot describe was skipped, not shown raw.
     skippedUnknownEvents: res.droppedUnknown,
+  };
+});
+
+/**
+ * P3-4-CL · The authoritative contribution queue for a project.
+ *
+ * Replaces the session-only view: the server decides visibility (owner sees all,
+ * a contributor sees only their own), so the desktop never re-filters. Each row
+ * gets a `pcontrib_…` ref bound to the active account/project/epoch, which is
+ * the only handle the renderer and the review controls ever use.
+ *
+ * NOTE: `mapContribution` carries no contributor identity, so a row cannot say
+ * WHO submitted it — recorded as a follow-up gap rather than guessed at.
+ */
+ipcMain.handle('multiplayer:listContributions', async (_e, opts: {
+  projectId: string; state?: string | null; limit?: number;
+}) => {
+  const a = mpAuth();
+  if ('error' in a) return a.error;
+  if (opts?.state != null && !isContributionStateFilter(opts.state)) {
+    // The server 400s on an unknown state; fail locally instead of spending a request.
+    return { error: 'That contribution filter is not supported.', reason: 'rejected' };
+  }
+  const epochAtStart = plCoordinator.generation();
+  const res = await listContributionsAll(mpDeps(a.token), {
+    projectId: opts.projectId,
+    state: opts?.state != null && isContributionStateFilter(opts.state) ? opts.state : null,
+    limit: opts?.limit,
+  });
+  if (res.kind === 'failure') return mpFailure(res.reason);
+  if (plCoordinator.generation() !== epochAtStart) return mpFailure('stale-session');
+  captureAccountId(res.accountId);
+  const contributions = res.records.map((c) =>
+    toSafeContribution(
+      multiplayerRefs.mint({
+        kind: 'contrib', serverId: c.contributionId, accountId: res.accountId,
+        projectId: c.projectId, epoch: plCoordinator.generation(),
+      }),
+      c,
+    ),
+  );
+  return {
+    ok: true, accountId: rendererAccountHandle(), contributions, pageComplete: res.pageComplete,
   };
 });
 

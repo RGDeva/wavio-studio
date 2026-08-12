@@ -21,8 +21,14 @@ as `--no-ff` merge **`f0c7bb74`** (base `8b5129b0`; **zero conflicts**).
 four adapter defects that reading the real server exposed and which this merge repairs, and §14 for
 the one remaining server-owned gap (`P3-4-CL`).
 
-**Not a release.** Three gates remain open: the authenticated desktop staging smoke (never
-claimed), `P3-4-CL`, and the pre-existing `.test.js` packaging issue. Production is untouched.
+**UPDATE (2026-08-08) — `P3-4-CL` IS ALSO CLOSED at source level.** Codex shipped
+`list-project-contributions` at `wavio@6236c3901966e88bb9a05bef79253463bffa6abd`
+(deployment `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`). Branch `feat/contribution-queue-desktop`
+implements the authoritative durable review queue — see **§19**. That branch is UNMERGED.
+
+**Not a release.** Two gates remain open: the **authenticated Electron desktop staging smoke**
+(never claimed — now the last functional gate) and the pre-existing `.test.js` packaging issue.
+Production is untouched.
 
 Server authority (read-only, never modified): `wavio` @ `6a4a9e8050902cd9f16cd3d4e067ef56eb6ca584`,
 branch `feat/multiplayer-v1-server-contracts`, file `api/desktop/multiplayer.ts`, dispatched from
@@ -415,7 +421,7 @@ weaker permission than the UI implied.
 `git diff --check` clean · production build OK · unsigned packaged `Wavi Studio.app` built ·
 secret and absolute-path scans clean.
 
-## 18. `P3-4-CL` — the remaining server-owned gap (OPEN)
+## 18. `P3-4-CL` — CLOSED (see §19). Original statement retained for history.
 
 **Landing this feature did not close it.** There is still no `list-project-contributions` action.
 
@@ -433,3 +439,87 @@ review. That is a feature-completeness and release gate — not a development-in
 
 Proposed additive contract and acceptance criteria:
 `docs/handoffs/DESKTOP-TO-CODEX-P3-4-CL-contribution-listing.md`.
+
+---
+
+## 19. `P3-4-CL` CLOSED — authoritative contribution queue (branch `feat/contribution-queue-desktop`)
+
+Base `feature/ableton-daw-companion @ bb6ae0eb`.
+Server contract consumed: **`wavio @ 6236c3901966e88bb9a05bef79253463bffa6abd`**
+(deployment `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`, staging URL
+`https://wavi-staging-kvbq16xd5-rgdevas-projects.vercel.app`, 60 live checks PASS reported by Codex).
+
+### Adapter
+`list-project-contributions` was added to the **existing** service — same injected `/api/desktop`
+transport, same `listAll` pagination helper, same `parseContribution`, same `pcontrib_…` registry.
+No second HTTP implementation and no new mapper. `state` is **omitted** when unfiltered (the handler
+400s on any present-but-unrecognised value) and validated locally against the server's own
+`CONTRIBUTION_STATES` before the request.
+
+### Fail-closed state parsing (hardened here)
+The handler derives the four booleans from ONE `state` column, so exactly one is always true.
+`parseContribution` now **rejects** any item where the count of true flags is not exactly 1, and a
+malformed row fails the whole listing. Previously it coerced by precedence — which in a review queue
+would have meant silently rendering an "unknown" item or omitting a real one. A shortened review
+queue is a worse failure than a visible error.
+
+### Contributor identity — intentionally absent
+The locked item carries **no** contributor DID, email, handle, display name, avatar, or membership
+id. The desktop therefore shows contributions **without a contributor name**, and does not:
+- display any raw account identifier;
+- guess a name from anything;
+- heuristically join contributions to activity events by timestamp, order, note, or version.
+
+No new blocker was filed for this — per the task, `P3-4-CL` is sufficient for the durable queue.
+
+### Visibility
+Server-decided: the owner sees every contribution; a non-owner sees only their own
+(`contributor_account_id = caller`). The desktop **never re-filters or widens** this. Because of
+that rule, "viewer is not the owner" is sufficient to render **Withdraw** on a row they can see —
+no contributor identity is inferred, and the server re-checks on the mutation regardless.
+
+### Queue UI
+Project Detail → Versions → Contributions now loads the authoritative listing, with filters
+(**Awaiting review** first, then Accepted / Rejected / Withdrawn / All), `Load more`, and real
+loading / empty / offline / auth-required / forbidden / error states. Empty copy distinguishes an
+owner with a clear queue from a contributor who has submitted nothing. The session-only wording is
+**gone**. Review controls act on listed rows; nothing is applied optimistically; every mutation
+re-reads the listing, and a 409 reconciles.
+
+### Two more prompt-vs-handler divergences caught by reading the source
+| Written spec said | Handler actually does | Followed |
+|---|---|---|
+| `"revision": 1` (number) | `revision: row.updated_at` — a timestamp **string** | handler |
+| item shape implied a contributor could be shown | no identity field exists at all | handler |
+
+### Verification
+- **912/912 tests · 49 files · 0 skips** (baseline `bb6ae0eb` was 874 → **+38**). No test weakened;
+  one assertion was **tightened** (absent contribution state now asserts rejection rather than
+  coercion).
+- New suite `electron/multiplayerContributionQueue.test.ts` is **handler-pinned**: it records the
+  consumed server SHA and asserts request field names and response shape against the shipped
+  handler, not against desktop assumptions.
+- `tsc --noEmit` clean ×2 · `git diff --check` clean · production build OK · unsigned packaged
+  `Wavi Studio.app` built · secret and absolute-path scans clean.
+- **Staging contract check** against `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`: all **ten** actions —
+  including `list-project-contributions` — return `401 {"error":"Unauthorized"}`, while an
+  unregistered action returns `400 {"error":"Unknown or missing X-Desktop-Action"}`. Endpoint
+  resolves to exactly `/api/desktop`.
+- **Authenticated Electron desktop smoke remains PENDING** — interactive Privy login is required to
+  mint a desktop token; no authenticated pass is performed or claimed.
+
+### Correction to the previous report
+An earlier probe in this session concluded `list-project-contributions` was "not deployed anywhere".
+That probe targeted the two **older** staging deployments; the action is present and auth-gated on
+`dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`. The contract was fine — the target URL was stale.
+
+## 20. Status after P3-4-CL
+
+| Gate | State |
+|---|---|
+| Multiplayer v1 adapter / UI / assistant | landed in integration |
+| `P3-4-ID` identity resolution | closed |
+| `P3-4-CL` contribution queue | **closed at source level** (this branch, unmerged) |
+| Authenticated Electron staging smoke | **PENDING** — the last functional gate |
+| Compiled `.test.js` in `app.asar` | open, separate packaging task |
+| Production release | blocked |
