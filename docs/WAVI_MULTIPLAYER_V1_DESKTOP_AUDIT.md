@@ -580,3 +580,88 @@ Link, account context, Project Detail and preview isolation: **467/467**.
 | **Authenticated Electron desktop staging smoke** | **PENDING — the last functional gate.** Requires an interactive Privy login to mint a desktop token; no authenticated pass has ever been performed or claimed. |
 | Compiled `.test.js` inside `app.asar` | open, separate packaging-hardening task |
 | Production release | blocked |
+
+---
+
+## 22. Authenticated Electron staging smoke — **NOT RUN** (environment blocker)
+
+Attempted 2026-08-12 against integration `634c4528`, staging
+`dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`
+(`https://wavi-staging-kvbq16xd5-rgdevas-projects.vercel.app/api`).
+
+**Status: NOT RUN. NOT PASSED.** No authenticated call was made, so nothing about
+authenticated behaviour is claimed.
+
+### Blocker: this machine deletes Electron application bundles
+
+Evidence, in order:
+1. A staging-pointed packaged build succeeded; the `.app` existed and its baked
+   `apiBase` verified correct. Minutes later the bundle was gone from disk.
+2. Rebuilt; verified present via `find`; launch produced a **zero-byte log** and
+   no process. Bundle gone again.
+3. Third rebuild, atomic build→verify→launch: same result.
+4. Switched to the dev-mode override (`WAVI_API_BASE_URL` + `npm run dev`), which
+   needs no packaging. Concurrently reported:
+   `Electron exited with signal SIGKILL`.
+5. `node_modules/electron/dist/` was then found stripped to `LICENSE`,
+   `LICENSES.chromium.html`, `version` — **the stock Electron binary had also
+   been deleted**, not just my build.
+6. `electron-builder` re-downloaded Electron during the next packaged build; the
+   binary was deleted again before it could be launched.
+
+This affects the *unmodified vendored* Electron, so it is not caused by anything
+in this branch. It is an endpoint-security / MDM policy on the host reaping
+Electron bundles. Defeating it is not something to attempt.
+
+### What this does and does not mean
+
+- It does **not** invalidate the source-level gate: 925/925 tests, 50 files,
+  0 skips; `tsc` clean ×2; production build clean; every contract expectation
+  pinned to the shipped handler at `wavio@6236c390`.
+- It does mean **no desktop code has ever executed against staging with a real
+  token**. The five contract corrections are proven against handler *source*,
+  not against a live authenticated round trip.
+
+### What WAS verified in this attempt (no Electron required)
+
+- **Endpoint resolution:** all three input forms resolve to exactly
+  `https://wavi-staging-kvbq16xd5-rgdevas-projects.vercel.app/api/desktop`.
+  No `/api/api/desktop`.
+- **Staging isolation:** the built app's baked config points only at staging;
+  the forbidden production Supabase ref `bbjfaqzbbjrlhpzdxnlm` is absent, and no
+  Supabase credential of any kind ships in the desktop app.
+- **Action registration:** all ten actions return `401` unauthenticated on the
+  staging deployment; an unknown action returns `400`.
+
+### Tooling left ready to run elsewhere
+
+- `electron-builder.staging.json` + `npm run build:mac:staging` — bakes the
+  staging `apiBase`. It reuses the existing `qa` appId and `wavi-qa://` scheme
+  deliberately: the web `/auth` page derives the callback scheme from the
+  channel and lives in `wavio`, which must not be modified, and a packaged build
+  with a non-production `apiBase` already resolves to the `qa` channel.
+- `electron/stagingSmoke.ts` — production-inert (requires `WAVI_SMOKE=1` **and**
+  a non-production API base, refusing before any work otherwise), performs no
+  networking of its own, drives the same exported flows the IPC handlers use,
+  and writes redacted evidence (action names, request field *names*, status
+  codes, boolean assertions). 13 guard tests, including one that feeds a
+  response containing a DID and a canonical contribution id and proves neither
+  reaches the report.
+- Read-only by design: mutations are listed in the report's `notRun` rather than
+  fired unattended into staging.
+
+### To run it on a machine where Electron can launch
+
+```
+npm run build:mac:staging
+WAVI_SMOKE=1 WAVI_SMOKE_ROLE=owner \
+WAVI_SMOKE_OUT=/tmp/owner.json WAVI_SMOKE_WAIT_MS=1800000 \
+"release-staging/mac-arm64/Wavi Studio Staging.app/Contents/MacOS/Wavi Studio Staging"
+```
+Sign in as the owner account when the window appears; the harness waits, then
+writes `/tmp/owner.json`. Repeat with `WAVI_SMOKE_ROLE=collaborator` and
+`=foreign` after signing in as those accounts. Mutations (invite, publish,
+accept/reject/withdraw) still need driving through the UI.
+
+**`AUTHENTICATED ELECTRON STAGING SMOKE: NOT RUN`** — it remains the last
+functional release gate.
