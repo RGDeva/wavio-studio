@@ -609,9 +609,21 @@ Evidence, in order:
 6. `electron-builder` re-downloaded Electron during the next packaged build; the
    binary was deleted again before it could be launched.
 
-This affects the *unmodified vendored* Electron, so it is not caused by anything
-in this branch. It is an endpoint-security / MDM policy on the host reaping
-Electron bundles. Defeating it is not something to attempt.
+7. **Decisive control probe.** A pristine `Electron.app`, extracted straight from
+   the official cached `electron-v31.7.7-darwin-arm64.zip` into `/tmp` — outside
+   the project tree, untouched by this repo — ran `--version` and was then
+   **deleted from disk**. `node_modules/electron/path.txt` still reads
+   `Electron.app/Contents/MacOS/Electron`, and `dist/` retains only its
+   non-bundle files (dated Mar 11) with a directory mtime of the deletion.
+
+Note the apparent contradiction this explains: `electron-builder` keeps
+succeeding because it packages from the cached **zip**, which is not an `.app`
+bundle and therefore survives — the resulting `.app` is then reaped.
+
+This affects a pristine, unmodified Electron in a neutral location, so it is
+neither caused by this branch nor path-scoped to the project. It is a host
+endpoint-security / MDM policy reaping Electron application bundles. Defeating
+it is not something to attempt, and no amount of rebuilding will change it.
 
 ### What this does and does not mean
 
