@@ -134,6 +134,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
   multiplayer: {
     listCollaborators: (opts: { projectId: string; limit?: number }) => ipcRenderer.invoke('multiplayer:listCollaborators', opts),
     listActivity: (opts: { projectId: string; limit?: number }) => ipcRenderer.invoke('multiplayer:listActivity', opts),
+    listContributions: (opts: { projectId: string; state?: string | null; limit?: number }) => ipcRenderer.invoke('multiplayer:listContributions', opts),
     resolveInviteTarget: (opts: { projectId: string; identifier: string }) => ipcRenderer.invoke('multiplayer:resolveInviteTarget', opts),
     inviteCollaborator: (opts: { projectId: string; targetRef: string; role: 'view' | 'comment'; canContribute?: boolean }) => ipcRenderer.invoke('multiplayer:inviteCollaborator', opts),
     respondInvite: (opts: { ref: string; accept: boolean }) => ipcRenderer.invoke('multiplayer:respondInvite', opts),

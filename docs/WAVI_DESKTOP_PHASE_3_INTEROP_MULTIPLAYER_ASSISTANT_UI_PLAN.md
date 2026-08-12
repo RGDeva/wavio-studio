@@ -272,7 +272,26 @@ when green.
   (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
   import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
   smoke and the Ableton live P0 gates remain **separate open release gates**.
-- **🟡 OPEN GAP `P3-4-CL` — Contribution listing (server-owned, non-blocking):** there is no
+- **✅ `P3-4-CL` CLOSED at source level (2026-08-08, branch `feat/contribution-queue-desktop`
+  off `feature/ableton-daw-companion@bb6ae0eb`, UNMERGED):** Codex shipped
+  `list-project-contributions` at **`wavio@6236c390`** (deployment
+  `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`, 60 live checks PASS). The desktop now loads the
+  **authoritative durable review queue** — same injected transport, same `listAll` pagination, same
+  `parseContribution`, same `pcontrib_…` refs; no second HTTP path and no new mapper. Filters
+  (Awaiting review first / Accepted / Rejected / Withdrawn / All), cursor pagination with
+  `Load more`, and real loading/empty/offline/auth/forbidden/error states. The session-only wording
+  is **removed**. **Hardened:** `parseContribution` now fails closed unless exactly one state flag
+  is set — a review queue must never silently render an "unknown" row or omit a real one.
+  **Contributor identity is intentionally absent** because the locked item exposes none; no name is
+  guessed and no heuristic join to activity is performed. Visibility stays server-decided (owner
+  sees all; a non-owner sees only their own), which is why "not owner" suffices to offer Withdraw
+  without inferring identity. Two further prompt-vs-handler divergences were caught by reading the
+  source: `revision` is a timestamp **string** (not `1`), and no contributor field exists at all.
+  Gate: **912/912 / 49 files / 0 skips** (874 baseline + 38; one assertion tightened, none
+  weakened), tsc ×2 clean, packaged app built, scans clean. Staging: all **ten** actions 401 vs 400
+  for an unknown action. **Authenticated Electron smoke still PENDING** — the last functional gate.
+  <details><summary>original open-gap entry</summary>
+- **🟡 (was) OPEN GAP `P3-4-CL` — Contribution listing (server-owned, non-blocking):** there is no
   `list-project-contributions` action. Contributions are returned only by publish / respond /
   withdraw, and the activity feed's safe projection drops subject ids by design. The desktop
   therefore shows only contributions submitted or acted on **in the current session**, and says so
@@ -281,6 +300,7 @@ when green.
   `{ accountId, items, pageInfo }` on the existing cursor contract. The desktop already has the
   parser, `pcontrib_…` refs, and review controls. Detail:
   `docs/WAVI_MULTIPLAYER_V1_DESKTOP_AUDIT.md` §14.
+  </details>
 - **✅ P3-4 MULTIPLAYER v1 UI + ASSISTANT LANDED (2026-08-08):**
   `feat/multiplayer-v1-ui-assistant@eb591e21` merged into `feature/ableton-daw-companion` as
   `--no-ff` merge **`f0c7bb74`** (base `8b5129b0`; **zero conflicts**). **Multiplayer v1 is now

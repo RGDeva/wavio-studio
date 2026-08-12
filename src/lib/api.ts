@@ -227,6 +227,13 @@ export interface WaviAPI {
     listActivity: (opts: { projectId: string; limit?: number }) =>
       Promise<{ ok?: boolean; accountId?: string | null; events?: SafeActivity[]; pageComplete?: boolean; skippedUnknownEvents?: number; error?: string; reason?: string }>;
     /**
+     * P3-4-CL. The authoritative contribution queue. Visibility is decided
+     * server-side (owner sees all; a contributor sees only their own), so the
+     * renderer must not re-filter the result.
+     */
+    listContributions: (opts: { projectId: string; state?: ContributionState | null; limit?: number }) =>
+      Promise<{ ok?: boolean; accountId?: string | null; contributions?: SafeContribution[]; pageComplete?: boolean; error?: string; reason?: string }>;
+    /**
      * P3-4-ID. Resolves a user-typed email/@handle into an opaque, 10-minute,
      * project-scoped target ref. Rate-limited server-side (10 per 15 min) —
      * call ONLY from an explicit user action, never speculatively.
@@ -357,6 +364,7 @@ const _stub: WaviAPI = {
   multiplayer: {
     listCollaborators: () => Promise.resolve({ ok: false, collaborators: [] }),
     listActivity: () => Promise.resolve({ ok: false, events: [] }),
+    listContributions: () => Promise.resolve({ ok: false, contributions: [] }),
     resolveInviteTarget: () => Promise.resolve({ ok: false, resolved: false }),
     inviteCollaborator: _noop, respondInvite: _noop, revokeCollaborator: _noop,
     publishContribution: _noop, respondContribution: _noop, withdrawContribution: _noop,

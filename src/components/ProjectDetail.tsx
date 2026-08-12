@@ -519,22 +519,10 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               </section>
 
               <section>
-                <SectionHeader label="Contributions" count={contributions.length} />
-                <ContributionsList
-                  projectId={project.id}
-                  contributions={contributions}
-                  isOwner={isProjectOwner}
-                  onChanged={() => setContributions((c) => [...c])}
-                />
-                {/* Honest limitation: the locked contract has no
-                    list-project-contributions action, so this shows only
-                    contributions this device submitted or acted on in the
-                    current session. Tracked as P3-4-CL. */}
-                <p className="mt-2 text-[10px] text-muted-fg">
-                  Shows contributions from this device this session. A full list across
-                  collaborators needs a server action that does not exist yet — watch the
-                  Activity tab for contribution events in the meantime.
-                </p>
+                <SectionHeader label="Contributions" />
+                {/* P3-4-CL: the authoritative server queue. The component loads
+                    and paginates it itself; visibility is the server's call. */}
+                <ContributionsList projectId={project.id} isOwner={isProjectOwner} />
               </section>
             </div>
           ) : tab === 'collaborators' ? (

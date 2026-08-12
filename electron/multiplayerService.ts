@@ -35,6 +35,7 @@ export const MULTIPLAYER_ACTIONS = {
   respondInvite: 'respond-project-invite',
   revokeCollaborator: 'revoke-project-collaborator',
   listActivity: 'list-project-activity',
+  listContributions: 'list-project-contributions',
   publishVersion: 'publish-project-version',
   respondContribution: 'respond-project-contribution',
   withdrawContribution: 'withdraw-project-contribution',
@@ -235,6 +236,18 @@ export function parseContribution(raw: unknown): ParseResult<Contribution> {
   const projectId = str(w.projectId);
   if (!projectId) return { ok: false, reason: 'missing projectId' };
   const s = (w.state ?? {}) as Record<string, unknown>;
+  const flags = {
+    submitted: bool(s.submitted),
+    accepted: bool(s.accepted),
+    rejected: bool(s.rejected),
+    withdrawn: bool(s.withdrawn),
+  };
+  // The server derives these from ONE `state` column, so exactly one is true.
+  // Zero (or two) means the row is not something we can describe — a review
+  // queue that silently renders an "unknown" item is worse than an honest
+  // failure, so fail closed rather than guessing by precedence.
+  const set = Object.values(flags).filter(Boolean).length;
+  if (set !== 1) return { ok: false, reason: `contribution state must have exactly one flag set, got ${set}` };
   return {
     ok: true,
     value: {
@@ -242,12 +255,7 @@ export function parseContribution(raw: unknown): ParseResult<Contribution> {
       projectId,
       parentVersionId: str(w.parentVersionId),
       childVersionId: str(w.childVersionId),
-      state: {
-        submitted: bool(s.submitted),
-        accepted: bool(s.accepted),
-        rejected: bool(s.rejected),
-        withdrawn: bool(s.withdrawn),
-      },
+      state: flags,
       contributorNote: str(w.contributorNote),
       clientCorrelationId: str(w.clientCorrelationId),
       createdAt: str(w.createdAt),
@@ -411,6 +419,43 @@ export function listActivityAll(
     // Activity is an append-only feed: a future event type we don't know how to
     // describe is dropped (and counted) rather than shown as raw server text.
     (reason) => reason.startsWith('unknown-activity-type:'),
+  );
+}
+
+/** The states the listing may be filtered by — mirrors the server's own list. */
+export const CONTRIBUTION_STATES = ['submitted', 'accepted', 'rejected', 'withdrawn'] as const;
+export type ContributionStateFilter = (typeof CONTRIBUTION_STATES)[number];
+
+export function isContributionStateFilter(v: unknown): v is ContributionStateFilter {
+  return typeof v === 'string' && (CONTRIBUTION_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * P3-4-CL — the authoritative contribution listing.
+ *
+ * Visibility is decided SERVER-SIDE: the owner sees every contribution on the
+ * project; anyone else sees only their own (`contributor_account_id = caller`).
+ * The desktop must not re-filter or widen that.
+ *
+ * `state` is omitted entirely when absent — the server 400s on an unrecognised
+ * value, so an invalid filter fails locally rather than burning a request.
+ */
+export function listContributionsAll(
+  deps: MultiplayerServiceDeps,
+  opts: { projectId: string; state?: ContributionStateFilter | null; limit?: number },
+): Promise<ListResult<Contribution>> {
+  return listAll(
+    deps,
+    MULTIPLAYER_ACTIONS.listContributions,
+    {
+      projectId: opts.projectId,
+      limit: clampLimit(opts.limit),
+      ...(opts.state ? { state: opts.state } : {}),
+    },
+    parseContribution,
+    // A contribution we cannot parse is a real review item we would be hiding —
+    // fail the listing rather than silently shortening an owner's review queue.
+    () => false,
   );
 }
 

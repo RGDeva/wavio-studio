@@ -59,13 +59,14 @@ const okPage = (items: any[], hasMore = false, nextCursor: string | null = null)
 });
 
 describe('locked action + event vocabulary', () => {
-  it('uses exactly the nine server action names', () => {
-    // Nine as of the P3-4-ID contract (wavio@d95683f), which added
-    // resolve-invite-target ahead of the original eight.
+  it('uses exactly the ten server action names', () => {
+    // Ten as of the P3-4-CL contract (wavio@6236c390), which added
+    // list-project-contributions to the nine from P3-4-ID (wavio@d95683f).
     expect([...Object.values(MULTIPLAYER_ACTIONS)].sort()).toEqual([
       'invite-project-collaborator',
       'list-project-activity',
       'list-project-collaborators',
+      'list-project-contributions',
       'publish-project-version',
       'resolve-invite-target',
       'respond-project-contribution',
@@ -236,9 +237,32 @@ describe('parseContribution', () => {
     expect(parseContribution({ ...CONTRIB, contributionId: undefined }).ok).toBe(false);
   });
 
-  it('treats absent state flags as false', () => {
+  // P3-4-CL: the server derives these flags from ONE `state` column, so exactly
+  // one is always true. Absent or ambiguous state is REJECTED rather than
+  // coerced — an "unknown" row silently appearing in an owner's review queue is
+  // worse than an honest failure. (Membership state is different: it legitimately
+  // has an all-false representation, so parseMembership still coerces.)
+  it('rejects a contribution with no state flag set', () => {
     const p = parseContribution({ ...CONTRIB, state: undefined });
-    expect(p.ok && p.value.state.submitted).toBe(false);
+    expect(p.ok).toBe(false);
+    if (p.ok) return;
+    expect(p.reason).toMatch(/exactly one flag/);
+  });
+
+  it('rejects an impossible multi-state combination', () => {
+    const p = parseContribution({
+      ...CONTRIB, state: { submitted: true, accepted: true, rejected: false, withdrawn: false },
+    });
+    expect(p.ok).toBe(false);
+  });
+
+  it('accepts each of the four single-flag states', () => {
+    for (const k of ['submitted', 'accepted', 'rejected', 'withdrawn'] as const) {
+      const state = { submitted: false, accepted: false, rejected: false, withdrawn: false, [k]: true };
+      const p = parseContribution({ ...CONTRIB, state });
+      expect(p.ok, k).toBe(true);
+      if (p.ok) expect(p.value.state[k], k).toBe(true);
+    }
   });
 });
 

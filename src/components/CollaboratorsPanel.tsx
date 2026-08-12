@@ -27,6 +27,8 @@ import {
   canRemoveCollaborator, sortRoster, roleChangeSupport, mutationOutcome,
   activityLine, activityFootnote,
   contributionActions, CONTRIBUTION_STATE_LABEL, contributionTone, lineageCaption,
+  CONTRIBUTION_FILTERS, filterToServerState, contributionsEmptyText,
+  type ContributionFilter, type ContributionAction,
 } from '../lib/collaborationView';
 
 const TONE_BADGE = {
@@ -321,23 +323,50 @@ export function CollaboratorActivityFeed({ projectId }: { projectId: string }) {
 }
 
 /**
- * Child-version contributions with their lineage and review controls.
+ * P3-4-CL — the authoritative contribution queue.
+ *
+ * Loads from the server rather than showing session-local state. Visibility is
+ * the SERVER's decision (owner sees every contribution; a contributor sees only
+ * their own), so this component never re-filters the result — it only offers a
+ * state filter that the server itself applies.
  *
  * Nothing is applied optimistically: every control re-reads server truth after
  * the mutation, and a 409 reconciles rather than reporting a fabricated success.
  */
 export function ContributionsList({
-  projectId, contributions, isOwner, onChanged,
+  projectId, isOwner,
 }: {
   projectId: string;
-  contributions: SafeContribution[];
   isOwner: boolean;
-  onChanged: () => void | Promise<void>;
 }) {
+  const [rows, setRows] = useState<SafeContribution[] | null>(null);
+  const [pageComplete, setPageComplete] = useState(true);
+  const [loadError, setLoadError] = useState<{ message: string; authRequired: boolean } | null>(null);
+  const [filter, setFilter] = useState<ContributionFilter>('submitted');
+  const [limit, setLimit] = useState(20);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const act = useCallback(async (ref: string, action: 'accept' | 'reject' | 'withdraw') => {
+  const load = useCallback(async (f: ContributionFilter, n: number) => {
+    setLoadError(null);
+    const res = await api.multiplayer.listContributions({
+      projectId, state: filterToServerState(f) as any, limit: n,
+    });
+    if (!res.ok) {
+      setRows([]);
+      setLoadError({
+        message: res.error ?? 'Contributions could not be loaded.',
+        authRequired: res.reason === 'unauthorized',
+      });
+      return;
+    }
+    setRows(res.contributions ?? []);
+    setPageComplete(res.pageComplete !== false);
+  }, [projectId]);
+
+  useEffect(() => { void load(filter, limit); }, [load, filter, limit]);
+
+  const act = useCallback(async (ref: string, action: ContributionAction) => {
     setBusy(ref); setNotice(null);
     const res = action === 'withdraw'
       ? await api.multiplayer.withdrawContribution({ ref })
@@ -347,53 +376,85 @@ export function ContributionsList({
     if (outcome.kind === 'failed') { setNotice(outcome.message); return; }
     if (outcome.kind === 'reconcile') setNotice(outcome.message);
     else if (outcome.alreadyResolved) setNotice('That was already decided — nothing changed.');
-    await onChanged();
-  }, [onChanged]);
-
-  if (!contributions.length) {
-    return (
-      <EmptyState icon={GitBranch} title="No contributions"
-        description="Versions submitted by collaborators for review will appear here." />
-    );
-  }
+    // Always re-read: the row's state, and whether it still matches the filter,
+    // are the server's to decide.
+    await load(filter, limit);
+  }, [load, filter, limit]);
 
   return (
-    <div className="space-y-2">
-      {contributions.map((c) => {
-        const actions = contributionActions(c, { isOwner, isContributor: !isOwner });
-        const caption = lineageCaption({ parentVersionLabel: null, isContribution: true, state: c.state });
-        return (
-          <div key={c.ref} className="rounded-lg border border-border bg-surface-2 px-3 py-2.5">
-            <div className="flex items-center gap-2">
-              <GitBranch className="w-3.5 h-3.5 text-primary/50 flex-shrink-0" aria-hidden />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-foreground/80">{caption}</p>
-                {c.contributorNote && <p className="text-[11px] text-foreground/55 mt-0.5">{c.contributorNote}</p>}
-                <p className="text-[10px] text-muted-fg font-mono mt-0.5">
-                  {c.createdAt ? new Date(c.createdAt).toLocaleString() : ''}
-                </p>
+    <div className="space-y-3">
+      <div className="flex flex-wrap gap-1" role="tablist" aria-label="Contribution filter">
+        {CONTRIBUTION_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            role="tab"
+            aria-selected={filter === f.id}
+            onClick={() => { setFilter(f.id); setLimit(20); }}
+            className={`px-2 py-1 rounded text-[11px] transition-colors ${
+              filter === f.id
+                ? 'bg-white/[0.08] text-foreground'
+                : 'text-muted-fg hover:text-foreground/70 hover:bg-white/[0.04]'}`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {rows === null ? (
+        <div aria-busy><Skeleton lines={3} /></div>
+      ) : loadError ? (
+        loadError.authRequired
+          ? <EmptyState icon={ShieldAlert} title="Sign in to Wavi" description="Contributions are only available when you're signed in." />
+          : <ErrorState description={loadError.message} onRetry={() => void load(filter, limit)} />
+      ) : rows.length === 0 ? (
+        <EmptyState icon={GitBranch} title="No contributions" description={contributionsEmptyText(filter, isOwner)} />
+      ) : (
+        <>
+          {rows.map((c) => {
+            // A non-owner only ever receives their own rows from the server.
+            const actions = contributionActions(c, { isOwner, isContributor: !isOwner });
+            const caption = lineageCaption({ parentVersionLabel: null, isContribution: true, state: c.state });
+            return (
+              <div key={c.ref} className="rounded-lg border border-border bg-surface-2 px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <GitBranch className="w-3.5 h-3.5 text-primary/50 flex-shrink-0" aria-hidden />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs text-foreground/80">{caption}</p>
+                    {c.contributorNote && <p className="text-[11px] text-foreground/55 mt-0.5">{c.contributorNote}</p>}
+                    <p className="text-[10px] text-muted-fg font-mono mt-0.5">
+                      {c.createdAt ? new Date(c.createdAt).toLocaleString() : ''}
+                    </p>
+                  </div>
+                  <StatusBadge tone={TONE_BADGE[contributionTone(c.state)]} label={CONTRIBUTION_STATE_LABEL[c.state]} />
+                </div>
+                {actions.length > 0 && (
+                  <div className="flex gap-2 mt-2">
+                    {actions.includes('accept') && (
+                      <Button variant="primary" size="compact" loading={busy === c.ref} onClick={() => void act(c.ref, 'accept')}>Accept</Button>
+                    )}
+                    {actions.includes('reject') && (
+                      <Button variant="secondary" size="compact" loading={busy === c.ref} onClick={() => void act(c.ref, 'reject')}>Reject</Button>
+                    )}
+                    {actions.includes('withdraw') && (
+                      <Button variant="ghost" size="compact" loading={busy === c.ref} onClick={() => void act(c.ref, 'withdraw')}>Withdraw</Button>
+                    )}
+                  </div>
+                )}
               </div>
-              <StatusBadge tone={TONE_BADGE[contributionTone(c.state)]} label={CONTRIBUTION_STATE_LABEL[c.state]} />
-            </div>
-            {actions.length > 0 && (
-              <div className="flex gap-2 mt-2">
-                {actions.includes('accept') && (
-                  <Button variant="primary" size="compact" loading={busy === c.ref} onClick={() => void act(c.ref, 'accept')}>Accept</Button>
-                )}
-                {actions.includes('reject') && (
-                  <Button variant="secondary" size="compact" loading={busy === c.ref} onClick={() => void act(c.ref, 'reject')}>Reject</Button>
-                )}
-                {actions.includes('withdraw') && (
-                  <Button variant="ghost" size="compact" loading={busy === c.ref} onClick={() => void act(c.ref, 'withdraw')}>Withdraw</Button>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+            );
+          })}
+          {!pageComplete && (
+            <Button variant="ghost" size="compact" onClick={() => setLimit((n) => Math.min(100, n + 20))}>
+              Load more
+            </Button>
+          )}
+        </>
+      )}
+
       {notice && <p className="text-[11px] text-warning" role="status">{notice}</p>}
       <p className="text-[10px] text-muted-fg">
-        A contribution is a new child version. Accepting or rejecting it never changes the version it was based on.
+        A contribution is a new child version. Accepting or rejecting it never changes the version it
+        was based on.
       </p>
     </div>
   );
