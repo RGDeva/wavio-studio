@@ -53,6 +53,7 @@ export default defineConfig({
       'electron/multiplayerIdentity.test.ts',
       'electron/copilotTools/assistantMultiplayer.test.ts',
       'electron/multiplayerContributionQueue.test.ts',
+      'electron/stagingSmoke.test.ts',
       'src/lib/collaborationView.test.ts',
     ],
     environment: 'node',

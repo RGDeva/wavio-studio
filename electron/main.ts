@@ -16,7 +16,7 @@ import { registerAbletonHandlers } from './ableton';
 import { startBridgeServer, stopBridgeServer } from './bridgeServer';
 import { initMuseSdk, finalizeMuseSdk, startMuseHubSession, checkAndIncrementUsage, getCachedEntitlement, isMuseHubSession, getMuseHubUserInfo } from './musehub';
 import Store from 'electron-store';
-import { API_BASE, WEB_BASE, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
+import { API_BASE, WEB_BASE, IS_DEV_API, logApiEnvironment, CHANNEL, PROTOCOL_SCHEME, BUNDLE_ID } from './config';
 import { validateDeepLink, checkAndRecordReplay, isQaBuildFromPackageJson, APP_NAMES, assertNotProductionUserDataDir } from './deepLinkValidator';
 import { getAdapterForProject } from './adapters';
 import { safeRelativePath, classifyFileRole, findPreviewCandidate, ManifestEntry } from './adapters/common';
@@ -461,6 +461,18 @@ app.whenReady().then(async () => {
   // E2E isolation mode
   if (process.env.WAVI_E2E === '1') {
     console.warn('[E2E] Isolated test mode: DB=wavio-studio-e2e.db, watching only E2E folder');
+  }
+
+  // Authenticated staging smoke (dev-only). Requires BOTH the explicit opt-in
+  // AND a non-production API base, so it can never touch production. Waits for
+  // the operator's Privy sign-in, then exercises the REAL adapter flows with
+  // the REAL token and writes a redacted evidence file.
+  if (process.env.WAVI_SMOKE === '1') {
+    if (!IS_DEV_API) {
+      console.error('[smoke] REFUSING to run: API base is production. Set WAVI_API_BASE_URL to staging.');
+    } else {
+      void startStagingSmoke();
+    }
   }
 
   // Step 1-3: Initialize DB + run all schema migrations synchronously.
@@ -3373,3 +3385,64 @@ ipcMain.handle('app:relaunch', () => {
   app.relaunch();
   app.exit(0);
 });
+
+// ── Authenticated staging smoke (dev-only; see electron/stagingSmoke.ts) ─────
+// Gated at the call site by WAVI_SMOKE=1 AND IS_DEV_API. Polls for a token so
+// the operator has time to complete the single interactive Privy sign-in, then
+// runs the read-only sequence through the same flows the IPC handlers use.
+async function startStagingSmoke() {
+  const fsMod = require('fs') as typeof import('fs');
+  const pathMod = require('path') as typeof import('path');
+  const { runStagingSmoke } = require('./stagingSmoke') as typeof import('./stagingSmoke');
+
+  const role = (process.env.WAVI_SMOKE_ROLE ?? 'owner') as 'owner' | 'collaborator' | 'foreign';
+  const outPath = process.env.WAVI_SMOKE_OUT ?? pathMod.join(app.getPath('userData'), 'staging-smoke.json');
+  const waitMs = Number(process.env.WAVI_SMOKE_WAIT_MS ?? 300_000);
+
+  console.warn(`[smoke] armed · role=${role} · api=${API_BASE}`);
+  console.warn('[smoke] waiting for interactive Privy sign-in…');
+
+  const deadline = Date.now() + waitMs;
+  let token: string | null = null;
+  while (Date.now() < deadline) {
+    token = getDecryptedToken();
+    if (token) break;
+    await new Promise((r) => setTimeout(r, 2_000));
+  }
+  if (!token) {
+    console.error('[smoke] no token before timeout — sign-in did not complete. Nothing was run.');
+    return;
+  }
+  console.warn('[smoke] token present — running sequence');
+
+  // Resolve the cloud project to exercise: explicit override, else the first
+  // local project that has actually been synced to the cloud.
+  let projectId = process.env.WAVI_SMOKE_PROJECT_ID ?? '';
+  if (!projectId) {
+    try {
+      const rows = require('./db').getProjects() as any[];
+      projectId = rows.find((r) => r.cloud_id)?.cloud_id ?? '';
+    } catch { /* reported below */ }
+  }
+  if (!projectId) {
+    console.error('[smoke] no cloud project available. Set WAVI_SMOKE_PROJECT_ID=<cloud project uuid>.');
+    return;
+  }
+
+  try {
+    const report = await runStagingSmoke(
+      {
+        ...mpDeps(token),
+        projectId,
+        resolveIdentifier: process.env.WAVI_SMOKE_IDENTIFIER ?? null,
+        apiBase: API_BASE,
+      },
+      role,
+    );
+    fsMod.writeFileSync(outPath, JSON.stringify(report, null, 2));
+    console.warn(`[smoke] ${report.pass ? 'PASS' : 'FAIL'} · evidence written to ${outPath}`);
+    for (const s of report.steps) console.warn(`[smoke]   ${s.outcome.padEnd(19)} ${s.step}${s.reason ? ` (${s.reason})` : ''}`);
+  } catch (e) {
+    console.error('[smoke] harness error:', (e as any)?.message ?? String(e));
+  }
+}
