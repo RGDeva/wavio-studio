@@ -272,8 +272,21 @@ when green.
   (invite / collaborator activity / child publish) stays contract-blocked; recipient page,
   import token, ZIP and contribution APIs stay excluded. Interactive desktop→staging sign-in
   smoke and the Ableton live P0 gates remain **separate open release gates**.
-- **✅ `P3-4-CL` CLOSED at source level (2026-08-08, branch `feat/contribution-queue-desktop`
-  off `feature/ableton-daw-companion@bb6ae0eb`, UNMERGED):** Codex shipped
+- **✅ `P3-4-CL` CLOSED AND LANDED (2026-08-08):** `feat/contribution-queue-desktop@4a79a2f1`
+  merged into `feature/ableton-daw-companion` as `--no-ff` merge **`ff79dbf8`** (base `bb6ae0eb`;
+  **zero conflicts**). This is the **third and final** Multiplayer v1 merge — adapter (`64ea4230`),
+  UI + assistant (`f0c7bb74`), contribution queue (`ff79dbf8`). All **five** handler-pinned
+  contract corrections re-verified post-merge, plus the structural and privacy invariants
+  (one transport, one endpoint, one manifest builder, `db.ts` untouched so lineage stays
+  server-authoritative, `BLOCKED_CAPABILITIES` empty, zero non-comment `did:privy`/`invt_` in
+  renderer- or model-facing source). Post-merge gate: **912/912 / 49 files / 0 skips**, tsc ×2
+  clean, packaged app built, targeted regression **467/467**.
+  **The authenticated Electron desktop staging smoke is now the LAST functional gate** — it needs
+  an interactive Privy login and has never been performed or claimed. Packaging `.test.js` remains
+  a separate task. Production untouched.
+  <details><summary>original source-level-closure entry</summary>
+- **✅ `P3-4-CL` closed at source level (branch `feat/contribution-queue-desktop`
+  off `feature/ableton-daw-companion@bb6ae0eb`):** Codex shipped
   `list-project-contributions` at **`wavio@6236c390`** (deployment
   `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`, 60 live checks PASS). The desktop now loads the
   **authoritative durable review queue** — same injected transport, same `listAll` pagination, same
@@ -290,6 +303,7 @@ when green.
   Gate: **912/912 / 49 files / 0 skips** (874 baseline + 38; one assertion tightened, none
   weakened), tsc ×2 clean, packaged app built, scans clean. Staging: all **ten** actions 401 vs 400
   for an unknown action. **Authenticated Electron smoke still PENDING** — the last functional gate.
+  </details>
   <details><summary>original open-gap entry</summary>
 - **🟡 (was) OPEN GAP `P3-4-CL` — Contribution listing (server-owned, non-blocking):** there is no
   `list-project-contributions` action. Contributions are returned only by publish / respond /

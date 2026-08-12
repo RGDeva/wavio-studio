@@ -21,10 +21,15 @@ as `--no-ff` merge **`f0c7bb74`** (base `8b5129b0`; **zero conflicts**).
 four adapter defects that reading the real server exposed and which this merge repairs, and §14 for
 the one remaining server-owned gap (`P3-4-CL`).
 
-**UPDATE (2026-08-08) — `P3-4-CL` IS ALSO CLOSED at source level.** Codex shipped
+**UPDATE (2026-08-08) — `P3-4-CL` IS CLOSED AND LANDED.** Codex shipped
 `list-project-contributions` at `wavio@6236c3901966e88bb9a05bef79253463bffa6abd`
-(deployment `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`). Branch `feat/contribution-queue-desktop`
-implements the authoritative durable review queue — see **§19**. That branch is UNMERGED.
+(deployment `dpl_3LaE73wZTRZJxFGS1FA25TqQaASx`).
+`feat/contribution-queue-desktop @ 4a79a2f1` merged into `feature/ableton-daw-companion`
+as `--no-ff` merge **`ff79dbf8`** (base `bb6ae0eb`; **zero conflicts**) — the authoritative
+durable review queue. See **§19**.
+
+**All three Multiplayer v1 workstreams are now landed in development integration:** the
+contract/IPC adapter, the UI + assistant, and the contribution queue.
 
 **Not a release.** Two gates remain open: the **authenticated Electron desktop staging smoke**
 (never claimed — now the last functional gate) and the pre-existing `.test.js` packaging issue.
@@ -522,4 +527,56 @@ That probe targeted the two **older** staging deployments; the action is present
 | `P3-4-CL` contribution queue | **closed at source level** (this branch, unmerged) |
 | Authenticated Electron staging smoke | **PENDING** — the last functional gate |
 | Compiled `.test.js` in `app.asar` | open, separate packaging task |
+| Production release | blocked |
+
+---
+
+## 21. LANDED — contribution queue in development integration (2026-08-08)
+
+`feat/contribution-queue-desktop @ 4a79a2f1` → `feature/ableton-daw-companion` via `--no-ff`
+merge **`ff79dbf8`**. Base `bb6ae0eb`; merge-base *was* integration HEAD, so conflict-free by
+construction. 13 files, no unrelated files.
+
+This is the **third and final** Multiplayer v1 merge:
+
+| # | Branch | Merge | Server contract |
+|---|---|---|---|
+| 1 | `feat/multiplayer-v1-desktop-adapter` @ `68584d26` | `64ea4230` | `wavio@6a4a9e8` |
+| 2 | `feat/multiplayer-v1-ui-assistant` @ `eb591e21` | `f0c7bb74` | `wavio@d95683f` (P3-4-ID) |
+| 3 | `feat/contribution-queue-desktop` @ `4a79a2f1` | `ff79dbf8` | `wavio@6236c39` (P3-4-CL) |
+
+### All five handler-pinned contract corrections verified post-merge
+
+| # | Correction | Post-merge |
+|---|---|---|
+| 1 | respond-invite sends `response: 'accept' \| 'decline'` | PASS |
+| 2 | respond-contribution sends `response: 'accept' \| 'reject'`, no `reviewerNote` | PASS |
+| 3 | revoke-collaborator sends `projectId` **and** `membershipId` | PASS |
+| 4 | `canContribute` only for role `comment` | PASS |
+| 5 | contribution state fails closed unless exactly one flag is set | PASS |
+| 5b | the `state` filter is **omitted** when unfiltered (handler 400s otherwise) | PASS |
+
+### Structural + privacy invariants verified post-merge
+
+No transport/credential code in `multiplayerService.ts`; exactly one `DESKTOP_ENDPOINT`; exactly
+one `buildPublishManifestBody`; `sourceRestoreId` present only as the stripped field; `db.ts`
+untouched by the merge (lineage stays server-authoritative, no local migration);
+`BLOCKED_CAPABILITIES` still empty; zero non-comment occurrences of `did:privy` or `invt_` in any
+renderer- or model-facing source.
+
+### Post-merge gate
+
+**912/912 tests · 49 files · 0 skips.** `tsc --noEmit` clean ×2 · `git diff --check` clean ·
+production build OK · unsigned packaged `Wavi Studio.app` built. Targeted regression across
+Multiplayer, identity, contribution queue, assistant multiplayer, Project Link, assistant Project
+Link, account context, Project Detail and preview isolation: **467/467**.
+
+### What remains
+
+| Gate | State |
+|---|---|
+| Multiplayer v1 adapter / UI / assistant / contribution queue | **all landed in integration** |
+| `P3-4-ID` · `P3-4-CL` | closed |
+| **Authenticated Electron desktop staging smoke** | **PENDING — the last functional gate.** Requires an interactive Privy login to mint a desktop token; no authenticated pass has ever been performed or claimed. |
+| Compiled `.test.js` inside `app.asar` | open, separate packaging-hardening task |
 | Production release | blocked |
