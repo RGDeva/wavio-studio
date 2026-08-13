@@ -1,7 +1,7 @@
 {
   "name": "wavio-studio",
   "version": "1.1.0",
-  "description": "Wavi Studio — Desktop DAW sync agent",
+  "description": "Wavi Studio \u2014 Desktop DAW sync agent",
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "tsc -p tsconfig.electron.json; concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist-electron/main.js && electron .\"",
@@ -16,7 +16,8 @@
     "test:setup-native": "node scripts/check-test-node.mjs && npm --prefix electron/test-native ci",
     "pretest": "node scripts/check-test-node.mjs",
     "test": "vitest run",
-    "postinstall": "electron-rebuild -f -w better-sqlite3 || true"
+    "postinstall": "electron-rebuild -f -w better-sqlite3 || true",
+    "build:mac:staging": "node scripts/build-staging.mjs"
   },
   "engines": {
     "node": ">=22.0.0 <23.0.0"
@@ -67,7 +68,7 @@
   "build": {
     "appId": "com.wavi.studio",
     "productName": "Wavi Studio",
-    "copyright": "Copyright © 2026 Wavi",
+    "copyright": "Copyright \u00a9 2026 Wavi",
     "directories": {
       "output": "release"
     },
@@ -88,7 +89,9 @@
     "protocols": [
       {
         "name": "wavi-protocol",
-        "schemes": ["wavi"]
+        "schemes": [
+          "wavi"
+        ]
       }
     ],
     "mac": {
