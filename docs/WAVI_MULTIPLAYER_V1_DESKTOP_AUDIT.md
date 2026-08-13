@@ -677,3 +677,32 @@ accept/reject/withdraw) still need driving through the UI.
 
 **`AUTHENTICATED ELECTRON STAGING SMOKE: NOT RUN`** — it remains the last
 functional release gate.
+
+### The harness itself is LANDED (2026-08-12) — the smoke is still NOT RUN
+
+`feat/staging-authenticated-smoke @ c89c963c` merged into
+`feature/ableton-daw-companion` as `--no-ff` **`9473cac1`** (base `634c4528`;
+**zero conflicts**), plus formatting fixup `e23464c4`.
+
+**This is tooling integration, not validation.** Landing the harness upgrades no
+claim whatsoever: no authenticated call has ever been made from the desktop
+against staging, and the status above is unchanged. Nine files, +623/−2, zero
+build output; no product surface, no production default touched.
+
+Verified post-merge against the landed code:
+
+| Check | Result |
+|---|---|
+| `WAVI_SMOKE=1` required before execution | PASS |
+| Production API base refuses to run (refusal precedes any work) | PASS |
+| Production defaults unchanged (`electron/config.ts` untouched by the merge) | PASS |
+| No token / DID / raw `invt_` / canonical `contributionId` printed | PASS — the only interpolations are role, API base, output path, step name, outcome, reason |
+| No networking separate from existing application flows | PASS |
+| Staging config reuses the QA app identity + `wavi-qa://` scheme intentionally | PASS |
+| Nothing causes staging behaviour in a normal production build | PASS — `waviQaDefaults` absent from source `package.json`; the staging `apiBase` exists only in `electron-builder.staging.json` |
+| Staging builder config valid; production URL absent (asserted) | PASS |
+
+Gate: **925/925 tests · 50 files · 0 skips**; guard suite 13/13; `tsc` clean ×2;
+production build clean; packaging succeeds; `diff-check`, secret and
+absolute-path scans clean. **No Electron launch was attempted**, per instruction,
+and no attempt was made to bypass or disable the host security control.
