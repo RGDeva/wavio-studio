@@ -709,9 +709,19 @@ and no attempt was made to bypass or disable the host security control.
 
 ---
 
-## 23. Packaging hygiene — `.test.js in app.asar` **CLOSED** (2026-08-12)
+## 23. Packaging hygiene — `.test.js in app.asar` **CLOSED and LANDED**
 
-Branch `fix/package-production-artifacts`, off `feature/ableton-daw-companion @ ae1daf87`.
+`fix/package-production-artifacts @ 20ee3b02` merged into
+`feature/ableton-daw-companion` as `--no-ff` merge **`8219e95f`** (base
+`ae1daf87`; **zero conflicts**).
+
+**Re-proven post-merge by repackaging from integration itself**, not inherited
+from the branch run: 11,597 files inspected, `verify:package` PASS, and every
+forbidden class at zero — `.test.js` 0, `.test.ts` 0, `.spec.js` 0, `.spec.ts` 0,
+`__tests__`/`coverage` 0, developer paths 0, `.env` 0, source maps 0, local
+DBs/logs 0. Runtime intact (main, preload, renderer, native SQLite binding, 4 DAW
+adapters, 2 multiplayer runtime files); no `waviQaDefaults` in the production
+bundle. `app.asar` 69.5 MB.
 
 ### Root cause (not what the symptom suggested)
 
