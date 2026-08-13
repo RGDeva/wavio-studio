@@ -706,3 +706,80 @@ Gate: **925/925 tests · 50 files · 0 skips**; guard suite 13/13; `tsc` clean �
 production build clean; packaging succeeds; `diff-check`, secret and
 absolute-path scans clean. **No Electron launch was attempted**, per instruction,
 and no attempt was made to bypass or disable the host security control.
+
+---
+
+## 23. Packaging hygiene — `.test.js in app.asar` **CLOSED** (2026-08-12)
+
+Branch `fix/package-production-artifacts`, off `feature/ableton-daw-companion @ ae1daf87`.
+
+### Root cause (not what the symptom suggested)
+
+`tsconfig.electron.json` **already excluded** `electron/**/*.test.ts`, and the builder
+globs looked correct. The real fault: **`dist-electron/` was never cleaned between builds.**
+Output compiled *before* that exclude existed survived on disk indefinitely — 7 stale
+`*.test.js` files dated Jun 28, while live runtime output was dated Aug 12 — and the
+`dist-electron/**/*` glob swept them into every bundle. Nothing was regenerating them and
+nothing was removing them. A config-only review could never have found this; it was only
+visible by opening the artifact.
+
+### Fix — two layers, smallest reliable form
+
+1. **Root cause:** a `clean:electron` step runs before every electron compile, so stale
+   output of *any* kind cannot accumulate.
+2. **Defence in depth:** negative globs in **all three** builder configs (`package.json`,
+   `electron-builder.qa.json`, `electron-builder.staging.json`), so a reappearing artifact
+   still cannot ship.
+
+Excluded: `dist-electron` and `node_modules` test/spec output, `__tests__`, dependency
+source maps, and `node_modules/better-sqlite3/deps/**` (9.5 MB of SQLite C amalgamation the
+packaged app never reads — it loads the prebuilt `.node` from `app.asar.unpacked`).
+
+**No test was weakened or deleted.** Vitest runs from the TypeScript sources, so excluding
+tests from the *electron compile* removes zero coverage.
+
+### Category C, resolved by evidence rather than assumption
+
+- **10,552 source maps** — all from dependencies (0 from our output); debugging-only,
+  excluded.
+- **38 files containing `/home/…`** — all in `@opentelemetry/semantic-conventions`, and they
+  are documentation *example values* (`/home/user`, `/home/alice/example.png`) inside
+  attribute descriptions. Dependency content, not developer leakage. **Left in place**; the
+  verifier deliberately does not treat `/home/` as a leak, and documents why.
+
+### Final artifact inspection
+
+| Check | Count | Expected |
+|---|---|---|
+| `*.test.js` / `*.test.ts` / `*.spec.js` / `*.spec.ts` | 0 / 0 / 0 / 0 | 0 |
+| developer paths (`/Users/…`, `C:\Users\`) | 0 | 0 |
+| `.env` files | 0 | 0 |
+| source maps | 0 | — |
+| local DBs / logs | 0 | 0 |
+| `__tests__` / `coverage` dirs | 0 | 0 |
+
+Runtime preserved: `dist-electron/main.js`, `dist-electron/preload.js`, `dist/index.html`,
+`better_sqlite3.node` (unpacked), 4 DAW adapters. Production bundle carries **no**
+`waviQaDefaults`, so staging configuration cannot become a production default.
+
+**`app.asar`: 162.4 MB → 69.5 MB.**
+
+### Guards against regression
+
+- `scripts/verify-package.mjs` (`npm run verify:package`) inspects the **real packaged
+  artifact** — 11,597 files — and exits non-zero on any violation, including a staging
+  `apiBase` baked into a production build. This is the check that would have caught the
+  original defect; config assertions alone would not have.
+- `electron/packagingHygiene.test.ts` — 30 tests covering both layers, that our own output
+  is never excluded, that the native binary and its loader are never excluded, and that the
+  vitest include list still resolves (literal paths exist; glob entries match real files).
+
+Gate: **955/955 tests · 51 files · 0 skips** (925 baseline + 30). tsc clean ×2, production
+build clean, packaged build clean, `diff-check` clean, repo and package scans clean.
+
+### Status of the other gates — unchanged
+
+- **`AUTHENTICATED ELECTRON STAGING SMOKE: NOT RUN`** — unchanged by this work.
+- Host Electron-bundle removal blocker — unchanged.
+- Production release — still blocked.
+- Ableton live P0 gates — still open.
