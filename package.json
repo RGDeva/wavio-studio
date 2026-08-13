@@ -5,8 +5,9 @@
   "main": "dist-electron/main.js",
   "scripts": {
     "dev": "tsc -p tsconfig.electron.json; concurrently \"vite\" \"tsc -p tsconfig.electron.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 dist-electron/main.js && electron .\"",
-    "build:electron": "tsc -p tsconfig.electron.json",
-    "build": "vite build && tsc -p tsconfig.electron.json",
+    "clean:electron": "node -e \"require('fs').rmSync('dist-electron',{recursive:true,force:true})\"",
+    "build:electron": "npm run clean:electron && tsc -p tsconfig.electron.json",
+    "build": "npm run clean:electron && vite build && tsc -p tsconfig.electron.json",
     "build:all": "npm run build && electron-builder",
     "build:mac": "npm run build && electron-builder --mac",
     "build:mac:qa": "node scripts/build-qa.mjs",
@@ -17,7 +18,8 @@
     "pretest": "node scripts/check-test-node.mjs",
     "test": "vitest run",
     "postinstall": "electron-rebuild -f -w better-sqlite3 || true",
-    "build:mac:staging": "node scripts/build-staging.mjs"
+    "build:mac:staging": "node scripts/build-staging.mjs",
+    "verify:package": "node scripts/verify-package.mjs"
   },
   "engines": {
     "node": ">=22.0.0 <23.0.0"
@@ -74,7 +76,17 @@
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*"
+      "dist-electron/**/*",
+      "!dist-electron/**/*.test.js",
+      "!dist-electron/**/*.spec.js",
+      "!dist-electron/**/*.test.js.map",
+      "!dist-electron/**/__tests__/**",
+      "!node_modules/**/*.test.js",
+      "!node_modules/**/*.spec.js",
+      "!node_modules/**/build/test/**",
+      "!node_modules/**/spec/**",
+      "!node_modules/better-sqlite3/deps/**",
+      "!node_modules/**/*.map"
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",

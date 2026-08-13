@@ -13,7 +13,17 @@
   },
   "files": [
     "dist/**/*",
-    "dist-electron/**/*"
+    "dist-electron/**/*",
+    "!dist-electron/**/*.test.js",
+    "!dist-electron/**/*.spec.js",
+    "!dist-electron/**/*.test.js.map",
+    "!dist-electron/**/__tests__/**",
+    "!node_modules/**/*.test.js",
+    "!node_modules/**/*.spec.js",
+    "!node_modules/**/build/test/**",
+    "!node_modules/**/spec/**",
+    "!node_modules/better-sqlite3/deps/**",
+    "!node_modules/**/*.map"
   ],
   "asarUnpack": [
     "node_modules/better-sqlite3/**/*",
