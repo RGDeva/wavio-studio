@@ -15,10 +15,10 @@ interface BounceCandidate {
 }
 
 const ROLE_COLORS: Record<string, string> = {
-  master:  'text-amber-300 bg-amber-500/15 border-amber-500/30',
-  mix:     'text-cyan-300 bg-cyan-500/15 border-cyan-500/30',
-  stem:    'text-violet-300 bg-violet-500/15 border-violet-500/30',
-  bounce:  'text-blue-300 bg-blue-500/15 border-blue-500/30',
+  master:  'text-warning bg-warning/15 border-warning/30',
+  mix:     'text-primary bg-primary/15 border-primary/30',
+  stem:    'text-accent bg-accent/15 border-accent/30',
+  bounce:  'text-info bg-info/15 border-info/30',
 };
 
 export function BounceConfirmModal() {
@@ -54,7 +54,7 @@ export function BounceConfirmModal() {
   return (
     <div className="fixed bottom-4 right-4 z-50 flex flex-col gap-2 max-w-sm w-full">
       {candidates.map((c) => {
-        const roleClass = ROLE_COLORS[c.role] ?? 'text-white/60 bg-white/5 border-white/10';
+        const roleClass = ROLE_COLORS[c.role] ?? 'text-fg-tertiary bg-layer-2 border-hairline-strong';
         const busy = resolving[c.id];
         return (
           <div
@@ -62,25 +62,25 @@ export function BounceConfirmModal() {
             className="bg-[#111] border border-[#2a2a2a] rounded-xl shadow-2xl overflow-hidden animate-in slide-in-from-bottom-2 fade-in"
           >
             <div className="flex items-start gap-3 p-4">
-              <div className="w-8 h-8 rounded-lg bg-cyan-500/10 flex items-center justify-center flex-shrink-0 mt-0.5">
-                <Music2 className="w-4 h-4 text-cyan-400" />
+              <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0 mt-0.5">
+                <Music2 className="w-4 h-4 text-primary" />
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-xs font-semibold text-white/80 truncate" title={c.file_name}>
+                <p className="text-xs font-semibold text-fg-secondary truncate" title={c.file_name}>
                   {c.file_name}
                 </p>
-                <p className="text-[10px] text-white/30 mt-0.5">{formatBytes(c.file_size)}</p>
+                <p className="text-meta text-fg-quaternary mt-0.5">{formatBytes(c.file_size)}</p>
                 <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
-                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium border ${roleClass}`}>
+                  <span className={`px-1.5 py-0.5 rounded text-meta font-medium border ${roleClass}`}>
                     {c.role}
                   </span>
-                  <span className="text-[10px] text-white/25">detected in export folder</span>
+                  <span className="text-meta text-fg-quaternary">detected in export folder</span>
                 </div>
               </div>
               <button
                 onClick={() => resolve(c.id, 'ignored')}
                 disabled={busy}
-                className="text-white/20 hover:text-white/50 transition-colors flex-shrink-0"
+                className="text-fg-quaternary hover:text-fg-tertiary transition-colors flex-shrink-0"
                 title="Ignore"
               >
                 <X className="w-3.5 h-3.5" />
@@ -91,7 +91,7 @@ export function BounceConfirmModal() {
               <button
                 onClick={() => resolve(c.id, 'confirmed')}
                 disabled={busy}
-                className="flex items-center justify-center gap-1 py-2.5 text-[11px] font-medium text-emerald-400 hover:bg-emerald-500/5 transition-colors disabled:opacity-40"
+                className="flex items-center justify-center gap-1 py-2.5 text-meta font-medium text-success hover:bg-success/5 transition-colors disabled:opacity-40"
               >
                 <CheckCircle2 className="w-3 h-3" />
                 New version
@@ -99,7 +99,7 @@ export function BounceConfirmModal() {
               <button
                 onClick={() => resolve(c.id, 'stem')}
                 disabled={busy}
-                className="flex items-center justify-center gap-1 py-2.5 text-[11px] font-medium text-violet-400 hover:bg-violet-500/5 transition-colors disabled:opacity-40"
+                className="flex items-center justify-center gap-1 py-2.5 text-meta font-medium text-accent hover:bg-accent/5 transition-colors disabled:opacity-40"
               >
                 <Layers className="w-3 h-3" />
                 Stem
@@ -107,7 +107,7 @@ export function BounceConfirmModal() {
               <button
                 onClick={() => resolve(c.id, 'master')}
                 disabled={busy}
-                className="flex items-center justify-center gap-1 py-2.5 text-[11px] font-medium text-amber-400 hover:bg-amber-500/5 transition-colors disabled:opacity-40"
+                className="flex items-center justify-center gap-1 py-2.5 text-meta font-medium text-warning hover:bg-warning/5 transition-colors disabled:opacity-40"
               >
                 <ChevronRight className="w-3 h-3" />
                 Master

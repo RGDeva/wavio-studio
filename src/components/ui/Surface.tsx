@@ -18,7 +18,7 @@ const VARIANTS: Record<SurfaceVariant, string> = {
   base: 'bg-surface-2 border border-border',
   elevated: 'bg-surface-2 border border-border shadow',
   inset: 'bg-background border border-border-subtle',
-  interactive: 'bg-surface-2 border border-border hover:border-white/15 hover:bg-white/[0.02] transition-colors duration-fast ease-out',
+  interactive: 'bg-surface-2 border border-border hover:border-hairline-strong hover:bg-layer-1 transition-colors duration-fast ease-out',
 };
 
 export const Surface = forwardRef<HTMLDivElement, SurfaceProps>(function Surface(

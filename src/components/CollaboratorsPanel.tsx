@@ -155,7 +155,7 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
           </div>
 
           {resolveState.kind !== 'idle' && resolveState.kind !== 'resolved' && (
-            <p className={`mt-2 text-[11px] ${resolveState.kind === 'resolving' ? 'text-muted-fg' : 'text-warning'}`} role="status">
+            <p className={`mt-2 text-meta ${resolveState.kind === 'resolving' ? 'text-muted-fg' : 'text-warning'}`} role="status">
               {resolveStateText(resolveState)}
             </p>
           )}
@@ -165,13 +165,13 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
               <div className="flex items-center gap-2">
                 {resolveState.avatarUrl
                   ? <img src={resolveState.avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover" />
-                  : <div className="w-6 h-6 rounded-full bg-white/[0.06] border border-border" aria-hidden />}
+                  : <div className="w-6 h-6 rounded-full bg-layer-3 border border-border" aria-hidden />}
                 <span className="text-xs text-foreground">{resolveState.displayName ?? 'Wavi account'}</span>
-                {targetExpired && <span className="text-[10px] text-warning ml-auto">Lookup expired — search again</span>}
+                {targetExpired && <span className="text-meta text-warning ml-auto">Lookup expired — search again</span>}
               </div>
 
               <div className="flex items-center gap-4">
-                <label className="flex items-center gap-1.5 text-[11px] text-foreground/70">
+                <label className="flex items-center gap-1.5 text-meta text-foreground/70">
                   Role
                   <select
                     value={role}
@@ -182,13 +182,13 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
                       // request the server would silently downgrade.
                       if (!contributionToggleEnabled(next)) setWantContribute(false);
                     }}
-                    className="bg-background border border-border rounded px-2 py-1 text-[11px] text-foreground"
+                    className="bg-background border border-border rounded px-2 py-1 text-meta text-foreground"
                   >
                     <option value="view">View</option>
                     <option value="comment">Comment</option>
                   </select>
                 </label>
-                <label className={`flex items-center gap-1.5 text-[11px] ${contributionToggleEnabled(role) ? 'text-foreground/70' : 'text-muted-fg'}`}>
+                <label className={`flex items-center gap-1.5 text-meta ${contributionToggleEnabled(role) ? 'text-foreground/70' : 'text-muted-fg'}`}>
                   <input
                     type="checkbox"
                     checked={wantContribute}
@@ -198,7 +198,7 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
                   Can contribute versions
                 </label>
               </div>
-              <p className="text-[10px] text-muted-fg">{contributionHelpText(role)}</p>
+              <p className="text-meta text-muted-fg">{contributionHelpText(role)}</p>
 
               <Button
                 variant="primary" size="compact"
@@ -210,8 +210,8 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
             </div>
           )}
 
-          {inviteError && <p className="mt-2 text-[11px] text-destructive" role="alert">{inviteError}</p>}
-          {inviteNotice && <p className="mt-2 text-[11px] text-success" role="status">{inviteNotice}</p>}
+          {inviteError && <p className="mt-2 text-meta text-destructive" role="alert">{inviteError}</p>}
+          {inviteNotice && <p className="mt-2 text-meta text-success" role="status">{inviteNotice}</p>}
         </section>
       )}
 
@@ -235,10 +235,10 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
               <li key={c.ref} className="flex items-center gap-3 rounded-lg border border-border bg-surface-2 px-3 py-2">
                 {c.avatarUrl
                   ? <img src={c.avatarUrl} alt="" className="w-6 h-6 rounded-full object-cover flex-shrink-0" />
-                  : <div className="w-6 h-6 rounded-full bg-white/[0.06] border border-border flex-shrink-0" aria-hidden />}
+                  : <div className="w-6 h-6 rounded-full bg-layer-3 border border-border flex-shrink-0" aria-hidden />}
                 <div className="min-w-0 flex-1">
                   <div className="text-xs text-foreground truncate">{c.displayName ?? 'Wavi account'}</div>
-                  <div className="text-[10px] text-muted-fg">{permissionSummary(c)}</div>
+                  <div className="text-meta text-muted-fg">{permissionSummary(c)}</div>
                 </div>
                 <StatusBadge tone={TONE_BADGE[collaboratorTone(c.state)]} label={COLLABORATOR_STATE_LABEL[c.state]} />
                 {canRemoveCollaborator(c, isOwner) && (
@@ -256,7 +256,7 @@ export function CollaboratorsPanel({ projectId, isOwner, onOwnershipResolved }: 
           </ul>
         )}
         {roster && roster.length > 0 && isOwner && (
-          <p className="mt-2 text-[10px] text-muted-fg flex items-start gap-1.5">
+          <p className="mt-2 text-meta text-muted-fg flex items-start gap-1.5">
             <UserPlus className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden />
             {roleNote.explanation}
           </p>
@@ -303,10 +303,10 @@ export function CollaboratorActivityFeed({ projectId }: { projectId: string }) {
           <ul className="space-y-1">
             {events.map((e, i) => (
               <li key={`${e.occurredAt ?? ''}-${i}`} className="flex items-start gap-2 py-1.5 border-b border-border-subtle last:border-0">
-                <span className="text-[10px] text-muted-fg w-32 flex-shrink-0 font-mono">
+                <span className="text-meta text-muted-fg w-32 flex-shrink-0 font-mono">
                   {e.occurredAt ? new Date(e.occurredAt).toLocaleString() : ''}
                 </span>
-                <span className="text-[11px] text-foreground/60 min-w-0">{activityLine(e)}</span>
+                <span className="text-meta text-foreground/60 min-w-0">{activityLine(e)}</span>
               </li>
             ))}
           </ul>
@@ -315,7 +315,7 @@ export function CollaboratorActivityFeed({ projectId }: { projectId: string }) {
               Load more
             </Button>
           )}
-          {footnote && <p className="mt-2 text-[10px] text-muted-fg">{footnote}</p>}
+          {footnote && <p className="mt-2 text-meta text-muted-fg">{footnote}</p>}
         </>
       )}
     </section>
@@ -390,10 +390,10 @@ export function ContributionsList({
             role="tab"
             aria-selected={filter === f.id}
             onClick={() => { setFilter(f.id); setLimit(20); }}
-            className={`px-2 py-1 rounded text-[11px] transition-colors ${
+            className={`px-2 py-1 rounded text-meta transition-colors ${
               filter === f.id
-                ? 'bg-white/[0.08] text-foreground'
-                : 'text-muted-fg hover:text-foreground/70 hover:bg-white/[0.04]'}`}
+                ? 'bg-layer-3 text-foreground'
+                : 'text-muted-fg hover:text-foreground/70 hover:bg-layer-2'}`}
           >
             {f.label}
           </button>
@@ -420,8 +420,8 @@ export function ContributionsList({
                   <GitBranch className="w-3.5 h-3.5 text-primary/50 flex-shrink-0" aria-hidden />
                   <div className="min-w-0 flex-1">
                     <p className="text-xs text-foreground/80">{caption}</p>
-                    {c.contributorNote && <p className="text-[11px] text-foreground/55 mt-0.5">{c.contributorNote}</p>}
-                    <p className="text-[10px] text-muted-fg font-mono mt-0.5">
+                    {c.contributorNote && <p className="text-meta text-foreground/55 mt-0.5">{c.contributorNote}</p>}
+                    <p className="text-meta text-muted-fg font-mono mt-0.5">
                       {c.createdAt ? new Date(c.createdAt).toLocaleString() : ''}
                     </p>
                   </div>
@@ -451,8 +451,8 @@ export function ContributionsList({
         </>
       )}
 
-      {notice && <p className="text-[11px] text-warning" role="status">{notice}</p>}
-      <p className="text-[10px] text-muted-fg">
+      {notice && <p className="text-meta text-warning" role="status">{notice}</p>}
+      <p className="text-meta text-muted-fg">
         A contribution is a new child version. Accepting or rejecting it never changes the version it
         was based on.
       </p>

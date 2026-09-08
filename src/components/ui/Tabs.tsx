@@ -57,7 +57,7 @@ export function Tabs({ tabs, value, onValueChange, className }: TabsProps) {
             className={cn(
               'px-3.5 py-2.5 text-xs font-medium whitespace-nowrap transition-colors duration-fast ease-out',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset',
-              active ? 'text-primary border-b-2 border-primary -mb-px' : 'text-white/45 hover:text-white/80 border-b-2 border-transparent',
+              active ? 'text-primary border-b-2 border-primary -mb-px' : 'text-fg-quaternary hover:text-fg-secondary border-b-2 border-transparent',
             )}
           >
             {t.label}

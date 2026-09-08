@@ -29,19 +29,19 @@ export function AssistantToolResultCard({
   const Icon = meta.Icon;
 
   return (
-    <Surface variant="inset" className="border border-white/5 p-3 max-w-md">
+    <Surface variant="inset" className="border border-hairline p-3 max-w-md">
       <div className="flex items-center gap-2">
-        <Icon className="w-3.5 h-3.5 text-white/40 flex-shrink-0" />
-        <span className="text-xs font-medium text-white/80">{model.action}</span>
+        <Icon className="w-3.5 h-3.5 text-fg-quaternary flex-shrink-0" />
+        <span className="text-xs font-medium text-fg-secondary">{model.action}</span>
         <StatusBadge tone={meta.badge} label={meta.label} className="ml-auto" />
       </div>
-      <div className="mt-1.5 flex items-center gap-1.5 text-[10px] text-white/30">
+      <div className="mt-1.5 flex items-center gap-1.5 text-meta text-fg-quaternary">
         <FolderGit2 className="w-3 h-3" />
         <span className="truncate">{model.projectLabel}</span>
       </div>
-      <p className="mt-1.5 text-[11px] text-white/70 leading-relaxed whitespace-pre-line">{model.body}</p>
+      <p className="mt-1.5 text-meta text-fg-secondary leading-relaxed whitespace-pre-line">{model.body}</p>
       {model.blockedReason && (
-        <p className="mt-1 text-[10px] text-white/30 font-mono">{model.blockedReason}</p>
+        <p className="mt-1 text-meta text-fg-quaternary font-mono">{model.blockedReason}</p>
       )}
       {model.retryable && onRetry && (
         <div className="mt-2">

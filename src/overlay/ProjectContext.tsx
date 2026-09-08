@@ -27,7 +27,7 @@ export function ProjectContext({ context, loading }: ProjectContextProps) {
     return (
       <div className="p-3 space-y-2">
         {[1, 2, 3].map((i) => (
-          <div key={i} className="h-4 bg-white/5 rounded animate-pulse" />
+          <div key={i} className="h-4 bg-layer-2 rounded animate-pulse" />
         ))}
       </div>
     );
@@ -36,9 +36,9 @@ export function ProjectContext({ context, loading }: ProjectContextProps) {
   if (!context || !context.projectName) {
     return (
       <div className="p-3 text-center">
-        <Folder className="w-6 h-6 text-white/15 mx-auto mb-2" />
-        <p className="text-xs text-white/30">No project selected</p>
-        <p className="text-[10px] text-white/20 mt-1">Open a DAW project or select a watched folder</p>
+        <Folder className="w-6 h-6 text-fg-quaternary mx-auto mb-2" />
+        <p className="text-xs text-fg-quaternary">No project selected</p>
+        <p className="text-meta text-fg-quaternary mt-1">Open a DAW project or select a watched folder</p>
       </div>
     );
   }
@@ -53,11 +53,11 @@ export function ProjectContext({ context, loading }: ProjectContextProps) {
     <div className="p-3 space-y-3">
       <div>
         <div className="flex items-center gap-2 mb-1">
-          <div className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-          <span className="text-xs font-semibold text-white/80 truncate">{context.projectName}</span>
+          <div className="w-1.5 h-1.5 rounded-full bg-success" />
+          <span className="text-xs font-semibold text-fg-secondary truncate">{context.projectName}</span>
         </div>
         {context.dawType && (
-          <span className="text-[10px] text-white/30 font-mono ml-3.5">{context.dawType.toUpperCase()}</span>
+          <span className="text-meta text-fg-quaternary font-mono ml-3.5">{context.dawType.toUpperCase()}</span>
         )}
       </div>
 
@@ -74,10 +74,10 @@ export function ProjectContext({ context, loading }: ProjectContextProps) {
       </div>
 
       {latestExport && (
-        <div className="bg-white/4 border border-white/6 rounded-lg px-2.5 py-2">
-          <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1">Latest Export</p>
-          <p className="text-xs text-white/70 truncate">{latestExport.name}</p>
-          <p className="text-[10px] text-white/30 font-mono mt-0.5">
+        <div className="bg-layer-2 border border-hairline rounded-lg px-2.5 py-2">
+          <p className="text-meta text-fg-quaternary uppercase tracking-wider mb-1">Latest Export</p>
+          <p className="text-xs text-fg-secondary truncate">{latestExport.name}</p>
+          <p className="text-meta text-fg-quaternary font-mono mt-0.5">
             {latestExport.format.toUpperCase()} · {formatRelative(latestExport.createdAt)}
           </p>
         </div>
@@ -85,13 +85,13 @@ export function ProjectContext({ context, loading }: ProjectContextProps) {
 
       {context.cloudProject?.versions?.length ? (
         <div>
-          <p className="text-[10px] text-white/30 uppercase tracking-wider mb-1.5">Recent Versions</p>
+          <p className="text-meta text-fg-quaternary uppercase tracking-wider mb-1.5">Recent Versions</p>
           <div className="space-y-1">
             {context.cloudProject.versions.slice(0, 3).map((v) => (
-              <div key={v.id} className="flex items-center justify-between text-[10px]">
-                <span className="text-white/50 font-mono">v{v.versionNumber}</span>
-                <span className="text-white/30">{formatRelative(v.syncedAt)}</span>
-                <span className="text-white/25">{formatSize(v.fileSize)}</span>
+              <div key={v.id} className="flex items-center justify-between text-meta">
+                <span className="text-fg-tertiary font-mono">v{v.versionNumber}</span>
+                <span className="text-fg-quaternary">{formatRelative(v.syncedAt)}</span>
+                <span className="text-fg-quaternary">{formatSize(v.fileSize)}</span>
               </div>
             ))}
           </div>
@@ -111,10 +111,10 @@ function StatPill({
   value: string;
 }) {
   return (
-    <div className="flex items-center gap-1.5 bg-white/4 rounded-md px-2 py-1">
-      <Icon className="w-3 h-3 text-white/25 flex-shrink-0" />
-      <span className="text-[10px] text-white/40 truncate">{label}</span>
-      <span className="text-[10px] text-white/70 ml-auto font-mono">{value}</span>
+    <div className="flex items-center gap-1.5 bg-layer-2 rounded-md px-2 py-1">
+      <Icon className="w-3 h-3 text-fg-quaternary flex-shrink-0" />
+      <span className="text-meta text-fg-quaternary truncate">{label}</span>
+      <span className="text-meta text-fg-secondary ml-auto font-mono">{value}</span>
     </div>
   );
 }

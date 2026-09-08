@@ -14,8 +14,8 @@ export interface SectionHeaderProps {
 export function SectionHeader({ label, count, action, className }: SectionHeaderProps) {
   return (
     <div className={cn('flex items-center gap-2 mb-2', className)}>
-      <h3 className="text-[11px] font-semibold text-white/50 uppercase tracking-wider">{label}</h3>
-      {count !== undefined && <span className="text-[10px] text-muted-fg font-mono">{count}</span>}
+      <h3 className="text-meta font-semibold text-fg-tertiary uppercase tracking-wider">{label}</h3>
+      {count !== undefined && <span className="text-meta text-muted-fg font-mono">{count}</span>}
       {action && <div className="ml-auto">{action}</div>}
     </div>
   );

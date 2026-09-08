@@ -27,7 +27,7 @@ export function Progress({ value, label, showValue = true, className }: Progress
   return (
     <div className={cn('space-y-1', className)}>
       {(label || showValue) && (
-        <div className="flex items-center justify-between text-[11px]">
+        <div className="flex items-center justify-between text-meta">
           {label && <span className="text-muted-fg">{label}</span>}
           {showValue && <span className="text-foreground/70 font-mono tabular-nums">{pct}%</span>}
         </div>
@@ -38,7 +38,7 @@ export function Progress({ value, label, showValue = true, className }: Progress
         aria-valuemin={0}
         aria-valuemax={100}
         aria-label={label ?? 'Progress'}
-        className="h-1.5 rounded-full bg-white/[0.08] overflow-hidden"
+        className="h-1.5 rounded-full bg-layer-3 overflow-hidden"
       >
         <div className={cn('h-full rounded-full transition-[width] duration-300 ease-out', tone)} style={{ width: `${pct}%` }} />
       </div>

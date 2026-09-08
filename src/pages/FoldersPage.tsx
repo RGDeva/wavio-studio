@@ -204,14 +204,14 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-white">Indexed Folders</h1>
-            <p className="text-xs text-white/30 mt-0.5">
+            <p className="text-xs text-fg-quaternary mt-0.5">
               Wavi indexes only the folders you explicitly add. Nothing is scanned automatically.
             </p>
           </div>
           <button
             onClick={handleAdd}
             disabled={adding}
-            className="flex items-center gap-2 px-4 py-2 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 text-black text-sm font-semibold rounded-lg transition-colors"
+            className="flex items-center gap-2 px-4 py-2 bg-primary hover:bg-primary disabled:opacity-40 text-black text-sm font-semibold rounded-lg transition-colors"
           >
             <FolderPlus className="w-4 h-4" />
             {adding ? 'Selecting…' : 'Add Folder'}
@@ -220,12 +220,12 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
         {/* Folder-add error banner */}
         {addError && (
-          <div className="bg-red-500/5 border border-red-500/20 rounded-xl px-4 py-3 flex items-center gap-3">
-            <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />
-            <p className="flex-1 text-xs text-red-300/80">{addError}</p>
+          <div className="bg-destructive/5 border border-destructive/20 rounded-xl px-4 py-3 flex items-center gap-3">
+            <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0" />
+            <p className="flex-1 text-xs text-destructive/80">{addError}</p>
             <button
               onClick={() => setAddError(null)}
-              className="text-white/30 hover:text-white/60 transition-colors flex-shrink-0"
+              className="text-fg-quaternary hover:text-fg-tertiary transition-colors flex-shrink-0"
               title="Dismiss"
             >
               <X className="w-3.5 h-3.5" />
@@ -238,27 +238,27 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
           const copy = confirmationCopy(pendingConfirmation);
           return (
             <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
-              <div className="bg-[#111] border border-amber-500/30 rounded-xl p-5 max-w-md mx-4 space-y-4">
+              <div className="bg-[#111] border border-warning/30 rounded-xl p-5 max-w-md mx-4 space-y-4">
                 <div className="flex items-start gap-3">
-                  <AlertTriangle className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" />
+                  <AlertTriangle className="w-5 h-5 text-warning flex-shrink-0 mt-0.5" />
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-white/90">{copy.title}</p>
-                    <p className="text-[10px] text-white/25 font-mono truncate mt-0.5">{pendingConfirmation.path}</p>
+                    <p className="text-sm font-semibold text-fg">{copy.title}</p>
+                    <p className="text-meta text-fg-quaternary font-mono truncate mt-0.5">{pendingConfirmation.path}</p>
                   </div>
                 </div>
-                <p className="text-xs text-white/50 leading-relaxed">{copy.body}</p>
+                <p className="text-xs text-fg-tertiary leading-relaxed">{copy.body}</p>
                 <div className="flex items-center justify-end gap-2 pt-1">
                   <button
                     onClick={handleCancelConfirmation}
                     disabled={confirming}
-                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-white/60 hover:text-white/90 border border-white/10 hover:border-white/20 transition-colors disabled:opacity-40"
+                    className="px-3 py-1.5 rounded-lg text-xs font-medium text-fg-tertiary hover:text-fg border border-hairline-strong hover:border-hairline-focus transition-colors disabled:opacity-40"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={handleConfirmAddAnyway}
                     disabled={confirming}
-                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 transition-colors disabled:opacity-40"
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-warning/20 hover:bg-warning/30 text-warning transition-colors disabled:opacity-40"
                   >
                     {confirming && <Loader2 className="w-3 h-3 animate-spin" />}
                     Add Anyway
@@ -271,14 +271,14 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
         {/* Rescan progress bar */}
         {rescanning && (
-          <div className="bg-[#0d1117] border border-cyan-500/20 rounded-xl p-4 flex items-center gap-3">
-            <Loader2 className="w-4 h-4 text-cyan-400 animate-spin flex-shrink-0" />
+          <div className="bg-[#0d1117] border border-primary/20 rounded-xl p-4 flex items-center gap-3">
+            <Loader2 className="w-4 h-4 text-primary animate-spin flex-shrink-0" />
             <div className="flex-1 min-w-0">
-              <p className="text-xs text-white/60 truncate">{progressLabel || 'Starting scan…'}</p>
+              <p className="text-xs text-fg-tertiary truncate">{progressLabel || 'Starting scan…'}</p>
             </div>
             <button
               onClick={handleCancelRescan}
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs border border-white/10 text-red-400/70 hover:text-red-400 transition-colors flex-shrink-0"
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs border border-hairline-strong text-destructive/70 hover:text-destructive transition-colors flex-shrink-0"
             >
               <X className="w-3 h-3" />Cancel
             </button>
@@ -287,7 +287,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
         {/* Last rescan result */}
         {rescanResult && !rescanning && (
-          <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl px-4 py-3 text-xs text-emerald-300/70">
+          <div className="bg-success/5 border border-success/20 rounded-xl px-4 py-3 text-xs text-success/70">
             Scan complete in {(rescanResult.result.durationMs / 1000).toFixed(1)}s —{' '}
             {rescanResult.result.found.toLocaleString()} audio files found,{' '}
             {rescanResult.result.imported} new,{' '}
@@ -298,11 +298,11 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
         {/* Auto-discovered folders */}
         {unaddedDiscovered.length > 0 && (
-          <div className="bg-[#0d1117] border border-cyan-500/20 rounded-xl p-4 space-y-3">
+          <div className="bg-[#0d1117] border border-primary/20 rounded-xl p-4 space-y-3">
             <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-cyan-400" />
-              <p className="text-sm font-semibold text-white/80">DAW folders detected on your Mac</p>
-              <span className="ml-auto text-[10px] text-white/30">click Add to index</span>
+              <Sparkles className="w-4 h-4 text-primary" />
+              <p className="text-sm font-semibold text-fg-secondary">DAW folders detected on your Mac</p>
+              <span className="ml-auto text-meta text-fg-quaternary">click Add to index</span>
             </div>
             <div className="space-y-2">
               {unaddedDiscovered.map((folder) => {
@@ -312,13 +312,13 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
                   <div key={folder} className="flex items-center gap-3 bg-black/30 rounded-lg px-3 py-2.5 group">
                     <DawLogo daw={daw} size={28} />
                     <div className="flex-1 min-w-0">
-                      <p className="text-xs font-medium text-white/70 truncate">{folder.split('/').pop()}</p>
-                      <p className="text-[10px] text-white/20 font-mono truncate">{folder}</p>
+                      <p className="text-xs font-medium text-fg-secondary truncate">{folder.split('/').pop()}</p>
+                      <p className="text-meta text-fg-quaternary font-mono truncate">{folder}</p>
                     </div>
                     <button
                       onClick={() => handleAddPath(folder)}
                       disabled={isAdding}
-                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-400 text-xs font-semibold transition-colors disabled:opacity-50 flex-shrink-0"
+                      className="flex items-center gap-1 px-2.5 py-1 rounded-lg bg-primary/20 hover:bg-primary/30 text-primary text-xs font-semibold transition-colors disabled:opacity-50 flex-shrink-0"
                     >
                       <Plus className="w-3 h-3" />
                       {isAdding ? 'Adding…' : 'Add'}
@@ -333,9 +333,9 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
         {/* Watched folders */}
         {folders.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 text-center">
-            <FolderOpen className="w-12 h-12 text-white/10 mb-4" />
-            <p className="text-sm text-white/30">No folders indexed</p>
-            <p className="text-xs text-white/20 mt-1 max-w-xs">
+            <FolderOpen className="w-12 h-12 text-fg-quaternary mb-4" />
+            <p className="text-sm text-fg-quaternary">No folders indexed</p>
+            <p className="text-xs text-fg-quaternary mt-1 max-w-xs">
               {unaddedDiscovered.length > 0
                 ? 'Add one of the detected folders above, or click Add Folder to pick any folder.'
                 : 'Click Add Folder to select a folder containing your DAW projects or audio files.'}
@@ -343,7 +343,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
           </div>
         ) : (
           <>
-            <p className="text-xs font-semibold text-white/30 uppercase tracking-wider">Indexed</p>
+            <p className="text-xs font-semibold text-fg-quaternary uppercase tracking-wider">Indexed</p>
             <div className="space-y-3">
               {folders.map((folder) => {
                 const daw = guessDaw(folder);
@@ -358,17 +358,17 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
                     <div className="flex items-center gap-3 p-4">
                       <DawLogo daw={daw} size={32} />
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-white/80 truncate">
+                        <p className="text-sm font-medium text-fg-secondary truncate">
                           {folder.split('/').pop() || folder}
                         </p>
-                        <p className="text-[10px] text-white/20 font-mono truncate">{folder}</p>
+                        <p className="text-meta text-fg-quaternary font-mono truncate">{folder}</p>
                         <div className="flex items-center gap-3 mt-1">
-                          <span className="flex items-center gap-1 text-[10px] text-white/30">
+                          <span className="flex items-center gap-1 text-meta text-fg-quaternary">
                             <FileAudio className="w-3 h-3" />
                             {count.toLocaleString()} files
                           </span>
                           {meta?.lastScanned && (
-                            <span className="flex items-center gap-1 text-[10px] text-white/20">
+                            <span className="flex items-center gap-1 text-meta text-fg-quaternary">
                               <Clock className="w-3 h-3" />
                               {timeAgo(meta.lastScanned)}
                             </span>
@@ -376,7 +376,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
                           {folderExcludes.length > 0 && (
                             <button
                               onClick={() => toggleExpandExcludes(folder)}
-                              className="flex items-center gap-0.5 text-[10px] text-amber-400/50 hover:text-amber-400/80 transition-colors"
+                              className="flex items-center gap-0.5 text-meta text-warning/50 hover:text-warning/80 transition-colors"
                             >
                               {showExcludes ? <ChevronDown className="w-2.5 h-2.5" /> : <ChevronRight className="w-2.5 h-2.5" />}
                               {folderExcludes.length} excluded
@@ -391,7 +391,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
                           onClick={() => handleRescan(folder)}
                           disabled={!!rescanning}
                           title="Rescan this folder"
-                          className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60 transition-colors disabled:opacity-30"
+                          className="p-1.5 rounded-lg hover:bg-layer-2 text-fg-quaternary hover:text-fg-tertiary transition-colors disabled:opacity-30"
                         >
                           {isRescanning
                             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -401,7 +401,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
                         <button
                           onClick={() => api.shell.openPath(folder)}
                           title="Open in Finder"
-                          className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60 transition-colors"
+                          className="p-1.5 rounded-lg hover:bg-layer-2 text-fg-quaternary hover:text-fg-tertiary transition-colors"
                         >
                           <ExternalLink className="w-3.5 h-3.5" />
                         </button>
@@ -409,7 +409,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
                         <button
                           onClick={() => handleRemove(folder)}
                           title="Stop indexing"
-                          className="p-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400 transition-colors"
+                          className="p-1.5 rounded-lg hover:bg-destructive/10 text-fg-quaternary hover:text-destructive transition-colors"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -418,15 +418,15 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
                     {/* Excluded subfolders */}
                     {showExcludes && folderExcludes.length > 0 && (
-                      <div className="border-t border-white/5 px-4 pb-3 pt-2 space-y-1.5">
-                        <p className="text-[10px] text-white/25 font-semibold uppercase tracking-wider mb-1.5">Excluded subfolders</p>
+                      <div className="border-t border-hairline px-4 pb-3 pt-2 space-y-1.5">
+                        <p className="text-meta text-fg-quaternary font-semibold uppercase tracking-wider mb-1.5">Excluded subfolders</p>
                         {folderExcludes.map(sub => (
                           <div key={sub} className="flex items-center gap-2 bg-black/20 rounded-lg px-2.5 py-1.5">
-                            <Ban className="w-3 h-3 text-amber-400/40 flex-shrink-0" />
-                            <span className="flex-1 text-[10px] font-mono text-white/30 truncate">{sub.replace(folder + '/', '')}</span>
+                            <Ban className="w-3 h-3 text-warning/40 flex-shrink-0" />
+                            <span className="flex-1 text-meta font-mono text-fg-quaternary truncate">{sub.replace(folder + '/', '')}</span>
                             <button
                               onClick={() => handleUnexclude(sub)}
-                              className="text-[10px] text-white/20 hover:text-white/50 transition-colors"
+                              className="text-meta text-fg-quaternary hover:text-fg-tertiary transition-colors"
                             >
                               remove
                             </button>
@@ -443,7 +443,7 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
 
         {/* Supported file types */}
         <div className="bg-[#111] border border-[#1a1a1a] rounded-xl p-4">
-          <p className="text-xs text-white/40 mb-2 font-medium">Indexed file types</p>
+          <p className="text-xs text-fg-quaternary mb-2 font-medium">Indexed file types</p>
           <div className="flex flex-wrap gap-2">
             {[
               { ext: '.als', label: 'Ableton' },
@@ -458,12 +458,12 @@ export function FoldersPage({ visible }: { visible?: boolean }) {
               { ext: '.mid', label: 'MIDI' },
               { ext: '.stems', label: 'Stems' },
             ].map(({ ext, label }) => (
-              <span key={ext} className="px-2 py-1 text-[10px] font-mono bg-white/5 text-white/40 rounded border border-white/5">
-                {ext} <span className="text-white/20">{label}</span>
+              <span key={ext} className="px-2 py-1 text-meta font-mono bg-layer-2 text-fg-quaternary rounded border border-hairline">
+                {ext} <span className="text-fg-quaternary">{label}</span>
               </span>
             ))}
           </div>
-          <p className="text-[10px] text-white/20 mt-3">
+          <p className="text-meta text-fg-quaternary mt-3">
             System folders (node_modules, .git, .cache, Library, application bundles, build/release dirs) are never scanned.
           </p>
         </div>

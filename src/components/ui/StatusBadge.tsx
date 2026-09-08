@@ -22,14 +22,14 @@ export interface StatusBadgeProps {
 const TONES: Record<StatusTone, { text: string; dot: string; label: string }> = {
   synced:  { text: 'text-success', dot: 'bg-success', label: 'Synced' },
   syncing: { text: 'text-primary', dot: 'bg-primary', label: 'Syncing' },
-  local:   { text: 'text-white/50', dot: 'bg-white/40', label: 'Local' },
-  paused:  { text: 'text-white/50', dot: 'bg-white/40', label: 'Paused' },
-  offline: { text: 'text-white/35', dot: 'bg-white/30', label: 'Offline' },
+  local:   { text: 'text-fg-tertiary', dot: 'bg-layer-20', label: 'Local' },
+  paused:  { text: 'text-fg-tertiary', dot: 'bg-layer-20', label: 'Paused' },
+  offline: { text: 'text-fg-quaternary', dot: 'bg-layer-10', label: 'Offline' },
   warning: { text: 'text-warning', dot: 'bg-warning', label: 'Warning' },
   error:   { text: 'text-destructive', dot: 'bg-destructive', label: 'Error' },
   success: { text: 'text-success', dot: 'bg-success', label: 'Success' },
   beta:    { text: 'text-info', dot: 'bg-info', label: 'Beta' },
-  planned: { text: 'text-white/40', dot: 'bg-white/30', label: 'Planned' },
+  planned: { text: 'text-fg-quaternary', dot: 'bg-layer-10', label: 'Planned' },
 };
 
 export function StatusBadge({ tone, label, title, pulse = false, className }: StatusBadgeProps) {

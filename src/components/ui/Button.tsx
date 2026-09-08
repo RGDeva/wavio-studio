@@ -21,15 +21,15 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 
 const VARIANTS: Record<ButtonVariant, string> = {
   primary: 'bg-primary text-primary-foreground hover:bg-primary/90 active:bg-primary/80',
-  secondary: 'bg-secondary text-secondary-foreground hover:bg-white/10 active:bg-white/[0.06]',
-  ghost: 'bg-transparent text-white/70 hover:bg-white/[0.06] hover:text-white/90',
+  secondary: 'bg-secondary text-secondary-foreground hover:bg-layer-3 active:bg-layer-3',
+  ghost: 'bg-transparent text-fg-secondary hover:bg-layer-3 hover:text-fg',
   destructive: 'bg-destructive text-destructive-foreground hover:bg-destructive/90 active:bg-destructive/80',
-  outline: 'bg-transparent text-white/80 border border-border hover:bg-white/[0.04] hover:border-white/20',
+  outline: 'bg-transparent text-fg-secondary border border-border hover:bg-layer-2 hover:border-hairline-focus',
 };
 
 const SIZES: Record<ButtonSize, string> = {
   default: 'h-8 px-3 text-xs gap-1.5',
-  compact: 'h-7 px-2.5 text-[11px] gap-1',
+  compact: 'h-7 px-2.5 text-meta gap-1',
   icon: 'h-8 w-8 p-0 justify-center',
 };
 

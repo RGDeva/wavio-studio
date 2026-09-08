@@ -29,6 +29,14 @@ export default {
         warning: { DEFAULT: hsl('--warning'), foreground: hsl('--warning-foreground') },
         success: { DEFAULT: hsl('--success'), foreground: hsl('--success-foreground') },
         info: { DEFAULT: hsl('--info'), foreground: hsl('--info-foreground') },
+        // Text hierarchy (P3-1d) — the named replacement for raw white/opacity.
+        fg: {
+          DEFAULT: hsl('--fg'),
+          secondary: hsl('--fg-secondary'),
+          tertiary: hsl('--fg-tertiary'),
+          quaternary: hsl('--fg-quaternary'),
+          disabled: hsl('--fg-disabled'),
+        },
         ring: hsl('--ring'),
         overlay: hsl('--overlay'),
         'waveform-played': hsl('--waveform-played'),
@@ -45,6 +53,29 @@ export default {
         sm: 'var(--shadow-sm)',
         DEFAULT: 'var(--shadow-md)',
         lg: 'var(--shadow-lg)',
+      },
+      backgroundColor: ({ theme }) => ({
+        ...theme("colors"),
+        // Elevation overlays (P3-1d). Same computed values the raw
+        // `bg-white/N` utilities produced; named so the ladder is legible.
+        "layer-1": "rgb(255 255 255 / 0.03)",
+        "layer-2": "rgb(255 255 255 / 0.05)",
+        "layer-3": "rgb(255 255 255 / 0.08)",
+        "layer-4": "rgb(255 255 255 / 0.12)",
+      }),
+      borderColor: ({ theme }) => ({
+        ...theme("colors"),
+        DEFAULT: theme("colors.border"),
+        // Hairline ladder (P3-1d), likewise value-preserving.
+        "hairline": "rgb(255 255 255 / 0.05)",
+        "hairline-strong": "rgb(255 255 255 / 0.10)",
+        "hairline-focus": "rgb(255 255 255 / 0.20)",
+      }),
+      fontSize: {
+        meta: ['var(--text-meta)', { lineHeight: '1.45' }],
+        body: ['var(--text-body)', { lineHeight: '1.5' }],
+        title: ['var(--text-title)', { lineHeight: '1.4' }],
+        heading: ['var(--text-heading)', { lineHeight: '1.3' }],
       },
       transitionTimingFunction: { out: 'var(--ease-out)' },
       fontFamily: {

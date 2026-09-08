@@ -24,12 +24,12 @@ function formatDuration(seconds: number | null): string {
 
 function getRoleColor(role: string): string {
   const map: Record<string, string> = {
-    stem: 'text-purple-400 bg-purple-500/10 border-purple-500/20',
-    mix: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
-    master: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-    reference: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+    stem: 'text-accent bg-accent/10 border-accent/20',
+    mix: 'text-primary bg-primary/10 border-primary/20',
+    master: 'text-success bg-success/10 border-success/20',
+    reference: 'text-warning bg-warning/10 border-warning/20',
     sample: 'text-pink-400 bg-pink-500/10 border-pink-500/20',
-    unknown: 'text-white/30 bg-white/5 border-white/10',
+    unknown: 'text-fg-quaternary bg-layer-2 border-hairline-strong',
   };
   return map[role] ?? map.unknown;
 }
@@ -226,8 +226,8 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
   const SortHeader = ({ field, label, className = '' }: { field: SortField; label: string; className?: string }) => (
     <button
       onClick={() => toggleSort(field)}
-      className={`flex items-center gap-1 text-[10px] uppercase tracking-wider font-medium hover:text-white/60 transition-colors ${
-        sortField === field ? 'text-cyan-400' : 'text-white/30'
+      className={`flex items-center gap-1 text-meta uppercase tracking-wider font-medium hover:text-fg-tertiary transition-colors ${
+        sortField === field ? 'text-primary' : 'text-fg-quaternary'
       } ${className}`}
     >
       {label}
@@ -245,10 +245,10 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
       {/* Drag-over overlay */}
       {isDragOver && (
         <div className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center pointer-events-none">
-          <div className="border-2 border-dashed border-cyan-500/50 rounded-2xl p-12 text-center">
-            <Upload className="w-12 h-12 text-cyan-400 mx-auto mb-3" />
+          <div className="border-2 border-dashed border-primary/50 rounded-2xl p-12 text-center">
+            <Upload className="w-12 h-12 text-primary mx-auto mb-3" />
             <p className="text-lg font-semibold text-white">Drop audio files here</p>
-            <p className="text-sm text-white/40 mt-1">WAV, MP3, AIFF, FLAC, M4A, OGG, AAC</p>
+            <p className="text-sm text-fg-quaternary mt-1">WAV, MP3, AIFF, FLAC, M4A, OGG, AAC</p>
           </div>
         </div>
       )}
@@ -257,7 +257,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
       {importing && (
         <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-sm flex items-center justify-center">
           <div className="flex items-center gap-3 text-white">
-            <Loader2 className="w-5 h-5 animate-spin text-cyan-400" />
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
             <span className="text-sm">Importing files...</span>
           </div>
         </div>
@@ -269,10 +269,10 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-white flex items-center gap-2">
-              <Music className="w-5 h-5 text-cyan-400" />
+              <Music className="w-5 h-5 text-primary" />
               Library
             </h1>
-            <p className="text-xs text-white/30 mt-0.5">
+            <p className="text-xs text-fg-quaternary mt-0.5">
               {stats ? `${stats.totalFiles} files · ${formatBytes(stats.totalSize)} · ${stats.syncedFiles} synced` : 'Loading...'}
             </p>
           </div>
@@ -280,7 +280,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             <button
               onClick={handleAddFiles}
               disabled={importing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[#111] border border-[#222] text-white/60 hover:text-white/80 hover:border-[#333] transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-[#111] border border-[#222] text-fg-tertiary hover:text-fg-secondary hover:border-[#333] transition-colors disabled:opacity-50"
             >
               <Plus className="w-3.5 h-3.5" />
               Add Files
@@ -288,7 +288,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             <button
               onClick={handleSyncAll}
               disabled={isSyncing}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-600/30 transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-lg bg-primary/20 border border-primary/30 text-primary hover:bg-primary/30 transition-colors disabled:opacity-50"
             >
               {isSyncing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Cloud className="w-3.5 h-3.5" />}
               {isSyncing ? 'Syncing...' : 'Sync All'}
@@ -296,7 +296,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             <button
               onClick={refresh}
               title="Refresh"
-              className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-white/40 hover:text-white/70 transition-colors"
+              className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-fg-quaternary hover:text-fg-secondary transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
@@ -305,13 +305,13 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
 
         {/* Live sync progress panel */}
         {(activeUploads.length > 0 || pendingCount > 0) && (
-          <div className="bg-[#0d0d0d] border border-cyan-500/20 rounded-xl p-3 space-y-2">
+          <div className="bg-[#0d0d0d] border border-primary/20 rounded-xl p-3 space-y-2">
             <div className="flex items-center gap-2 mb-1">
-              <UploadCloud className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
-              <span className="text-xs font-semibold text-cyan-400">
+              <UploadCloud className="w-3.5 h-3.5 text-primary animate-pulse" />
+              <span className="text-xs font-semibold text-primary">
                 {activeUploads.length > 0 ? `Uploading ${activeUploads.length} file${activeUploads.length !== 1 ? 's' : ''}` : `${pendingCount} file${pendingCount !== 1 ? 's' : ''} queued`}
               </span>
-              <span className="ml-auto text-[10px] text-white/20">
+              <span className="ml-auto text-meta text-fg-quaternary">
                 {syncStatus.includes('uploading') ? 'syncing…' : syncStatus === 'paused:auth' ? 'paused — sign in' : syncStatus === 'paused:limit' ? 'plan limit' : 'idle'}
               </span>
             </div>
@@ -322,22 +322,22 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               return (
                 <div key={item.id} className="space-y-1">
                   <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-white/50 font-mono truncate max-w-[260px]">{name}</span>
-                    <span className="text-[10px] text-cyan-400 tabular-nums">{pct}%</span>
+                    <span className="text-meta text-fg-tertiary font-mono truncate max-w-[260px]">{name}</span>
+                    <span className="text-meta text-primary tabular-nums">{pct}%</span>
                   </div>
-                  <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-cyan-500 rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
+                  <div className="h-0.5 bg-layer-2 rounded-full overflow-hidden">
+                    <div className="h-full bg-primary rounded-full transition-all duration-300" style={{ width: `${pct}%` }} />
                   </div>
                   {p?.bytesUploaded !== undefined && (
-                    <p className="text-[9px] text-white/20">{formatBytes(p.bytesUploaded)} / {formatBytes(p.bytesTotal ?? 0)}</p>
+                    <p className="text-meta text-fg-quaternary">{formatBytes(p.bytesUploaded)} / {formatBytes(p.bytesTotal ?? 0)}</p>
                   )}
                 </div>
               );
             })}
             {activeUploads.length === 0 && pendingCount > 0 && (
               <div className="flex items-center gap-2">
-                <div className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                <span className="text-[10px] text-white/30">{pendingCount} file{pendingCount !== 1 ? 's' : ''} waiting to upload</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-warning" />
+                <span className="text-meta text-fg-quaternary">{pendingCount} file{pendingCount !== 1 ? 's' : ''} waiting to upload</span>
               </div>
             )}
           </div>
@@ -351,11 +351,11 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
                 key={role}
                 onClick={() => setRoleFilter(roleFilter === role ? 'all' : role)}
                 className={`px-3 py-2 rounded-lg border text-left transition-all ${
-                  roleFilter === role ? 'border-cyan-500/40 bg-cyan-500/5' : 'border-[#1a1a1a] bg-[#111] hover:border-[#2a2a2a]'
+                  roleFilter === role ? 'border-primary/40 bg-primary/5' : 'border-[#1a1a1a] bg-[#111] hover:border-[#2a2a2a]'
                 }`}
               >
-                <span className={`text-[10px] uppercase tracking-wider ${getRoleColor(role).split(' ')[0]}`}>{role}</span>
-                <p className="text-lg font-bold text-white/70 mt-0.5">{count}</p>
+                <span className={`text-meta uppercase tracking-wider ${getRoleColor(role).split(' ')[0]}`}>{role}</span>
+                <p className="text-lg font-bold text-fg-secondary mt-0.5">{count}</p>
               </button>
             ))}
           </div>
@@ -370,12 +370,12 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Try: 140 bpm G# stems · trap beats · minor key samples under 3 minutes"
-              className="w-full pl-9 pr-8 py-2 text-xs bg-[#111] border border-[#222] rounded-lg text-white placeholder:text-white/20 focus:outline-none focus:border-fuchsia-500/30"
+              className="w-full pl-9 pr-8 py-2 text-xs bg-[#111] border border-[#222] rounded-lg text-white placeholder:text-fg-quaternary focus:outline-none focus:border-fuchsia-500/30"
             />
             {searchQuery && (
               <button
                 onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-quaternary hover:text-fg-tertiary"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -387,14 +387,14 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
-              className="appearance-none pl-3 pr-7 py-2 text-xs bg-[#111] border border-[#222] rounded-lg text-white/60 focus:outline-none focus:border-cyan-500/40 cursor-pointer"
+              className="appearance-none pl-3 pr-7 py-2 text-xs bg-[#111] border border-[#222] rounded-lg text-fg-tertiary focus:outline-none focus:border-primary/40 cursor-pointer"
             >
               <option value="all">All types</option>
               {fileTypes.map(t => (
                 <option key={t} value={t}>.{t}</option>
               ))}
             </select>
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-white/20 pointer-events-none" />
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-fg-quaternary pointer-events-none" />
           </div>
 
           {/* Role filter */}
@@ -402,7 +402,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             <select
               value={roleFilter}
               onChange={(e) => setRoleFilter(e.target.value as RoleFilter)}
-              className="appearance-none pl-3 pr-7 py-2 text-xs bg-[#111] border border-[#222] rounded-lg text-white/60 focus:outline-none focus:border-cyan-500/40 cursor-pointer"
+              className="appearance-none pl-3 pr-7 py-2 text-xs bg-[#111] border border-[#222] rounded-lg text-fg-tertiary focus:outline-none focus:border-primary/40 cursor-pointer"
             >
               <option value="all">All roles</option>
               <option value="stem">Stems</option>
@@ -412,7 +412,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               <option value="sample">Samples</option>
               <option value="unknown">Unclassified</option>
             </select>
-            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-white/20 pointer-events-none" />
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-fg-quaternary pointer-events-none" />
           </div>
         </div>
 
@@ -420,38 +420,38 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
         {searchQuery && hasStructuredFilters && (
           <div className="flex items-center gap-2 -mt-1">
             <Sparkles className="w-3 h-3 text-fuchsia-400/60 shrink-0" />
-            <p className="text-[10px] text-fuchsia-300/60">
+            <p className="text-meta text-fuchsia-300/60">
               Interpreted: <span className="text-fuchsia-300/80 font-medium">{queryDescription}</span>
             </p>
-            <span className="text-[10px] text-white/20">·</span>
-            <span className="text-[10px] text-white/30">{displayFiles.length} result{displayFiles.length !== 1 ? 's' : ''}</span>
+            <span className="text-meta text-fg-quaternary">·</span>
+            <span className="text-meta text-fg-quaternary">{displayFiles.length} result{displayFiles.length !== 1 ? 's' : ''}</span>
           </div>
         )}
 
         {/* Table */}
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <div className="w-5 h-5 border-2 border-white/20 border-t-cyan-500 rounded-full animate-spin" />
+            <div className="w-5 h-5 border-2 border-hairline-focus border-t-cyan-500 rounded-full animate-spin" />
           </div>
         ) : displayFiles.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <FileAudio className="w-10 h-10 text-white/10 mb-3" />
-            <p className="text-sm text-white/30">
+            <FileAudio className="w-10 h-10 text-fg-quaternary mb-3" />
+            <p className="text-sm text-fg-quaternary">
               {searchQuery ? 'No files match your search' : 'No audio files detected yet'}
             </p>
             {searchQuery ? (
               <div className="mt-3 space-y-2">
-                <p className="text-xs text-white/20">Try broader terms — e.g. remove BPM or key filters</p>
+                <p className="text-xs text-fg-quaternary">Try broader terms — e.g. remove BPM or key filters</p>
                 {hasStructuredFilters && (
-                  <p className="text-[10px] text-fuchsia-400/50">Parsed: {queryDescription}</p>
+                  <p className="text-meta text-fuchsia-400/50">Parsed: {queryDescription}</p>
                 )}
               </div>
             ) : (
               <>
-                <p className="text-xs text-white/20 mt-1">Drag &amp; drop audio files here, or click Add Files</p>
+                <p className="text-xs text-fg-quaternary mt-1">Drag &amp; drop audio files here, or click Add Files</p>
                 <button
                   onClick={handleAddFiles}
-                  className="mt-4 flex items-center gap-2 px-4 py-2 text-xs rounded-lg bg-cyan-600/20 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-600/30 transition-colors"
+                  className="mt-4 flex items-center gap-2 px-4 py-2 text-xs rounded-lg bg-primary/20 border border-primary/30 text-primary hover:bg-primary/30 transition-colors"
                 >
                   <Plus className="w-3.5 h-3.5" />
                   Add Audio Files
@@ -470,8 +470,8 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               <SortHeader field="duration" label="Duration" />
               <SortHeader field="file_size" label="Size" />
               <SortHeader field="modified_at" label="Modified" />
-              <span className="text-[10px] uppercase tracking-wider text-white/30 font-medium">Sync</span>
-              <span className="text-[10px] uppercase tracking-wider text-white/30 font-medium">Open</span>
+              <span className="text-meta uppercase tracking-wider text-fg-quaternary font-medium">Sync</span>
+              <span className="text-meta uppercase tracking-wider text-fg-quaternary font-medium">Open</span>
             </div>
 
             {/* Rows */}
@@ -479,18 +479,18 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
               {displayFiles.map((file) => (
                 <div
                   key={file.id}
-                  className="grid grid-cols-[1fr_80px_70px_60px_70px_70px_80px_60px_72px] gap-2 px-4 py-2.5 hover:bg-white/[0.02] transition-colors group cursor-default"
+                  className="grid grid-cols-[1fr_80px_70px_60px_70px_70px_80px_60px_72px] gap-2 px-4 py-2.5 hover:bg-layer-1 transition-colors group cursor-default"
                   title={file.file_path}
                 >
                   {/* Name + project */}
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       {file.daw_type && <DawLogo daw={file.daw_type} size={16} />}
-                      <span className="text-xs text-white/80 truncate font-medium">{file.file_name}</span>
-                      <span className="text-[10px] text-white/15 font-mono">.{file.file_type}</span>
+                      <span className="text-xs text-fg-secondary truncate font-medium">{file.file_name}</span>
+                      <span className="text-meta text-fg-quaternary font-mono">.{file.file_type}</span>
                     </div>
                     {file.project_name && (
-                      <p className="text-[10px] text-white/20 mt-0.5 flex items-center gap-1 truncate">
+                      <p className="text-meta text-fg-quaternary mt-0.5 flex items-center gap-1 truncate">
                         <FolderOpen className="w-2.5 h-2.5 inline shrink-0" />
                         {file.project_name}
                       </p>
@@ -499,40 +499,40 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
 
                   {/* Role */}
                   <div className="flex items-center">
-                    <span className={`text-[10px] px-1.5 py-0.5 rounded border ${getRoleColor(file.role)}`}>
+                    <span className={`text-meta px-1.5 py-0.5 rounded border ${getRoleColor(file.role)}`}>
                       {file.role}
                     </span>
                   </div>
 
                   {/* BPM */}
                   <div className="flex items-center">
-                    <span className={`text-xs tabular-nums ${file.bpm ? 'text-white/60' : 'text-white/15'}`}>
+                    <span className={`text-xs tabular-nums ${file.bpm ? 'text-fg-tertiary' : 'text-fg-quaternary'}`}>
                       {file.bpm ?? '—'}
                     </span>
                   </div>
 
                   {/* Key */}
                   <div className="flex items-center">
-                    <span className={`text-xs ${file.key_note ? 'text-white/60' : 'text-white/15'}`}>
+                    <span className={`text-xs ${file.key_note ? 'text-fg-tertiary' : 'text-fg-quaternary'}`}>
                       {file.key_note ?? '—'}
                     </span>
                   </div>
 
                   {/* Duration */}
                   <div className="flex items-center">
-                    <span className={`text-xs tabular-nums ${file.duration ? 'text-white/60' : 'text-white/15'}`}>
+                    <span className={`text-xs tabular-nums ${file.duration ? 'text-fg-tertiary' : 'text-fg-quaternary'}`}>
                       {formatDuration(file.duration)}
                     </span>
                   </div>
 
                   {/* Size */}
                   <div className="flex items-center">
-                    <span className="text-xs text-white/40 tabular-nums">{formatBytes(file.file_size)}</span>
+                    <span className="text-xs text-fg-quaternary tabular-nums">{formatBytes(file.file_size)}</span>
                   </div>
 
                   {/* Modified */}
                   <div className="flex items-center">
-                    <span className="text-[10px] text-white/25">{formatRelativeTime(file.modified_at)}</span>
+                    <span className="text-meta text-fg-quaternary">{formatRelativeTime(file.modified_at)}</span>
                   </div>
 
                   {/* Sync status */}
@@ -545,7 +545,7 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
                     <button
                       title="Reveal in Finder"
                       onClick={(e) => { e.stopPropagation(); api.shell.revealInFinder(file.file_path); }}
-                      className="p-1 rounded text-white/20 hover:text-white/60 hover:bg-white/5 transition-colors"
+                      className="p-1 rounded text-fg-quaternary hover:text-fg-tertiary hover:bg-layer-2 transition-colors"
                     >
                       <FolderOpen className="w-3.5 h-3.5" />
                     </button>
@@ -554,20 +554,20 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
                         <button
                           title="Open in DAW"
                           onClick={(e) => { e.stopPropagation(); setOpenDawMenu(openDawMenu === file.id ? null : file.id); }}
-                          className="p-1 rounded text-white/20 hover:text-pink-400 hover:bg-white/5 transition-colors"
+                          className="p-1 rounded text-fg-quaternary hover:text-pink-400 hover:bg-layer-2 transition-colors"
                         >
                           <Music2 className="w-3.5 h-3.5" />
                         </button>
                         {openDawMenu === file.id && (
                           <div
-                            className="absolute right-0 bottom-7 z-50 min-w-[140px] rounded-xl border border-white/10 bg-[#111] shadow-2xl py-1"
+                            className="absolute right-0 bottom-7 z-50 min-w-[140px] rounded-xl border border-hairline-strong bg-[#111] shadow-2xl py-1"
                             onClick={(e) => e.stopPropagation()}
                           >
                             {Object.entries(dawPaths).filter(([, v]) => !!v).map(([key, appPath]) => (
                               <button
                                 key={key}
                                 onClick={() => { api.shell.openWithApp(file.file_path, appPath); setOpenDawMenu(null); }}
-                                className="w-full px-3 py-2 text-left text-xs text-white/70 hover:bg-white/5 hover:text-white transition-colors"
+                                className="w-full px-3 py-2 text-left text-xs text-fg-secondary hover:bg-layer-2 hover:text-white transition-colors"
                               >
                                 {key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}
                               </button>
@@ -582,12 +582,12 @@ export function LibraryPage({ visible }: { visible?: boolean }) {
             </div>
 
             {/* Footer */}
-            <div className="px-4 py-2 border-t border-[#1a1a1a] bg-[#0d0d0d] flex items-center justify-between text-[10px] text-white/20">
+            <div className="px-4 py-2 border-t border-[#1a1a1a] bg-[#0d0d0d] flex items-center justify-between text-meta text-fg-quaternary">
               <span>Showing {displayFiles.length} of {allFiles.length} files</span>
               {(roleFilter !== 'all' || typeFilter !== 'all' || searchQuery) && (
                 <button
                   onClick={() => { setRoleFilter('all'); setTypeFilter('all'); setSearchQuery(''); }}
-                  className="text-cyan-500/60 hover:text-cyan-400 transition-colors"
+                  className="text-primary/60 hover:text-primary transition-colors"
                 >
                   Clear all filters
                 </button>

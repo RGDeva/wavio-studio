@@ -56,6 +56,28 @@
   --waveform-unplayed: 0 0% 28%;
   --waveform-cursor: 0 0% 92%;
 
+  /* ── Text hierarchy (P3-1d) ─────────────────────────────────────
+     Replaces 635 ad-hoc `text-white/NN` usages spread over 38 distinct
+     opacities. Five steps is the whole vocabulary; if a sixth seems needed,
+     the layout is doing work the hierarchy should.
+
+     `quaternary` is deliberately 46%, not the 20-30% the raw utilities used:
+     194 call sites were rendering meaningful labels below a readable contrast
+     ratio on near-black. Anything genuinely inert uses `disabled`. */
+  --fg: 0 0% 100%;
+  --fg-secondary: 0 0% 74%;
+  --fg-tertiary: 0 0% 58%;
+  --fg-quaternary: 0 0% 46%;
+  --fg-disabled: 0 0% 32%;
+
+  /* ── Type scale (P3-1d) ─────────────────────────────────────────
+     Named steps for a dense desktop surface. Replaces nine ad-hoc sizes
+     including 8px and 9px, which sat below comfortable reading size. */
+  --text-meta: 0.6875rem;   /* 11px — timestamps, counts, technical metadata */
+  --text-body: 0.75rem;     /* 12px — default application text */
+  --text-title: 0.875rem;   /* 14px — row and section titles */
+  --text-heading: 1rem;     /* 16px — panel headings */
+
   /* ── Radius scale ───────────────────────────────────────────────── */
   --radius-sm: 0.375rem;
   --radius: 0.5rem;

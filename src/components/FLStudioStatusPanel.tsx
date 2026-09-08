@@ -43,26 +43,26 @@ interface DemoStatus {
 }
 
 const UPLOAD_STATUS_CONFIG: Record<string, { color: string; label: string }> = {
-  completed:  { color: 'text-emerald-400', label: 'Complete' },
-  uploading:  { color: 'text-cyan-400',    label: 'Uploading…' },
-  retrying:   { color: 'text-amber-400',   label: 'Retrying…' },
-  failed:     { color: 'text-red-400',     label: 'Failed' },
-  pending:    { color: 'text-white/40',    label: 'Pending' },
-  none:       { color: 'text-white/20',    label: '—' },
+  completed:  { color: 'text-success', label: 'Complete' },
+  uploading:  { color: 'text-primary',    label: 'Uploading…' },
+  retrying:   { color: 'text-warning',   label: 'Retrying…' },
+  failed:     { color: 'text-destructive',     label: 'Failed' },
+  pending:    { color: 'text-fg-quaternary',    label: 'Pending' },
+  none:       { color: 'text-fg-quaternary',    label: '—' },
 };
 
 function Check({ done, label, sub, warn }: { done: boolean; label: string; sub?: string; warn?: boolean }) {
   return (
     <div className="flex items-start gap-2.5 py-1.5">
       {done
-        ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
+        ? <CheckCircle2 className="w-3.5 h-3.5 text-success mt-0.5 flex-shrink-0" />
         : warn
-          ? <AlertCircle className="w-3.5 h-3.5 text-amber-400 mt-0.5 flex-shrink-0" />
-          : <Circle className="w-3.5 h-3.5 text-white/15 mt-0.5 flex-shrink-0" />
+          ? <AlertCircle className="w-3.5 h-3.5 text-warning mt-0.5 flex-shrink-0" />
+          : <Circle className="w-3.5 h-3.5 text-fg-quaternary mt-0.5 flex-shrink-0" />
       }
       <div className="flex-1 min-w-0">
-        <p className={`text-xs ${done ? 'text-white/70' : warn ? 'text-amber-400/70' : 'text-white/30'}`}>{label}</p>
-        {sub && <p className="text-[10px] text-white/25 font-mono truncate mt-0.5">{sub}</p>}
+        <p className={`text-xs ${done ? 'text-fg-secondary' : warn ? 'text-warning/70' : 'text-fg-quaternary'}`}>{label}</p>
+        {sub && <p className="text-meta text-fg-quaternary font-mono truncate mt-0.5">{sub}</p>}
       </div>
     </div>
   );
@@ -117,30 +117,30 @@ export function FLStudioStatusPanel({ projectId }: Props) {
       {/* Header */}
       <button
         onClick={() => setExpanded(e => !e)}
-        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02] transition-colors"
+        className="w-full flex items-center gap-3 px-4 py-3 hover:bg-layer-1 transition-colors"
       >
         <div className="w-7 h-7 rounded-lg bg-[#FF5A26]/10 flex items-center justify-center flex-shrink-0">
           <Music2 className="w-3.5 h-3.5 text-[#FF5A26]" />
         </div>
         <div className="flex-1 text-left min-w-0">
-          <p className="text-xs font-semibold text-white/70 truncate">{project.name}</p>
+          <p className="text-xs font-semibold text-fg-secondary truncate">{project.name}</p>
           <div className="flex items-center gap-2 mt-0.5">
             <div className="flex gap-0.5">
               {Array.from({ length: totalSteps }).map((_, i) => (
                 <div
                   key={i}
-                  className={`w-3 h-0.5 rounded-full ${i < doneCount ? 'bg-emerald-400' : 'bg-white/10'}`}
+                  className={`w-3 h-0.5 rounded-full ${i < doneCount ? 'bg-success' : 'bg-layer-3'}`}
                 />
               ))}
             </div>
-            <span className="text-[10px] text-white/25">{doneCount}/{totalSteps} steps</span>
+            <span className="text-meta text-fg-quaternary">{doneCount}/{totalSteps} steps</span>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
-          {loading && <RefreshCw className="w-3 h-3 text-white/20 animate-spin" />}
+          {loading && <RefreshCw className="w-3 h-3 text-fg-quaternary animate-spin" />}
           {expanded
-            ? <ChevronDown className="w-3.5 h-3.5 text-white/25" />
-            : <ChevronRight className="w-3.5 h-3.5 text-white/25" />
+            ? <ChevronDown className="w-3.5 h-3.5 text-fg-quaternary" />
+            : <ChevronRight className="w-3.5 h-3.5 text-fg-quaternary" />
           }
         </div>
       </button>
@@ -187,24 +187,24 @@ export function FLStudioStatusPanel({ projectId }: Props) {
           {/* Upload status */}
           <div className="flex items-start gap-2.5 py-1.5">
             {checks.uploadStatus === 'completed'
-              ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
+              ? <CheckCircle2 className="w-3.5 h-3.5 text-success mt-0.5 flex-shrink-0" />
               : checks.uploadStatus === 'failed'
-                ? <AlertCircle className="w-3.5 h-3.5 text-red-400 mt-0.5 flex-shrink-0" />
+                ? <AlertCircle className="w-3.5 h-3.5 text-destructive mt-0.5 flex-shrink-0" />
                 : checks.uploadStatus === 'uploading' || checks.uploadStatus === 'retrying'
-                  ? <UploadCloud className="w-3.5 h-3.5 text-cyan-400 mt-0.5 flex-shrink-0 animate-pulse" />
-                  : <Clock className="w-3.5 h-3.5 text-white/15 mt-0.5 flex-shrink-0" />
+                  ? <UploadCloud className="w-3.5 h-3.5 text-primary mt-0.5 flex-shrink-0 animate-pulse" />
+                  : <Clock className="w-3.5 h-3.5 text-fg-quaternary mt-0.5 flex-shrink-0" />
             }
             <div className="flex-1 min-w-0">
               <p className={`text-xs ${uploadCfg.color}`}>
                 Upload: {uploadCfg.label}
                 {checks.totalFiles > 0 && (
-                  <span className="text-white/20 ml-1">({checks.syncedFiles}/{checks.totalFiles} files)</span>
+                  <span className="text-fg-quaternary ml-1">({checks.syncedFiles}/{checks.totalFiles} files)</span>
                 )}
               </p>
               {checks.uploadStatus === 'failed' && (
                 <button
                   onClick={() => api.sync.retryAll()}
-                  className="text-[10px] text-red-400/70 hover:text-red-400 underline mt-0.5"
+                  className="text-meta text-destructive/70 hover:text-destructive underline mt-0.5"
                 >
                   Retry
                 </button>
@@ -215,11 +215,11 @@ export function FLStudioStatusPanel({ projectId }: Props) {
           {/* Web sync */}
           <div className="flex items-start gap-2.5 py-1.5">
             {checks.webSynced
-              ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 mt-0.5 flex-shrink-0" />
-              : <Circle className="w-3.5 h-3.5 text-white/15 mt-0.5 flex-shrink-0" />
+              ? <CheckCircle2 className="w-3.5 h-3.5 text-success mt-0.5 flex-shrink-0" />
+              : <Circle className="w-3.5 h-3.5 text-fg-quaternary mt-0.5 flex-shrink-0" />
             }
             <div className="flex-1 min-w-0">
-              <p className={`text-xs ${checks.webSynced ? 'text-white/70' : 'text-white/30'}`}>
+              <p className={`text-xs ${checks.webSynced ? 'text-fg-secondary' : 'text-fg-quaternary'}`}>
                 {checks.webSynced ? 'Web vault synced' : 'Not yet visible in web vault'}
               </p>
             </div>
@@ -227,7 +227,7 @@ export function FLStudioStatusPanel({ projectId }: Props) {
               <button
                 onClick={() => api.shell.openExternal(`https://wavi.stream/vault?project=${project.cloud_id}`)}
                 title="Open in vault"
-                className="text-white/20 hover:text-cyan-400 transition-colors flex-shrink-0"
+                className="text-fg-quaternary hover:text-primary transition-colors flex-shrink-0"
               >
                 <Globe className="w-3 h-3" />
               </button>
@@ -236,15 +236,15 @@ export function FLStudioStatusPanel({ projectId }: Props) {
 
           {/* Version count footer */}
           {project.version_count > 0 && (
-            <div className="flex items-center gap-1.5 pt-1.5 mt-1 border-t border-white/5">
-              <Tag className="w-3 h-3 text-white/20" />
-              <span className="text-[10px] text-white/25">
+            <div className="flex items-center gap-1.5 pt-1.5 mt-1 border-t border-hairline">
+              <Tag className="w-3 h-3 text-fg-quaternary" />
+              <span className="text-meta text-fg-quaternary">
                 {project.version_count} version{project.version_count !== 1 ? 's' : ''} recorded locally
               </span>
               {checks.webSynced && (
                 <button
                   onClick={() => api.shell.openExternal(`https://wavi.stream/vault?project=${project.cloud_id}`)}
-                  className="ml-auto text-[10px] text-cyan-500/50 hover:text-cyan-400 transition-colors flex items-center gap-0.5"
+                  className="ml-auto text-meta text-primary/50 hover:text-primary transition-colors flex items-center gap-0.5"
                 >
                   <FolderOpen className="w-2.5 h-2.5" />
                   View in vault

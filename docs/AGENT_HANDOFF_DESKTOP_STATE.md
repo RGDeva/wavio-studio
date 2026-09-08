@@ -88,6 +88,44 @@ Run the gate with Node 22 (`nvm use`); the SQLite test harness requires it.
   replayed unchanged on retry, and never persisted across sessions.
 - **`sourceRestoreId` is never sent** — it is a desktop-local row id, not a server identity.
 
+## 5b. P3-1d — UI systematisation (branch `feat/desktop-ui-systematisation`, UNMERGED)
+
+Presentation only. **No product capability added, no server contract changed, no IPC or schema
+touched** — a behaviour-freeze check proves zero `electron/` runtime files changed and re-asserts
+all five handler-pinned corrections at source.
+
+What it removes, measured before and after:
+
+| Ad-hoc value | Before | After |
+|---|---|---|
+| raw `text/bg/border-white/NN` (38 distinct opacities) | 635 | **0** |
+| raw Tailwind palette (`emerald-400`, `red-500`, …) | 201 | **0** |
+| type below 11px (`text-[8px]`, `[9px]`, `[10px]`) | 223 | **0** |
+
+Replaced by one vocabulary: a five-step text hierarchy (`fg` → `fg-disabled`), a four-step type
+scale (`meta/body/title/heading`), a four-step elevation ladder (`bg-layer-1..4`), a three-step
+hairline ladder, and the existing semantic status tokens.
+
+**Contrast repair (deliberate, not incidental):** 194 call sites were rendering meaningful labels
+at 20–30% white on near-black. They now land on `fg-quaternary` (46%). `fg-disabled` is reserved
+for genuinely inert affordances and is never applied by the migration map.
+
+**Two classes of change, kept distinct:** 94 renames are *provably* zero-pixel (`--primary` and
+`--accent` were encoded from `#06B6D4`/`#8B5CF6`, i.e. cyan-500/violet-500); 316 are a deliberate
+semantic collapse of shade variants onto the considered token value.
+
+**Deliberately NOT abstracted:** "Load more" appears in one file and `role="alert"` in two —
+turning those into primitives would be inventing duplication.
+
+The mapping lives in `scripts/ui-token-map.mjs` (reviewable, not buried in a one-off command) and
+is pinned by `src/lib/designSystem.test.ts` (10 tests) so the system cannot silently erode.
+
+Gate: **965/965 · 52 files · 0 skips**, tsc ×2 clean, production build clean, `verify:package`
+PASS, preview isolation intact.
+
+**Owed:** a visual pass once Electron can run. These are static assertions; nothing here proves how
+it *looks*. See ENV-1.
+
 ## 6. Blockers
 
 | ID | Blocker | Owner | Notes |

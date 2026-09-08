@@ -77,17 +77,17 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-white">Studio Sync</h1>
-            <p className="text-xs text-white/30 mt-0.5">
+            <p className="text-xs text-fg-quaternary mt-0.5">
               Local DAW projects · bounces · upload health
             </p>
           </div>
           <div className="flex items-center gap-2">
             <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg bg-[#111] border border-[#222] text-xs`}>
               <div className={`w-1.5 h-1.5 rounded-full ${
-                syncStatus.includes('uploading') ? 'bg-cyan-400 animate-pulse'
-                : syncStatus.includes('paused') ? 'bg-amber-400'
-                : 'bg-emerald-400'}`} />
-              <span className="text-white/50">
+                syncStatus.includes('uploading') ? 'bg-primary animate-pulse'
+                : syncStatus.includes('paused') ? 'bg-warning'
+                : 'bg-success'}`} />
+              <span className="text-fg-tertiary">
                 {syncStatus === 'idle' ? 'Up to date'
                   : syncStatus === 'paused:auth' ? 'Paused — sign in'
                   : syncStatus === 'paused:limit' ? 'Plan limit'
@@ -97,7 +97,7 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
             </div>
             <button
               onClick={refresh}
-              className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-white/40 hover:text-white/70 transition-colors"
+              className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-fg-quaternary hover:text-fg-secondary transition-colors"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             </button>
@@ -107,7 +107,7 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {/* FL Studio project status panels */}
         {dawProjects.length > 0 && (
           <div className="space-y-3">
-            <h2 className="text-xs font-semibold text-white/40 uppercase tracking-wider flex items-center gap-2">
+            <h2 className="text-xs font-semibold text-fg-quaternary uppercase tracking-wider flex items-center gap-2">
               <Music2 className="w-3.5 h-3.5 text-[#FF5A26]" />
               FL Studio Projects
             </h2>
@@ -120,7 +120,7 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {/* Other DAW projects — compact list */}
         {otherProjects.length > 0 && (
           <div className="space-y-2">
-            <h2 className="text-xs font-semibold text-white/40 uppercase tracking-wider">Other Projects</h2>
+            <h2 className="text-xs font-semibold text-fg-quaternary uppercase tracking-wider">Other Projects</h2>
             {otherProjects.map(p => (
               <div key={p.id} className="flex items-center gap-3 px-4 py-3 bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl">
                 <div className="w-2 h-2 rounded-full flex-shrink-0" style={{
@@ -129,11 +129,11 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
                     : p.sync_status === 'uploading' ? '#22d3ee' : '#6b7280'
                 }} />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-white/70 truncate">{p.project_name}</p>
-                  <p className="text-[10px] text-white/25 font-mono truncate">{p.file_path.split('/').slice(-2).join('/')}</p>
+                  <p className="text-xs font-medium text-fg-secondary truncate">{p.project_name}</p>
+                  <p className="text-meta text-fg-quaternary font-mono truncate">{p.file_path.split('/').slice(-2).join('/')}</p>
                 </div>
-                <span className="text-[10px] text-white/25">{p.daw_type}</span>
-                <span className="text-[10px] text-white/25">{formatRelativeTime(p.modified_at)}</span>
+                <span className="text-meta text-fg-quaternary">{p.daw_type}</span>
+                <span className="text-meta text-fg-quaternary">{formatRelativeTime(p.modified_at)}</span>
               </div>
             ))}
           </div>
@@ -142,33 +142,33 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {/* Pending bounce candidates */}
         {candidates.length > 0 && (
           <div className="space-y-2">
-            <h2 className="text-xs font-semibold text-white/40 uppercase tracking-wider flex items-center gap-1.5">
-              <Clock className="w-3.5 h-3.5 text-amber-400" />
+            <h2 className="text-xs font-semibold text-fg-quaternary uppercase tracking-wider flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-warning" />
               Pending Bounces ({candidates.length})
             </h2>
             {candidates.map(c => (
-              <div key={c.id} className="flex items-center gap-3 px-4 py-3 bg-[#0d0d0d] border border-amber-500/20 rounded-xl">
-                <Music2 className="w-4 h-4 text-amber-400 flex-shrink-0" />
+              <div key={c.id} className="flex items-center gap-3 px-4 py-3 bg-[#0d0d0d] border border-warning/20 rounded-xl">
+                <Music2 className="w-4 h-4 text-warning flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-white/70 truncate font-medium">{c.file_name}</p>
-                  <p className="text-[10px] text-white/25">{formatBytes(c.file_size)} · {c.role}</p>
+                  <p className="text-xs text-fg-secondary truncate font-medium">{c.file_name}</p>
+                  <p className="text-meta text-fg-quaternary">{formatBytes(c.file_size)} · {c.role}</p>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
                   <button
                     onClick={() => resolveCandidate(c.id, 'confirmed')}
-                    className="px-2 py-1 rounded text-[10px] font-medium bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors"
+                    className="px-2 py-1 rounded text-meta font-medium bg-success/15 text-success hover:bg-success/25 transition-colors"
                   >New version</button>
                   <button
                     onClick={() => resolveCandidate(c.id, 'stem')}
-                    className="px-2 py-1 rounded text-[10px] font-medium bg-violet-500/15 text-violet-400 hover:bg-violet-500/25 transition-colors"
+                    className="px-2 py-1 rounded text-meta font-medium bg-accent/15 text-accent hover:bg-accent/25 transition-colors"
                   >Stem</button>
                   <button
                     onClick={() => resolveCandidate(c.id, 'master')}
-                    className="px-2 py-1 rounded text-[10px] font-medium bg-amber-500/15 text-amber-400 hover:bg-amber-500/25 transition-colors"
+                    className="px-2 py-1 rounded text-meta font-medium bg-warning/15 text-warning hover:bg-warning/25 transition-colors"
                   >Master</button>
                   <button
                     onClick={() => resolveCandidate(c.id, 'ignored')}
-                    className="p-1 rounded text-white/20 hover:text-white/50 transition-colors"
+                    className="p-1 rounded text-fg-quaternary hover:text-fg-tertiary transition-colors"
                   ><XCircle className="w-3.5 h-3.5" /></button>
                 </div>
               </div>
@@ -179,8 +179,8 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {/* Active uploads */}
         {activeItems.length > 0 && (
           <div className="space-y-2">
-            <h2 className="text-xs font-semibold text-white/40 uppercase tracking-wider flex items-center gap-1.5">
-              <UploadCloud className="w-3.5 h-3.5 text-cyan-400 animate-pulse" />
+            <h2 className="text-xs font-semibold text-fg-quaternary uppercase tracking-wider flex items-center gap-1.5">
+              <UploadCloud className="w-3.5 h-3.5 text-primary animate-pulse" />
               Uploading
             </h2>
             {activeItems.map(item => {
@@ -189,11 +189,11 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
               return (
                 <div key={item.id} className="px-4 py-3 bg-[#0d0d0d] border border-[#1e1e1e] rounded-xl space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="text-white/60 truncate max-w-[220px]">{item.file_name ?? item.type}</span>
-                    <span className="text-cyan-400 tabular-nums text-[10px]">{pct}%</span>
+                    <span className="text-fg-tertiary truncate max-w-[220px]">{item.file_name ?? item.type}</span>
+                    <span className="text-primary tabular-nums text-meta">{pct}%</span>
                   </div>
-                  <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
-                    <div className="h-full bg-cyan-500 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                  <div className="h-0.5 bg-layer-2 rounded-full overflow-hidden">
+                    <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${pct}%` }} />
                   </div>
                 </div>
               );
@@ -204,19 +204,19 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {/* Pending queue */}
         {pendingItems.length > 0 && (
           <div className="space-y-1">
-            <h2 className="text-xs font-semibold text-white/40 uppercase tracking-wider flex items-center gap-1.5">
+            <h2 className="text-xs font-semibold text-fg-quaternary uppercase tracking-wider flex items-center gap-1.5">
               <Clock className="w-3.5 h-3.5" />
               Queue ({pendingItems.length})
             </h2>
             {pendingItems.slice(0, 10).map(item => (
               <div key={item.id} className="flex items-center gap-3 px-4 py-2.5 bg-[#0d0d0d] border border-[#1a1a1a] rounded-xl">
-                <div className="w-1.5 h-1.5 rounded-full bg-white/20 flex-shrink-0" />
-                <span className="text-xs text-white/40 truncate flex-1">{item.file_name ?? item.type}</span>
-                <span className="text-[10px] text-white/20">{item.type.replace('_', ' ')}</span>
+                <div className="w-1.5 h-1.5 rounded-full bg-fg-disabled flex-shrink-0" />
+                <span className="text-xs text-fg-quaternary truncate flex-1">{item.file_name ?? item.type}</span>
+                <span className="text-meta text-fg-quaternary">{item.type.replace('_', ' ')}</span>
               </div>
             ))}
             {pendingItems.length > 10 && (
-              <p className="text-[10px] text-white/20 text-center">+{pendingItems.length - 10} more</p>
+              <p className="text-meta text-fg-quaternary text-center">+{pendingItems.length - 10} more</p>
             )}
           </div>
         )}
@@ -225,29 +225,29 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {failedItems.length > 0 && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <h2 className="text-xs font-semibold text-red-400/70 uppercase tracking-wider flex items-center gap-1.5">
+              <h2 className="text-xs font-semibold text-destructive/70 uppercase tracking-wider flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5" />
                 Failed ({failedItems.length})
               </h2>
               <button
                 onClick={handleRetryAll}
                 disabled={retrying}
-                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium text-red-400 border border-red-400/20 hover:bg-red-400/5 transition-colors disabled:opacity-40"
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-meta font-medium text-destructive border border-destructive/20 hover:bg-destructive/5 transition-colors disabled:opacity-40"
               >
                 <RotateCcw className={`w-3 h-3 ${retrying ? 'animate-spin' : ''}`} />
                 Retry all
               </button>
             </div>
             {failedItems.map(item => (
-              <div key={item.id} className="flex items-center gap-3 px-4 py-3 bg-[#0d0d0d] border border-red-500/15 rounded-xl">
-                <XCircle className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+              <div key={item.id} className="flex items-center gap-3 px-4 py-3 bg-[#0d0d0d] border border-destructive/15 rounded-xl">
+                <XCircle className="w-3.5 h-3.5 text-destructive flex-shrink-0" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs text-white/60 truncate">{item.file_name ?? item.type}</p>
+                  <p className="text-xs text-fg-tertiary truncate">{item.file_name ?? item.type}</p>
                   {item.error_message && (
-                    <p className="text-[10px] text-red-400/60 truncate mt-0.5">{item.error_message}</p>
+                    <p className="text-meta text-destructive/60 truncate mt-0.5">{item.error_message}</p>
                   )}
                 </div>
-                <span className="text-[10px] text-white/20">{item.retries ?? 0} retries</span>
+                <span className="text-meta text-fg-quaternary">{item.retries ?? 0} retries</span>
               </div>
             ))}
           </div>
@@ -256,9 +256,9 @@ export function StudioSyncPage({ syncProgresses, visible }: StudioSyncPageProps)
         {/* Empty state */}
         {projects.length === 0 && candidates.length === 0 && queue.length === 0 && !loading && (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <FolderOpen className="w-10 h-10 text-white/10 mb-3" />
-            <p className="text-sm text-white/30">No DAW projects linked yet</p>
-            <p className="text-xs text-white/20 mt-1">Add a folder in the Folders tab to get started</p>
+            <FolderOpen className="w-10 h-10 text-fg-quaternary mb-3" />
+            <p className="text-sm text-fg-quaternary">No DAW projects linked yet</p>
+            <p className="text-xs text-fg-quaternary mt-1">Add a folder in the Folders tab to get started</p>
           </div>
         )}
       </div>

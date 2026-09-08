@@ -73,7 +73,7 @@ export function BridgeStatusPanel() {
 
   const dot = (ok: boolean | null) => (
     <span className={`inline-block w-2 h-2 rounded-full flex-shrink-0 ${
-      ok === null ? 'bg-white/20' : ok ? 'bg-emerald-400' : 'bg-red-500'
+      ok === null ? 'bg-fg-disabled' : ok ? 'bg-success' : 'bg-destructive'
     }`} />
   );
 
@@ -83,13 +83,13 @@ export function BridgeStatusPanel() {
       <div className="flex items-center justify-between px-4 py-3 border-b border-[#1a1a1a]">
         <div className="flex items-center gap-2">
           {httpOnline ? (
-            <Wifi className="w-4 h-4 text-emerald-400" />
+            <Wifi className="w-4 h-4 text-success" />
           ) : (
-            <WifiOff className="w-4 h-4 text-red-400" />
+            <WifiOff className="w-4 h-4 text-destructive" />
           )}
-          <h2 className="text-sm font-semibold text-white/60">Local Bridge</h2>
-          <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-            httpOnline ? 'bg-emerald-500/15 text-emerald-400' : 'bg-red-500/15 text-red-400'
+          <h2 className="text-sm font-semibold text-fg-tertiary">Local Bridge</h2>
+          <span className={`text-meta px-1.5 py-0.5 rounded-full font-medium ${
+            httpOnline ? 'bg-success/15 text-success' : 'bg-destructive/15 text-destructive'
           }`}>
             {httpOnline === null ? '…' : httpOnline ? 'Online' : 'Offline'}
           </span>
@@ -97,7 +97,7 @@ export function BridgeStatusPanel() {
         <button
           onClick={refresh}
           disabled={loading}
-          className="p-1 rounded text-white/30 hover:text-white/60 transition-colors disabled:opacity-40"
+          className="p-1 rounded text-fg-quaternary hover:text-fg-tertiary transition-colors disabled:opacity-40"
           title="Refresh"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -106,36 +106,36 @@ export function BridgeStatusPanel() {
 
       {/* Rows */}
       <div className="divide-y divide-[#1a1a1a]">
-        <Row icon={<Terminal className="w-3.5 h-3.5 text-cyan-400" />} label="Endpoint">
-          <code className="text-[11px] text-white/60 font-mono">
+        <Row icon={<Terminal className="w-3.5 h-3.5 text-primary" />} label="Endpoint">
+          <code className="text-meta text-fg-tertiary font-mono">
             {status ? `http://${status.host}:${status.port}` : '—'}
           </code>
         </Row>
 
-        <Row icon={<Shield className="w-3.5 h-3.5 text-violet-400" />} label="Token">
+        <Row icon={<Shield className="w-3.5 h-3.5 text-accent" />} label="Token">
           <div className="flex items-center gap-2">
             {dot(status?.tokenExists ?? null)}
-            <span className="text-[11px] text-white/50">
+            <span className="text-meta text-fg-tertiary">
               {status?.tokenExists
-                ? <>exists · perm <code className="text-white/70 font-mono">{status.tokenPerm}</code> · <code className="text-white/40 font-mono">{status.tokenHint}</code></>
+                ? <>exists · perm <code className="text-fg-secondary font-mono">{status.tokenPerm}</code> · <code className="text-fg-quaternary font-mono">{status.tokenHint}</code></>
                 : 'not found'}
             </span>
           </div>
         </Row>
 
-        <Row icon={<Wifi className="w-3.5 h-3.5 text-emerald-400" />} label="HTTP /health">
+        <Row icon={<Wifi className="w-3.5 h-3.5 text-success" />} label="HTTP /health">
           <div className="flex items-center gap-2">
             {dot(httpOnline)}
-            <span className="text-[11px] text-white/50">
+            <span className="text-meta text-fg-tertiary">
               {httpOnline === null ? 'checking…' : httpOnline ? 'responding' : 'no response'}
             </span>
           </div>
         </Row>
 
-        <Row icon={<span className="text-[11px]">🤖</span>} label="Companion">
+        <Row icon={<span className="text-meta">🤖</span>} label="Companion">
           <div className="flex items-center gap-2">
             {dot(companion.requestCount > 0 ? true : null)}
-            <span className="text-[11px] text-white/50">
+            <span className="text-meta text-fg-tertiary">
               {companion.requestCount > 0
                 ? `${companion.requestCount} bridge action${companion.requestCount !== 1 ? 's' : ''} · last ${fmtTime(companion.lastSeen)}`
                 : 'no activity yet'}
@@ -146,10 +146,10 @@ export function BridgeStatusPanel() {
 
       {/* Footer */}
       <div className="px-4 py-2 border-t border-[#1a1a1a] flex items-center justify-between">
-        <p className="text-[10px] text-white/20">
+        <p className="text-meta text-fg-quaternary">
           Listens on 127.0.0.1 only · Token auth required
         </p>
-        <p className="text-[10px] text-white/20">
+        <p className="text-meta text-fg-quaternary">
           refreshed {fmtTime(lastRefresh)}
         </p>
       </div>
@@ -162,7 +162,7 @@ function Row({ icon, label, children }: { icon: React.ReactNode; label: string; 
     <div className="flex items-center justify-between px-4 py-3 gap-4">
       <div className="flex items-center gap-2 min-w-[100px]">
         {icon}
-        <span className="text-[11px] text-white/40">{label}</span>
+        <span className="text-meta text-fg-quaternary">{label}</span>
       </div>
       <div className="flex-1 text-right">{children}</div>
     </div>
