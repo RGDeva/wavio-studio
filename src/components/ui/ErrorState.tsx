@@ -44,7 +44,7 @@ export function ErrorState({
         )}
       </div>
       {showDetail && detail && (
-        <pre className="mt-1 max-w-md max-h-32 overflow-auto rounded bg-black/40 border border-border px-3 py-2 text-[11px] text-muted-fg font-mono text-left break-all whitespace-pre-wrap">
+        <pre className="mt-1 max-w-md max-h-32 overflow-auto rounded bg-black/40 border border-border px-3 py-2 text-meta text-muted-fg font-mono text-left break-all whitespace-pre-wrap">
           {detail}
         </pre>
       )}

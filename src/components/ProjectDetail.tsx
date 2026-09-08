@@ -289,7 +289,7 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
       </button>
       <div className="flex-1 min-w-0">
         <p className="text-xs text-foreground/80 truncate">{bounce.file_name}</p>
-        <p className="text-[10px] text-muted-fg">
+        <p className="text-meta text-muted-fg">
           {!bounceMediaUrl ? 'Bounce unavailable — file is missing on disk.'
             : playError ? "Couldn't play this file — use Open instead."
             : 'Latest bounce'}
@@ -311,7 +311,7 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
           <DawLogo daw={project.daw_type ?? 'Unknown'} size={32} />
           <div className="flex-1 min-w-0">
             <h2 className="font-brand text-base font-bold text-foreground truncate">{project.project_name}</h2>
-            <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-fg">
+            <div className="flex items-center gap-2 mt-0.5 text-meta text-muted-fg">
               <SyncStatusBadge status={project.sync_status ?? 'pending'} />
               <span>·</span>
               <span className="truncate">{project.daw_type ?? 'DAW'}</span>
@@ -323,8 +323,8 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
           <Button variant="ghost" size="compact" onClick={() => onNavigate?.('copilot')} title="Ask Copilot about this project">
             <Sparkles /> Copilot
           </Button>
-          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded hover:bg-white/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <X className="w-4 h-4 text-white/50" />
+          <button type="button" onClick={onClose} aria-label="Close" className="p-1.5 rounded hover:bg-layer-3 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <X className="w-4 h-4 text-fg-tertiary" />
           </button>
         </div>
 
@@ -382,7 +382,7 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
           )}
 
           {statusMsg && (
-            <p role="status" className={`text-[11px] ${statusMsg.startsWith('Error') ? 'text-destructive' : 'text-primary'}`}>{statusMsg}</p>
+            <p role="status" className={`text-meta ${statusMsg.startsWith('Error') ? 'text-destructive' : 'text-primary'}`}>{statusMsg}</p>
           )}
         </div>
 
@@ -408,9 +408,9 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                 </div>
               )}
               <div>
-                <SectionHeader label="Package" action={<span className="text-[10px] text-muted-fg font-mono">{formatFileSize(summary.totalSize)}</span>} />
+                <SectionHeader label="Package" action={<span className="text-meta text-muted-fg font-mono">{formatFileSize(summary.totalSize)}</span>} />
                 <Progress value={summary.packageCompleteness} label="Completeness" />
-                <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-[11px]">
+                <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-meta">
                   <Stat label="Native project" value={summary.hasNativeProject ? 'Yes' : 'No'} warn={!summary.hasNativeProject} />
                   <Stat label="Latest bounce" value={summary.hasBounce ? 'Yes' : 'No'} />
                   <Stat label="Stems" value={String(summary.stemCount)} />
@@ -421,10 +421,10 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               </div>
               {activity.length > 0 && (
                 <div>
-                  <SectionHeader label="Recent activity" action={<button onClick={() => setTab('activity')} className="text-[10px] text-primary/80 hover:text-primary">View all</button>} />
+                  <SectionHeader label="Recent activity" action={<button onClick={() => setTab('activity')} className="text-meta text-primary/80 hover:text-primary">View all</button>} />
                   <div className="space-y-1">
                     {activity.slice(0, 3).map((a: any) => (
-                      <div key={a.id} className="flex items-start gap-2 text-[11px]">
+                      <div key={a.id} className="flex items-start gap-2 text-meta">
                         <span className="text-muted-fg w-24 flex-shrink-0 font-mono">{a.created_at ? new Date(a.created_at).toLocaleDateString() : ''}</span>
                         <span className="text-foreground/60 min-w-0 truncate" title={a.message}>{a.message}</span>
                       </div>
@@ -434,16 +434,16 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               )}
               {activeLinks.length > 0 && (
                 <div>
-                  <SectionHeader label="Links" count={activeLinks.length} action={<button onClick={() => onNavigate?.('links')} className="text-[10px] text-primary/80 hover:text-primary">Manage</button>} />
+                  <SectionHeader label="Links" count={activeLinks.length} action={<button onClick={() => onNavigate?.('links')} className="text-meta text-primary/80 hover:text-primary">Manage</button>} />
                   <div className="space-y-1">
                     {activeLinks.slice(0, 3).map(({ record: l, state }) => {
                       const pres = LINK_STATE_PRESENTATION[state];
                       return (
-                        <div key={l.tracking_id} className="flex items-center gap-2 text-[11px]">
+                        <div key={l.tracking_id} className="flex items-center gap-2 text-meta">
                           <Link2 className="w-3 h-3 text-primary/50 flex-shrink-0" />
                           <span className="text-foreground/70 truncate">{linkDisplayName(l)}</span>
                           <StatusBadge tone={pres.tone} label={pres.label} title={pres.note} className="flex-shrink-0" />
-                          <button onClick={() => navigator.clipboard.writeText(l.url)} title="Copy" className="ml-auto p-0.5 rounded hover:bg-white/10 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"><Copy className="w-3 h-3 text-white/40" /></button>
+                          <button onClick={() => navigator.clipboard.writeText(l.url)} title="Copy" className="ml-auto p-0.5 rounded hover:bg-layer-3 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"><Copy className="w-3 h-3 text-fg-quaternary" /></button>
                         </div>
                       );
                     })}
@@ -462,11 +462,11 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                   <div key={role}>
                     <button type="button" onClick={() => setExpandedGroups((p) => { const n = new Set(p); n.has(role) ? n.delete(role) : n.add(role); return n; })}
                       aria-expanded={expanded}
-                      className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-white/[0.02] transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring">
-                      {expanded ? <ChevronDown className="w-3 h-3 text-white/30" /> : <ChevronRight className="w-3 h-3 text-white/30" />}
-                      <Icon className="w-3.5 h-3.5 text-white/30" />
-                      <span className="text-xs font-medium text-white/40 uppercase tracking-wider">{ROLE_LABELS[role] ?? role}</span>
-                      <span className="text-[10px] text-muted-fg ml-auto font-mono">{roleFiles.length}</span>
+                      className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-layer-1 transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring">
+                      {expanded ? <ChevronDown className="w-3 h-3 text-fg-quaternary" /> : <ChevronRight className="w-3 h-3 text-fg-quaternary" />}
+                      <Icon className="w-3.5 h-3.5 text-fg-quaternary" />
+                      <span className="text-xs font-medium text-fg-quaternary uppercase tracking-wider">{ROLE_LABELS[role] ?? role}</span>
+                      <span className="text-meta text-muted-fg ml-auto font-mono">{roleFiles.length}</span>
                     </button>
                     {expanded && roleFiles.map((fl) => (
                       <FileRow
@@ -506,8 +506,8 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                         <div key={v.id} className="flex items-center gap-3 py-2.5 border-b border-border-subtle">
                           <CheckCircle2 className="w-3.5 h-3.5 text-primary/50 flex-shrink-0" />
                           <div className="flex-1 min-w-0">
-                            <p className="text-sm text-foreground/75">{v.label ?? 'Version'} <span className="text-[10px] text-muted-fg ml-1 font-mono">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span></p>
-                            <p className="text-[10px] text-muted-fg font-mono">
+                            <p className="text-sm text-foreground/75">{v.label ?? 'Version'} <span className="text-meta text-muted-fg ml-1 font-mono">{v.created_at ? new Date(v.created_at).toLocaleString() : ''}</span></p>
+                            <p className="text-meta text-muted-fg font-mono">
                               {caption ? `${caption}${v.file_size ? ' · ' : ''}` : ''}{v.file_size ? formatBytes(v.file_size) : ''}
                             </p>
                           </div>
@@ -534,11 +534,11 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               <div>
                 <SectionHeader label="Missing files" count={missingFiles.length} />
                 {missingFiles.length === 0 ? (
-                  <p className="text-[11px] text-muted-fg">All indexed files are present on disk.</p>
+                  <p className="text-meta text-muted-fg">All indexed files are present on disk.</p>
                 ) : (
                   <div className="space-y-1">
                     {missingFiles.map((f) => (
-                      <div key={f.id} className="flex items-center gap-2 text-[11px]">
+                      <div key={f.id} className="flex items-center gap-2 text-meta">
                         <AlertTriangle className="w-3 h-3 text-warning flex-shrink-0" />
                         <span className="text-foreground/70 truncate">{f.file_name}</span>
                         <span className="ml-auto font-mono text-muted-fg truncate max-w-[180px]" title={relOf(f)}>{relOf(f)}</span>
@@ -549,29 +549,29 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               </div>
               <div>
                 <SectionHeader label="Plugins" />
-                <div className="flex items-center gap-2 text-[11px] text-muted-fg">
+                <div className="flex items-center gap-2 text-meta text-muted-fg">
                   <Puzzle className="w-3.5 h-3.5" />
                   {compat?.capabilities.scanPlugins
                     ? 'Plugin scan available.'
                     : 'Plugin scanning is not yet implemented — plugin dependencies are unknown.'}
                 </div>
               </div>
-              <p className="text-[10px] text-white/25">
+              <p className="text-meta text-fg-quaternary">
                 Portable-session dependency reports arrive with the DAWproject packaging pipeline.
               </p>
             </div>
           ) : tab === 'compatibility' ? (
             <div className="p-5">
               {!compat ? (
-                <p className="text-[11px] text-muted-fg">Checking compatibility…</p>
+                <p className="text-meta text-muted-fg">Checking compatibility…</p>
               ) : (
                 <>
                   <p className="text-xs font-semibold text-foreground/75 mb-3">{compatibilityHeadline(compat)}</p>
                   <div className="space-y-1.5">
                     {deriveCompatibilityRows(compat).map((row) => (
-                      <div key={row.label} className="flex items-center justify-between text-[11px] py-1 border-b border-border-subtle last:border-0">
+                      <div key={row.label} className="flex items-center justify-between text-meta py-1 border-b border-border-subtle last:border-0">
                         <span className="text-muted-fg">{row.label}</span>
-                        <span className={row.tone === 'ok' ? 'text-success' : row.tone === 'warn' ? 'text-warning' : 'text-white/40'}>{row.value}</span>
+                        <span className={row.tone === 'ok' ? 'text-success' : row.tone === 'warn' ? 'text-warning' : 'text-fg-quaternary'}>{row.value}</span>
                       </div>
                     ))}
                   </div>
@@ -593,8 +593,8 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                   <div className="space-y-1">
                     {activity.map((a: any) => (
                       <div key={a.id} className="flex items-start gap-2 py-1.5 border-b border-border-subtle last:border-0">
-                        <span className="text-[10px] text-muted-fg w-32 flex-shrink-0 font-mono">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
-                        <span className="text-[11px] text-foreground/55 min-w-0 truncate" title={a.message}>{a.message}</span>
+                        <span className="text-meta text-muted-fg w-32 flex-shrink-0 font-mono">{a.created_at ? new Date(a.created_at).toLocaleString() : ''}</span>
+                        <span className="text-meta text-foreground/55 min-w-0 truncate" title={a.message}>{a.message}</span>
                       </div>
                     ))}
                   </div>
@@ -611,7 +611,7 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
 function Stat({ label, value, warn }: { label: string; value: string; warn?: boolean }) {
   return (
     <div>
-      <p className="text-[10px] text-muted-fg">{label}</p>
+      <p className="text-meta text-muted-fg">{label}</p>
       <p className={`text-xs font-medium ${warn ? 'text-warning' : 'text-foreground/80'}`}>{value}</p>
     </div>
   );

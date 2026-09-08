@@ -54,13 +54,13 @@ export default function UiPreview() {
     <div className="h-screen flex flex-col bg-background text-foreground">
       <div className="flex items-center gap-3 px-4 py-2 border-b border-border bg-surface">
         <span className="font-brand font-bold text-sm">UI Preview</span>
-        <span className="text-[11px] text-muted-fg">synthetic fixtures · dev-only</span>
+        <span className="text-meta text-muted-fg">synthetic fixtures · dev-only</span>
         <div className="flex items-center gap-1 ml-3">
           <Button size="compact" variant={view === 'home' ? 'primary' : 'ghost'} onClick={() => setView('home')}>Home</Button>
           <Button size="compact" variant={view === 'project' ? 'primary' : 'ghost'} onClick={() => setView('project')}>Project Detail</Button>
           <Button size="compact" variant={view === 'links' ? 'primary' : 'ghost'} onClick={() => setView('links')}>Links</Button>
         </div>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           {PREVIEW_STATES.map((s) => (
             <Button key={s} size="compact" variant={s === state ? 'primary' : 'ghost'} onClick={() => setState(s)}>{s}</Button>
           ))}
@@ -97,21 +97,21 @@ export default function UiPreview() {
               return (
                 <section key={group} className="space-y-2">
                   <div className="flex items-baseline gap-2">
-                    <h2 className="text-sm font-semibold text-white/80">{meta.title}</h2>
-                    <span className="text-[10px] text-white/25">{rows.length} · {meta.hint}</span>
+                    <h2 className="text-sm font-semibold text-fg-secondary">{meta.title}</h2>
+                    <span className="text-meta text-fg-quaternary">{rows.length} · {meta.hint}</span>
                   </div>
                   <div className="space-y-2">
                     {rows.map((r) => {
                       const pres = LINK_STATE_PRESENTATION[r.state];
                       return (
-                        <Surface key={r.state} variant="base" className="border border-white/5 p-4">
+                        <Surface key={r.state} variant="base" className="border border-hairline p-4">
                           <div className="flex items-center gap-2">
-                            <span className="text-sm font-medium text-white/85 truncate">{r.label}</span>
+                            <span className="text-sm font-medium text-fg truncate">{r.label}</span>
                             <StatusBadge tone={pres.tone} label={pres.label} title={pres.note} />
-                            <span className="ml-auto text-[10px] text-white/25 font-mono">{r.state}</span>
+                            <span className="ml-auto text-meta text-fg-quaternary font-mono">{r.state}</span>
                           </div>
-                          <p className="text-[10px] text-white/20 font-mono truncate mt-0.5">{r.url}</p>
-                          <p className="text-[10px] text-white/30 mt-1.5">{pres.note}</p>
+                          <p className="text-meta text-fg-quaternary font-mono truncate mt-0.5">{r.url}</p>
+                          <p className="text-meta text-fg-quaternary mt-1.5">{pres.note}</p>
                         </Surface>
                       );
                     })}
@@ -135,7 +135,7 @@ export default function UiPreview() {
         <nav aria-label="Preview navigation" className="w-52 flex-shrink-0 bg-background border-r border-border py-3 px-2 space-y-0.5">
           {SURFACES.map((s, i) => (
             <div key={s} aria-current={i === 1 ? 'page' : undefined}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm ${i === 1 ? 'bg-white/[0.06] text-foreground' : 'text-white/45'}`}>
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm ${i === 1 ? 'bg-layer-3 text-foreground' : 'text-fg-quaternary'}`}>
               <Music className="w-4 h-4" /> {s}
             </div>
           ))}
@@ -173,7 +173,7 @@ export default function UiPreview() {
             {(state === 'populated' || state === 'partial-sync' || state === 'missing-file' || state === 'success' || state === 'offline') && (
               <>
                 <section>
-                  <h2 className="text-sm font-semibold text-white/50 mb-3 uppercase tracking-wider">Projects</h2>
+                  <h2 className="text-sm font-semibold text-fg-tertiary mb-3 uppercase tracking-wider">Projects</h2>
                   <div className="grid grid-cols-2 gap-3">
                     {previewProjects.map((p) => (
                       <Surface key={p.id} variant="interactive" className="p-3">
@@ -181,20 +181,20 @@ export default function UiPreview() {
                           <span className="text-sm text-foreground/90 truncate">{p.name}</span>
                           <SyncStatusBadge status={state === 'missing-file' ? 'missing' : state === 'partial-sync' ? 'uploading' : p.status} />
                         </div>
-                        <div className="mt-1 text-[11px] text-muted-fg font-mono">{p.daw} · {p.stems} stems · {p.size} · v{p.version}</div>
+                        <div className="mt-1 text-meta text-muted-fg font-mono">{p.daw} · {p.stems} stems · {p.size} · v{p.version}</div>
                       </Surface>
                     ))}
                   </div>
                 </section>
 
                 <section>
-                  <h2 className="text-sm font-semibold text-white/50 mb-3 uppercase tracking-wider">Project Links</h2>
+                  <h2 className="text-sm font-semibold text-fg-tertiary mb-3 uppercase tracking-wider">Project Links</h2>
                   <Surface className="divide-y divide-border">
                     {previewLinks.map((l) => (
                       <div key={l.id} className="flex items-center justify-between px-3 py-2.5">
                         <span className="text-sm text-foreground/85 truncate">{l.label}</span>
                         <div className="flex items-center gap-3">
-                          <span className="text-[11px] text-muted-fg font-mono">{l.opened} opens</span>
+                          <span className="text-meta text-muted-fg font-mono">{l.opened} opens</span>
                           <StatusBadge tone={l.status === 'revoked' ? 'error' : 'success'} label={l.status === 'revoked' ? 'Revoked' : 'Active'} />
                         </div>
                       </div>
@@ -204,26 +204,26 @@ export default function UiPreview() {
 
                 <div className="grid grid-cols-2 gap-6">
                   <section>
-                    <h2 className="text-sm font-semibold text-white/50 mb-3 uppercase tracking-wider">Versions</h2>
+                    <h2 className="text-sm font-semibold text-fg-tertiary mb-3 uppercase tracking-wider">Versions</h2>
                     <Surface className="divide-y divide-border">
                       {previewVersions.map((v) => (
                         <div key={v.id} className="px-3 py-2.5">
                           <div className="flex items-center justify-between">
                             <span className="text-sm text-foreground/85">v{v.n}</span>
-                            <span className="text-[11px] text-muted-fg font-mono">{v.date}</span>
+                            <span className="text-meta text-muted-fg font-mono">{v.date}</span>
                           </div>
-                          <div className="text-[11px] text-muted-fg mt-0.5">{v.author} — {v.summary}</div>
+                          <div className="text-meta text-muted-fg mt-0.5">{v.author} — {v.summary}</div>
                         </div>
                       ))}
                     </Surface>
                   </section>
                   <section>
-                    <h2 className="text-sm font-semibold text-white/50 mb-3 uppercase tracking-wider">Activity</h2>
+                    <h2 className="text-sm font-semibold text-fg-tertiary mb-3 uppercase tracking-wider">Activity</h2>
                     <Surface className="divide-y divide-border">
                       {previewActivity.map((a) => (
                         <div key={a.id} className="flex items-center justify-between px-3 py-2.5">
                           <span className="text-sm text-foreground/80 truncate">{a.text}</span>
-                          <span className="text-[11px] text-muted-fg font-mono">{a.when}</span>
+                          <span className="text-meta text-muted-fg font-mono">{a.when}</span>
                         </div>
                       ))}
                     </Surface>
@@ -231,7 +231,7 @@ export default function UiPreview() {
                 </div>
 
                 <section>
-                  <h2 className="text-sm font-semibold text-white/50 mb-3 uppercase tracking-wider">Assistant</h2>
+                  <h2 className="text-sm font-semibold text-fg-tertiary mb-3 uppercase tracking-wider">Assistant</h2>
                   <Surface className="p-4 flex items-center gap-3 text-sm text-muted-fg">
                     <Wand2 className="w-4 h-4 text-primary" /> Project-aware assistant (preview) — ask about sync, versions, or compatibility.
                   </Surface>

@@ -11,7 +11,7 @@ export interface SkeletonProps extends React.HTMLAttributes<HTMLDivElement> {
 }
 
 export function Skeleton({ lines, className, ...props }: SkeletonProps) {
-  const base = 'rounded bg-white/[0.06] motion-safe:animate-pulse';
+  const base = 'rounded bg-layer-3 motion-safe:animate-pulse';
   if (lines && lines > 1) {
     return (
       <div className="space-y-2" aria-hidden {...props}>

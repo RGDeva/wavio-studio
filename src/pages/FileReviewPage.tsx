@@ -14,26 +14,26 @@ interface FileReviewPageProps {
 // ── Role styling ──────────────────────────────────────────────────────────────
 
 const ROLE_STYLE: Record<string, { label: string; color: string; Icon: React.FC<{ className?: string }> }> = {
-  daw_project:  { label: 'DAW Project', color: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',     Icon: Music2 },
-  bounce:       { label: 'Bounce',      color: 'text-blue-400 bg-blue-500/10 border-blue-500/20',      Icon: FileAudio },
-  master:       { label: 'Master',      color: 'text-amber-400 bg-amber-500/10 border-amber-500/20',   Icon: FileAudio },
-  stem:         { label: 'Stem',        color: 'text-violet-400 bg-violet-500/10 border-violet-500/20',Icon: FileAudio },
+  daw_project:  { label: 'DAW Project', color: 'text-primary bg-primary/10 border-primary/20',     Icon: Music2 },
+  bounce:       { label: 'Bounce',      color: 'text-info bg-info/10 border-info/20',      Icon: FileAudio },
+  master:       { label: 'Master',      color: 'text-warning bg-warning/10 border-warning/20',   Icon: FileAudio },
+  stem:         { label: 'Stem',        color: 'text-accent bg-accent/10 border-accent/20',Icon: FileAudio },
   vocal_take:   { label: 'Vocal',       color: 'text-pink-400 bg-pink-500/10 border-pink-500/20',      Icon: FileAudio },
-  midi:         { label: 'MIDI',        color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20', Icon: Piano },
+  midi:         { label: 'MIDI',        color: 'text-success bg-success/10 border-success/20', Icon: Piano },
   sample:       { label: 'Sample',      color: 'text-indigo-400 bg-indigo-500/10 border-indigo-500/20',Icon: FileAudio },
-  beat:         { label: 'Beat',        color: 'text-orange-400 bg-orange-500/10 border-orange-500/20',Icon: FileAudio },
+  beat:         { label: 'Beat',        color: 'text-warning bg-warning/10 border-warning/20',Icon: FileAudio },
   artwork:      { label: 'Artwork',     color: 'text-rose-400 bg-rose-500/10 border-rose-500/20',      Icon: ImageIcon },
   lyrics:       { label: 'Lyrics',      color: 'text-lime-400 bg-lime-500/10 border-lime-500/20',      Icon: FileText },
   reference:    { label: 'Reference',   color: 'text-teal-400 bg-teal-500/10 border-teal-500/20',      Icon: FileAudio },
   mix:          { label: 'Mix',         color: 'text-sky-400 bg-sky-500/10 border-sky-500/20',         Icon: FileAudio },
-  misc:         { label: 'File',        color: 'text-white/30 bg-white/5 border-white/10',             Icon: FileAudio },
+  misc:         { label: 'File',        color: 'text-fg-quaternary bg-layer-2 border-hairline-strong',             Icon: FileAudio },
 };
 
 function RoleBadge({ role }: { role: string }) {
   const s = ROLE_STYLE[role] ?? ROLE_STYLE.misc;
   const { Icon } = s;
   return (
-    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-medium ${s.color}`}>
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-meta font-medium ${s.color}`}>
       <Icon className="w-2.5 h-2.5" />
       {s.label}
     </span>
@@ -42,13 +42,13 @@ function RoleBadge({ role }: { role: string }) {
 
 function ConfidenceBar({ value }: { value: number }) {
   const pct = Math.round(value * 100);
-  const color = pct >= 80 ? 'bg-emerald-500' : pct >= 60 ? 'bg-amber-500' : 'bg-red-500';
+  const color = pct >= 80 ? 'bg-success' : pct >= 60 ? 'bg-warning' : 'bg-destructive';
   return (
     <div className="flex items-center gap-2">
-      <div className="flex-1 h-1 bg-white/5 rounded-full overflow-hidden">
+      <div className="flex-1 h-1 bg-layer-2 rounded-full overflow-hidden">
         <div className={`h-full rounded-full ${color}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="text-[10px] tabular-nums text-white/30">{pct}%</span>
+      <span className="text-meta tabular-nums text-fg-quaternary">{pct}%</span>
     </div>
   );
 }
@@ -57,7 +57,7 @@ function ConfidenceBar({ value }: { value: number }) {
 
 function SignalPill({ label }: { label: string }) {
   return (
-    <span className="px-1.5 py-0.5 rounded bg-white/5 text-[10px] text-white/30 border border-white/8">
+    <span className="px-1.5 py-0.5 rounded bg-layer-2 text-meta text-fg-quaternary border border-hairline-strong">
       {label}
     </span>
   );
@@ -99,14 +99,14 @@ function AssociationCard({ item, fileNames, fileRoles, onConfirm, onReject, onDe
         <div className="flex items-start justify-between gap-3 mb-2">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
-              <Layers className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-              <span className="text-xs text-white/40 font-medium uppercase tracking-wider">
+              <Layers className="w-3.5 h-3.5 text-primary shrink-0" />
+              <span className="text-xs text-fg-quaternary font-medium uppercase tracking-wider">
                 Suggested Group · {item.file_ids.length} file{item.file_ids.length !== 1 ? 's' : ''}
               </span>
             </div>
             {/* Editable project name */}
             <input
-              className="w-full bg-transparent text-white font-semibold text-sm placeholder:text-white/20 outline-none border-b border-transparent focus:border-cyan-500/40 pb-0.5 transition-colors"
+              className="w-full bg-transparent text-white font-semibold text-sm placeholder:text-fg-quaternary outline-none border-b border-transparent focus:border-primary/40 pb-0.5 transition-colors"
               value={projectName}
               onChange={e => setProjectName(e.target.value)}
               placeholder="Project name…"
@@ -131,7 +131,7 @@ function AssociationCard({ item, fileNames, fileRoles, onConfirm, onReject, onDe
           return (
             <div key={fid} className="flex items-center gap-2">
               <RoleBadge role={role} />
-              <span className="text-xs text-white/60 font-mono truncate flex-1" title={name}>{name}</span>
+              <span className="text-xs text-fg-tertiary font-mono truncate flex-1" title={name}>{name}</span>
             </div>
           );
         })}
@@ -141,21 +141,21 @@ function AssociationCard({ item, fileNames, fileRoles, onConfirm, onReject, onDe
       <div className="px-5 py-3 border-t border-[#1a1a1a] flex items-center gap-2">
         <button
           onClick={() => onConfirm(item.id, projectName)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-500 hover:bg-cyan-400 text-black text-xs font-semibold transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary hover:bg-primary text-black text-xs font-semibold transition-colors"
         >
           <CheckCircle2 className="w-3.5 h-3.5" />
           Confirm Group
         </button>
         <button
           onClick={() => onDefer(item.id)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/8 text-white/50 text-xs font-medium transition-colors border border-white/10"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-layer-2 hover:bg-layer-3 text-fg-tertiary text-xs font-medium transition-colors border border-hairline-strong"
         >
           <Clock className="w-3.5 h-3.5" />
           Defer
         </button>
         <button
           onClick={() => onReject(item.id)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-red-500/10 text-white/30 hover:text-red-400 text-xs font-medium transition-colors ml-auto"
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg hover:bg-destructive/10 text-fg-quaternary hover:text-destructive text-xs font-medium transition-colors ml-auto"
         >
           <XCircle className="w-3.5 h-3.5" />
           Reject
@@ -255,17 +255,17 @@ export function FileReviewPage({ visible, onPendingCountChange }: FileReviewPage
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-white flex items-center gap-2">
-              <Wand2 className="w-5 h-5 text-cyan-400" />
+              <Wand2 className="w-5 h-5 text-primary" />
               File Review
             </h1>
-            <p className="text-xs text-white/30 mt-0.5">
+            <p className="text-xs text-fg-quaternary mt-0.5">
               Review suggested file groupings — nothing moves without your confirmation
             </p>
           </div>
           <button
             onClick={load}
             title="Refresh"
-            className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-white/40 hover:text-white/70 transition-colors"
+            className="p-1.5 rounded-lg bg-[#111] border border-[#222] text-fg-quaternary hover:text-fg-secondary transition-colors"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
@@ -273,7 +273,7 @@ export function FileReviewPage({ visible, onPendingCountChange }: FileReviewPage
 
         {/* Toast */}
         {toast && (
-          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-400">
+          <div className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-success/10 border border-success/20 text-xs text-success">
             <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
             {toast}
           </div>
@@ -282,19 +282,19 @@ export function FileReviewPage({ visible, onPendingCountChange }: FileReviewPage
         {/* Content */}
         {loading && items.length === 0 ? (
           <div className="flex items-center justify-center py-20">
-            <div className="w-5 h-5 border-2 border-white/20 border-t-cyan-500 rounded-full animate-spin" />
+            <div className="w-5 h-5 border-2 border-hairline-focus border-t-cyan-500 rounded-full animate-spin" />
           </div>
         ) : items.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20 text-center">
-            <CheckCircle2 className="w-10 h-10 text-white/10 mb-3" />
-            <p className="text-sm text-white/30">No pending suggestions</p>
-            <p className="text-xs text-white/20 mt-1">
+            <CheckCircle2 className="w-10 h-10 text-fg-quaternary mb-3" />
+            <p className="text-sm text-fg-quaternary">No pending suggestions</p>
+            <p className="text-xs text-fg-quaternary mt-1">
               Wavi will surface groupings as it classifies your music files
             </p>
           </div>
         ) : (
           <>
-            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-amber-500/5 border border-amber-500/15 text-xs text-amber-400/80">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-warning/5 border border-warning/15 text-xs text-warning/80">
               <AlertCircle className="w-3.5 h-3.5 shrink-0" />
               Wavi found {items.length} possible group{items.length !== 1 ? 's' : ''}. Review and confirm — no files will be moved.
             </div>

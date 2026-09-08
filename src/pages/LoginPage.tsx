@@ -87,17 +87,17 @@ export function LoginPage({ onLogin }: LoginPageProps) {
         <div className="bg-[#111] border border-[#222] rounded-2xl p-6 space-y-4 text-center">
           {error && (
             <div className="space-y-2">
-              <p className="text-xs text-red-400 bg-red-900/20 rounded-lg px-3 py-2">{error}</p>
-              <div className="flex items-center justify-center gap-3 text-[11px]">
-                <button onClick={handleSignIn} className="text-cyan-400 hover:text-cyan-300">Retry</button>
-                <span className="text-white/20">·</span>
-                <button onClick={() => api.shell.openExternal(getAuthUrl())} className="text-cyan-400 hover:text-cyan-300">
+              <p className="text-xs text-destructive bg-destructive/10 rounded-lg px-3 py-2">{error}</p>
+              <div className="flex items-center justify-center gap-3 text-meta">
+                <button onClick={handleSignIn} className="text-primary hover:text-primary">Retry</button>
+                <span className="text-fg-quaternary">·</span>
+                <button onClick={() => api.shell.openExternal(getAuthUrl())} className="text-primary hover:text-primary">
                   Open browser again
                 </button>
                 {diagnosticId && (
                   <>
-                    <span className="text-white/20">·</span>
-                    <button onClick={handleCopyDiagnosticId} className="text-white/40 hover:text-white/60">
+                    <span className="text-fg-quaternary">·</span>
+                    <button onClick={handleCopyDiagnosticId} className="text-fg-quaternary hover:text-fg-tertiary">
                       {copied ? 'Copied!' : `Copy diagnostic ID`}
                     </button>
                   </>
@@ -108,14 +108,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           {!waiting ? (
             <>
               <div>
-                <p className="text-sm font-semibold text-white/80 mb-1">Sign in to sync your DAW</p>
-                <p className="text-xs text-white/30">
+                <p className="text-sm font-semibold text-fg-secondary mb-1">Sign in to sync your DAW</p>
+                <p className="text-xs text-fg-quaternary">
                   Uses the same account as wavi.stream
                 </p>
               </div>
               <button
                 onClick={handleSignIn}
-                className="w-full bg-cyan-500 hover:bg-cyan-400 text-black font-semibold text-sm rounded-lg py-3 transition-colors"
+                className="w-full bg-primary hover:bg-primary text-black font-semibold text-sm rounded-lg py-3 transition-colors"
               >
                 Sign in with Wavi
               </button>
@@ -123,14 +123,14 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           ) : (
             <>
               <div className="flex items-center justify-center py-2">
-                <div className="w-6 h-6 border-2 border-cyan-500 border-t-transparent rounded-full animate-spin" />
+                <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
               </div>
-              <p className="text-sm text-white/60">
+              <p className="text-sm text-fg-tertiary">
                 {exchanging ? 'Securing your session…' : 'Complete sign in in your browser…'}
               </p>
               <button
                 onClick={() => { setWaiting(false); setExchanging(false); }}
-                className="text-xs text-white/20 hover:text-white/40 transition-colors"
+                className="text-xs text-fg-quaternary hover:text-fg-quaternary transition-colors"
               >
                 Cancel
               </button>
@@ -138,7 +138,7 @@ export function LoginPage({ onLogin }: LoginPageProps) {
           )}
         </div>
 
-        <p className="text-center text-xs text-white/20 mt-6">
+        <p className="text-center text-xs text-fg-quaternary mt-6">
           Your session is encrypted at rest.
         </p>
       </div>

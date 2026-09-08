@@ -6,10 +6,10 @@ type DiagData = Awaited<ReturnType<typeof api.diagnostics.get>>;
 
 function Row({ label, value, mono = false, warn = false }: { label: string; value: string | number | null; mono?: boolean; warn?: boolean }) {
   return (
-    <div className="flex items-center justify-between py-1.5 border-b border-white/5 last:border-0">
-      <span className="text-xs text-white/40">{label}</span>
-      <span className={`text-xs ${mono ? 'font-mono' : ''} ${warn ? 'text-amber-400' : 'text-white/80'}`}>
-        {value === null || value === undefined ? <span className="text-white/20">—</span> : String(value)}
+    <div className="flex items-center justify-between py-1.5 border-b border-hairline last:border-0">
+      <span className="text-xs text-fg-quaternary">{label}</span>
+      <span className={`text-xs ${mono ? 'font-mono' : ''} ${warn ? 'text-warning' : 'text-fg-secondary'}`}>
+        {value === null || value === undefined ? <span className="text-fg-quaternary">—</span> : String(value)}
       </span>
     </div>
   );
@@ -19,8 +19,8 @@ function Section({ title, icon: Icon, children }: { title: string; icon: React.E
   return (
     <div className="bg-[#111] border border-[#1a1a1a] rounded-xl p-4">
       <div className="flex items-center gap-2 mb-3">
-        <Icon className="w-3.5 h-3.5 text-cyan-400" />
-        <p className="text-xs font-semibold text-white/60 uppercase tracking-wider">{title}</p>
+        <Icon className="w-3.5 h-3.5 text-primary" />
+        <p className="text-xs font-semibold text-fg-tertiary uppercase tracking-wider">{title}</p>
       </div>
       {children}
     </div>
@@ -91,20 +91,20 @@ export function DiagnosticsPage({ visible }: { visible?: boolean }) {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-bold text-white">Diagnostics</h1>
-            <p className="text-xs text-white/30 mt-0.5">Local app state — no private data exported to cloud</p>
+            <p className="text-xs text-fg-quaternary mt-0.5">Local app state — no private data exported to cloud</p>
           </div>
           <div className="flex items-center gap-2">
             <button
               onClick={refresh}
               disabled={loading}
-              className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60 transition-colors disabled:opacity-30"
+              className="p-1.5 rounded-lg hover:bg-layer-2 text-fg-quaternary hover:text-fg-tertiary transition-colors disabled:opacity-30"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
             </button>
             <button
               onClick={exportReport}
               disabled={!data}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-white/10 text-white/40 hover:text-white/70 hover:border-white/20 transition-all disabled:opacity-30"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs border border-hairline-strong text-fg-quaternary hover:text-fg-secondary hover:border-hairline-focus transition-all disabled:opacity-30"
             >
               <Download className="w-3.5 h-3.5" />
               {exported ? 'Exported!' : 'Export report'}
@@ -113,7 +113,7 @@ export function DiagnosticsPage({ visible }: { visible?: boolean }) {
         </div>
 
         {!data && !loading && (
-          <div className="flex items-center gap-2 text-xs text-amber-400/70 bg-amber-500/5 border border-amber-500/20 rounded-xl px-4 py-3">
+          <div className="flex items-center gap-2 text-xs text-warning/70 bg-warning/5 border border-warning/20 rounded-xl px-4 py-3">
             <AlertTriangle className="w-4 h-4 flex-shrink-0" />
             Diagnostics unavailable — running outside packaged app or IPC not connected
           </div>
@@ -123,7 +123,7 @@ export function DiagnosticsPage({ visible }: { visible?: boolean }) {
           <>
             {/* Environment banner */}
             {data.environment === 'development' && (
-              <div className="flex items-center gap-2 text-xs text-amber-400/70 bg-amber-500/5 border border-amber-500/20 rounded-xl px-4 py-2">
+              <div className="flex items-center gap-2 text-xs text-warning/70 bg-warning/5 border border-warning/20 rounded-xl px-4 py-2">
                 <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
                 Development build — data is isolated from the production app
               </div>
@@ -152,12 +152,12 @@ export function DiagnosticsPage({ visible }: { visible?: boolean }) {
               {Object.entries(data.queueCounts).map(([status, count]) => (
                 <Row key={status} label={`  ${status}`} value={count} mono />
               ))}
-              {queueTotal === 0 && <p className="text-xs text-white/20 py-1">Queue is empty</p>}
+              {queueTotal === 0 && <p className="text-xs text-fg-quaternary py-1">Queue is empty</p>}
             </Section>
 
             <Section title="Indexed Folders" icon={Folder}>
               {data.indexedRoots.length === 0 ? (
-                <p className="text-xs text-white/20 py-1">No folders indexed</p>
+                <p className="text-xs text-fg-quaternary py-1">No folders indexed</p>
               ) : (
                 data.indexedRoots.map(r => (
                   <Row key={r} label="" value={r} mono />
@@ -167,7 +167,7 @@ export function DiagnosticsPage({ visible }: { visible?: boolean }) {
 
             <Section title="Configured DAWs" icon={Activity}>
               {Object.keys(data.sanitizedDawPaths).length === 0 ? (
-                <p className="text-xs text-white/20 py-1">No DAWs configured</p>
+                <p className="text-xs text-fg-quaternary py-1">No DAWs configured</p>
               ) : (
                 Object.entries(data.sanitizedDawPaths).map(([k, v]) => (
                   <Row key={k} label={k} value={v || '—'} mono />
@@ -175,7 +175,7 @@ export function DiagnosticsPage({ visible }: { visible?: boolean }) {
               )}
             </Section>
 
-            <p className="text-[10px] text-white/15 text-center pb-4">
+            <p className="text-meta text-fg-quaternary text-center pb-4">
               Report contains no tokens, secrets, audio, or complete private paths.
             </p>
           </>

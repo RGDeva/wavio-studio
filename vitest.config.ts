@@ -56,6 +56,7 @@ export default defineConfig({
       'electron/packagingHygiene.test.ts',
       'electron/stagingSmoke.test.ts',
       'src/lib/collaborationView.test.ts',
+      'src/lib/designSystem.test.ts',
     ],
     environment: 'node',
   },

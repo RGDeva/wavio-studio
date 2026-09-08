@@ -1,5 +1,22 @@
 import { type ClassValue, clsx } from 'clsx';
-import { twMerge } from 'tailwind-merge';
+import { extendTailwindMerge } from 'tailwind-merge';
+
+/**
+ * tailwind-merge must be told about our custom `fontSize` keys (P3-1d).
+ *
+ * Without this, `text-meta` looks like a text COLOUR to the merger, so a class
+ * list of `text-primary-foreground … text-meta` silently drops the colour and
+ * the element inherits white. That is how the primary Button lost its
+ * foreground: every test stayed green because the bug only exists at
+ * class-merge time, and it was caught by looking at the rendered page.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    classGroups: {
+      'font-size': [{ text: ['meta', 'body', 'title', 'heading'] }],
+    },
+  },
+});
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));

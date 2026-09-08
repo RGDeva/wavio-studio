@@ -183,8 +183,8 @@ export function LinksPage({ visible }: { visible?: boolean }) {
             the canonical account-identity contract is pending. Records stay
             device-scoped and ownership-unknown until it lands. */}
         {sharedAccountResolver.current().kind === 'missing-account-context' && total > 0 && (
-          <Surface variant="inset" className="border border-white/5 px-4 py-2.5">
-            <p className="text-[11px] text-white/35 leading-relaxed">
+          <Surface variant="inset" className="border border-hairline px-4 py-2.5">
+            <p className="text-meta text-fg-quaternary leading-relaxed">
               Account attribution isn't available yet, so these records are scoped to this
               computer rather than to your account. Ownership can't be verified per record
               until account-aware link sync arrives.
@@ -196,7 +196,7 @@ export function LinksPage({ visible }: { visible?: boolean }) {
           <Surface variant="inset" className="border border-destructive/20 px-4 py-3 flex items-center gap-3">
             <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0" />
             <p className="flex-1 text-xs text-destructive/80">{actionError}</p>
-            <button onClick={() => setActionError(null)} className="text-white/30 hover:text-white/60" aria-label="Dismiss">
+            <button onClick={() => setActionError(null)} className="text-fg-quaternary hover:text-fg-tertiary" aria-label="Dismiss">
               <X className="w-3.5 h-3.5" />
             </button>
           </Surface>
@@ -209,10 +209,10 @@ export function LinksPage({ visible }: { visible?: boolean }) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Search by label, project or URL…"
-              className="flex-1 bg-surface-inset border border-white/10 rounded-lg px-3 py-2 text-sm text-white/80 placeholder:text-white/20 focus:outline-none focus:border-primary/40"
+              className="flex-1 bg-surface-inset border border-hairline-strong rounded-lg px-3 py-2 text-sm text-fg-secondary placeholder:text-fg-quaternary focus:outline-none focus:border-primary/40"
             />
             <select value={kindFilter} onChange={(e) => setKindFilter(e.target.value as any)}
-              className="bg-surface-inset border border-white/10 rounded-lg px-2 py-2 text-xs text-white/60">
+              className="bg-surface-inset border border-hairline-strong rounded-lg px-2 py-2 text-xs text-fg-tertiary">
               <option value="all">All types</option>
               <option value="listen">Listen Links</option>
               <option value="project">Project Links</option>
@@ -246,7 +246,7 @@ export function LinksPage({ visible }: { visible?: boolean }) {
 
         {/* No match */}
         {views !== null && total > 0 && filtered.length === 0 && (
-          <p className="text-center text-xs text-white/25 py-10">No links match the current search or filters.</p>
+          <p className="text-center text-xs text-fg-quaternary py-10">No links match the current search or filters.</p>
         )}
 
         {/* Grouped rows */}
@@ -257,9 +257,9 @@ export function LinksPage({ visible }: { visible?: boolean }) {
           return (
             <section key={group} className="space-y-2">
               <div className="flex items-baseline gap-2">
-                <h2 className="text-sm font-semibold text-white/80">{meta.title}</h2>
-                <span className="text-[10px] text-white/25">{rows.length}</span>
-                <span className="text-[10px] text-white/25">· {meta.hint}</span>
+                <h2 className="text-sm font-semibold text-fg-secondary">{meta.title}</h2>
+                <span className="text-meta text-fg-quaternary">{rows.length}</span>
+                <span className="text-meta text-fg-quaternary">· {meta.hint}</span>
               </div>
               <div className="space-y-2">
                 {rows.map((v) => {
@@ -270,7 +270,7 @@ export function LinksPage({ visible }: { visible?: boolean }) {
                   const caps = linkCapabilities(link);
                   return (
                     <Surface key={link.tracking_id} variant="base"
-                      className={`border border-white/5 p-4 ${inactive ? 'opacity-60' : 'hover:border-white/10'} transition-colors`}>
+                      className={`border border-hairline p-4 ${inactive ? 'opacity-60' : 'hover:border-hairline-strong'} transition-colors`}>
                       <div className="flex items-start gap-3">
                         <div className="flex-1 min-w-0">
                           {editing === link.tracking_id ? (
@@ -279,37 +279,37 @@ export function LinksPage({ visible }: { visible?: boolean }) {
                                 onChange={(e) => setEditValue(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === 'Enter') handleRenameCommit(link.tracking_id); if (e.key === 'Escape') setEditing(null); }}
                                 placeholder="Internal label (only you see this)"
-                                className="flex-1 bg-black/40 border border-primary/30 rounded px-2 py-1 text-sm text-white/90 focus:outline-none" />
-                              <button onClick={() => handleRenameCommit(link.tracking_id)} className="text-[10px] text-primary">Save</button>
-                              <button onClick={() => setEditing(null)} className="text-[10px] text-white/30">Cancel</button>
+                                className="flex-1 bg-black/40 border border-primary/30 rounded px-2 py-1 text-sm text-fg focus:outline-none" />
+                              <button onClick={() => handleRenameCommit(link.tracking_id)} className="text-meta text-primary">Save</button>
+                              <button onClick={() => setEditing(null)} className="text-meta text-fg-quaternary">Cancel</button>
                             </div>
                           ) : (
                             <div className="flex items-center gap-2 min-w-0">
-                              <p className="text-sm font-medium text-white/85 truncate">{linkDisplayName(link)}</p>
+                              <p className="text-sm font-medium text-fg truncate">{linkDisplayName(link)}</p>
                               <button
                                 onClick={() => { setEditing(link.tracking_id); setEditValue(link.label ?? ''); }}
                                 title="Rename internal label (stored on this computer)"
-                                className="text-white/20 hover:text-white/60 flex-shrink-0" aria-label="Rename label">
+                                className="text-fg-quaternary hover:text-fg-tertiary flex-shrink-0" aria-label="Rename label">
                                 <Pencil className="w-3 h-3" />
                               </button>
                             </div>
                           )}
-                          <p className="text-[10px] text-white/20 font-mono truncate mt-0.5">{link.url}</p>
+                          <p className="text-meta text-fg-quaternary font-mono truncate mt-0.5">{link.url}</p>
 
                           <div className="flex flex-wrap items-center gap-2 mt-2">
                             <StatusBadge tone={pres.tone} label={pres.label} title={pres.note} />
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-primary/10 text-primary/80">
+                            <span className="px-1.5 py-0.5 rounded text-meta bg-primary/10 text-primary/80">
                               {link.kind === 'project' ? 'Project Link' : 'Listen Link'}
                             </span>
                             {caps.map((c) => (
-                              <span key={c} className="px-1.5 py-0.5 rounded text-[10px] bg-white/5 text-white/40">{CAPABILITY_LABELS[c] ?? c}</span>
+                              <span key={c} className="px-1.5 py-0.5 rounded text-meta bg-layer-2 text-fg-quaternary">{CAPABILITY_LABELS[c] ?? c}</span>
                             ))}
                           </div>
 
                           {/* Honest per-state note */}
-                          <p className="text-[10px] text-white/30 mt-1.5 leading-relaxed">{pres.note}</p>
+                          <p className="text-meta text-fg-quaternary mt-1.5 leading-relaxed">{pres.note}</p>
 
-                          <div className="flex items-center gap-4 mt-2 text-[10px] text-white/25">
+                          <div className="flex items-center gap-4 mt-2 text-meta text-fg-quaternary">
                             <span>Created {formatDate(link.created_at)}</span>
                             <span>Expires {link.expires_at ? formatDate(link.expires_at) : 'never'}</span>
                           </div>
@@ -318,11 +318,11 @@ export function LinksPage({ visible }: { visible?: boolean }) {
                         <div className="flex items-center gap-1 flex-shrink-0">
                           <button onClick={() => handleCopy(link)} disabled={inactive}
                             title={inactive ? 'Link is no longer active' : 'Copy link'} aria-label="Copy link"
-                            className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60 disabled:opacity-30 transition-colors">
+                            className="p-1.5 rounded-lg hover:bg-layer-2 text-fg-quaternary hover:text-fg-tertiary disabled:opacity-30 transition-colors">
                             {copied === link.tracking_id ? <Check className="w-3.5 h-3.5 text-success" /> : <Copy className="w-3.5 h-3.5" />}
                           </button>
                           <button onClick={() => api.shell.openExternal(link.url)} title="Open public page" aria-label="Open public page"
-                            className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60 transition-colors">
+                            className="p-1.5 rounded-lg hover:bg-layer-2 text-fg-quaternary hover:text-fg-tertiary transition-colors">
                             <ExternalLink className="w-3.5 h-3.5" />
                           </button>
                           <button
@@ -335,13 +335,13 @@ export function LinksPage({ visible }: { visible?: boolean }) {
                             disabled={!canDuplicate(link) || isBusy}
                             title={canDuplicate(link) ? 'Duplicate with different permissions' : 'Duplicate unavailable for links created before this version'}
                             aria-label="Duplicate link"
-                            className="p-1.5 rounded-lg hover:bg-white/5 text-white/30 hover:text-white/60 disabled:opacity-30 transition-colors">
+                            className="p-1.5 rounded-lg hover:bg-layer-2 text-fg-quaternary hover:text-fg-tertiary disabled:opacity-30 transition-colors">
                             <CopyPlus className="w-3.5 h-3.5" />
                           </button>
                           {group !== 'revoked' && (
                             <button onClick={() => setConfirmRevoke(link.tracking_id)} disabled={isBusy || !online}
                               title={online ? 'Revoke link' : 'Revoking needs a connection'} aria-label="Revoke link"
-                              className="p-1.5 rounded-lg hover:bg-destructive/10 text-white/30 hover:text-destructive disabled:opacity-30 transition-colors">
+                              className="p-1.5 rounded-lg hover:bg-destructive/10 text-fg-quaternary hover:text-destructive disabled:opacity-30 transition-colors">
                               {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : !online ? <WifiOff className="w-3.5 h-3.5" /> : <Ban className="w-3.5 h-3.5" />}
                             </button>
                           )}
@@ -362,8 +362,8 @@ export function LinksPage({ visible }: { visible?: boolean }) {
               <div className="flex items-start gap-3">
                 <Ban className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
                 <div>
-                  <p className="text-sm font-semibold text-white/90">Revoke this link?</p>
-                  <p className="text-xs text-white/50 mt-1 leading-relaxed">
+                  <p className="text-sm font-semibold text-fg">Revoke this link?</p>
+                  <p className="text-xs text-fg-tertiary mt-1 leading-relaxed">
                     This asks the server to revoke access. Once the server confirms, anyone with this link
                     loses access immediately. This can't be undone — you can create a new link later.
                   </p>
@@ -381,25 +381,25 @@ export function LinksPage({ visible }: { visible?: boolean }) {
         {duplicating && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" role="dialog" aria-modal="true">
             <Surface variant="elevated" className="border border-primary/30 p-5 max-w-sm mx-4 space-y-4">
-              <p className="text-sm font-semibold text-white/90">Duplicate link with different permissions</p>
-              <label className="flex items-center justify-between text-xs text-white/60">
+              <p className="text-sm font-semibold text-fg">Duplicate link with different permissions</p>
+              <label className="flex items-center justify-between text-xs text-fg-tertiary">
                 Allow download
                 <input type="checkbox" checked={dupAllowDownload} onChange={(e) => setDupAllowDownload(e.target.checked)} />
               </label>
               {duplicating.kind === 'project' && (
-                <label className="flex items-center justify-between text-xs text-white/60">
+                <label className="flex items-center justify-between text-xs text-fg-tertiary">
                   Collaborator access
                   {/* Server supports only view|comment (create-project-link rejects
                       others) — offering "edit" would claim an unenforced permission. */}
                   <select value={dupMode} onChange={(e) => setDupMode(e.target.value as any)}
-                    className="bg-black/40 border border-white/10 rounded px-2 py-1 text-xs text-white/70">
+                    className="bg-black/40 border border-hairline-strong rounded px-2 py-1 text-xs text-fg-secondary">
                     <option value="view">View</option>
                     <option value="comment">Comment</option>
                   </select>
                 </label>
               )}
               {!online && (
-                <p className="text-[10px] text-warning/80">You're offline — this won't be created until the server confirms.</p>
+                <p className="text-meta text-warning/80">You're offline — this won't be created until the server confirms.</p>
               )}
               <div className="flex items-center justify-end gap-2">
                 <Button variant="ghost" size="compact" onClick={() => setDuplicating(null)}>Cancel</Button>

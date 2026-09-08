@@ -42,12 +42,12 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
         <div className="w-8 h-8 rounded bg-primary/15 flex items-center justify-center text-primary text-xs font-bold">A</div>
         <div className="flex-1 min-w-0">
           <h2 className="font-brand text-base font-bold text-foreground truncate">Midnight Sketch</h2>
-          <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-fg">
+          <div className="flex items-center gap-2 mt-0.5 text-meta text-muted-fg">
             <SyncStatusBadge status={syncStatus} /><span>·</span><span>Ableton Live</span><span>·</span><span className="font-mono">v3</span><span>·</span><span>Jul 9</span>
           </div>
         </div>
         <Button variant="ghost" size="compact"><Sparkles /> Copilot</Button>
-        <button aria-label="Close" className="p-1.5 rounded hover:bg-white/10"><X className="w-4 h-4 text-white/50" /></button>
+        <button aria-label="Close" className="p-1.5 rounded hover:bg-layer-3"><X className="w-4 h-4 text-fg-tertiary" /></button>
       </div>
 
       <div className="px-5 py-3 border-b border-border-subtle space-y-2.5">
@@ -61,8 +61,8 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
           <Button variant="ghost" size="compact"><Link2 /> Copy Listen Link</Button>
           <Button variant="ghost" size="compact"><FolderOpen /> Reveal Folder</Button>
         </div>
-        {state === 'success' && <p className="text-[11px] text-primary">Project Link created and copied.</p>}
-        {state === 'error' && <p className="text-[11px] text-destructive">Error: could not publish version.</p>}
+        {state === 'success' && <p className="text-meta text-primary">Project Link created and copied.</p>}
+        {state === 'error' && <p className="text-meta text-destructive">Error: could not publish version.</p>}
       </div>
 
       <Tabs tabs={TABS} value={tab} onValueChange={setTab} />
@@ -74,7 +74,7 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
           <EmptyState icon={File} title="No files indexed" description="This project has no associated files yet." />
         ) : tab === 'files' ? (
           <div className="py-2">
-            <div className="px-4 py-2 flex items-center gap-2"><span className="text-xs font-medium text-white/40 uppercase tracking-wider">Audio</span></div>
+            <div className="px-4 py-2 flex items-center gap-2"><span className="text-xs font-medium text-fg-quaternary uppercase tracking-wider">Audio</span></div>
             {files.map((f) => (
               <FileRow key={f.name} fileName={f.name} relPath={f.rel} size={f.size} synced={f.synced} included={f.included}
                 missing={missing && f.missing} checksum={'sha256-…'} onOpen={() => {}} onReveal={() => {}} />
@@ -91,10 +91,10 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
         ) : tab === 'dependencies' ? (
           <div className="p-5 space-y-4">
             <div><SectionHeader label="Missing files" count={missing ? 1 : 0} />
-              {missing ? <div className="flex items-center gap-2 text-[11px]"><span className="text-foreground/70">vox_take3.wav</span><span className="ml-auto font-mono text-muted-fg">stems/vox_take3.wav</span></div>
-                : <p className="text-[11px] text-muted-fg">All indexed files are present on disk.</p>}
+              {missing ? <div className="flex items-center gap-2 text-meta"><span className="text-foreground/70">vox_take3.wav</span><span className="ml-auto font-mono text-muted-fg">stems/vox_take3.wav</span></div>
+                : <p className="text-meta text-muted-fg">All indexed files are present on disk.</p>}
             </div>
-            <div><SectionHeader label="Plugins" /><div className="flex items-center gap-2 text-[11px] text-muted-fg"><Puzzle className="w-3.5 h-3.5" /> Plugin scanning is not yet implemented — plugin dependencies are unknown.</div></div>
+            <div><SectionHeader label="Plugins" /><div className="flex items-center gap-2 text-meta text-muted-fg"><Puzzle className="w-3.5 h-3.5" /> Plugin scanning is not yet implemented — plugin dependencies are unknown.</div></div>
           </div>
         ) : tab === 'compatibility' ? (
           <div className="p-5">
@@ -103,8 +103,8 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
               ? [['Open in DAW', 'Project Pack only', 'muted'], ['Native packaging', 'Generic pack', 'muted'], ['Restore', 'Supported', 'ok'], ['Cross-DAW reconstruction', 'Planned', 'muted'], ['Plugin scan', 'Not yet', 'muted'], ['Fidelity report', 'Not yet', 'muted']]
               : [['Open in Ableton Live', 'Available', 'ok'], ['Native packaging', 'Included', 'ok'], ['Restore', 'Supported', 'ok'], ['Cross-DAW reconstruction', 'Planned', 'muted'], ['Plugin scan', 'Not yet', 'muted'], ['Fidelity report', 'Not yet', 'muted']]
             ).map(([l, v, t]) => (
-              <div key={l} className="flex items-center justify-between text-[11px] py-1 border-b border-border-subtle last:border-0">
-                <span className="text-muted-fg">{l}</span><span className={t === 'ok' ? 'text-success' : 'text-white/40'}>{v}</span>
+              <div key={l} className="flex items-center justify-between text-meta py-1 border-b border-border-subtle last:border-0">
+                <span className="text-muted-fg">{l}</span><span className={t === 'ok' ? 'text-success' : 'text-fg-quaternary'}>{v}</span>
               </div>
             ))}
           </div>
@@ -112,7 +112,7 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
           <div className="p-4 space-y-1">
             {['Published v3', 'Project Link opened', 'Sync resumed'].map((a, i) => (
               <div key={i} className="flex items-start gap-2 py-1.5 border-b border-border-subtle last:border-0">
-                <span className="text-[10px] text-muted-fg w-32 font-mono">Jul 9</span><span className="text-[11px] text-foreground/55">{a}</span>
+                <span className="text-meta text-muted-fg w-32 font-mono">Jul 9</span><span className="text-meta text-foreground/55">{a}</span>
               </div>
             ))}
           </div>
@@ -121,16 +121,16 @@ export default function ProjectDetailPreview({ state }: { state: PreviewState })
             <div className="flex items-center gap-3 bg-surface-2 border border-border rounded-lg px-3 py-2">
               <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center">▶</div>
               <div className="flex-1 min-w-0"><p className="text-xs text-foreground/80">master.wav</p>
-                <p className="text-[10px] text-muted-fg">{state === 'playback-error' ? "Couldn't play this file — use Open instead." : 'Latest bounce'}</p></div>
+                <p className="text-meta text-muted-fg">{state === 'playback-error' ? "Couldn't play this file — use Open instead." : 'Latest bounce'}</p></div>
             </div>
             <div className={`flex items-start gap-2 text-xs rounded-lg px-3 py-2 border ${missing ? 'text-warning border-warning/20 bg-warning/[0.06]' : 'text-success border-success/20 bg-success/[0.06]'}`}>
               <ArrowRight className="w-3.5 h-3.5 mt-0.5" /> {missing ? '1 file missing on disk — reconnect it before sharing.' : 'Up to date and shared.'}
             </div>
-            <div><SectionHeader label="Package" action={<span className="text-[10px] text-muted-fg font-mono">32 MB</span>} />
+            <div><SectionHeader label="Package" action={<span className="text-meta text-muted-fg font-mono">32 MB</span>} />
               <Progress value={completeness} label="Completeness" />
-              <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-[11px]">
+              <div className="grid grid-cols-3 gap-x-4 gap-y-1.5 mt-3 text-meta">
                 {[['Native project', 'Yes'], ['Latest bounce', 'Yes'], ['Stems', '8'], ['MIDI', '2'], ['Synced', missing ? '3/4' : '4/4'], ['Missing', missing ? '1' : '0']].map(([l, v]) => (
-                  <div key={l}><p className="text-[10px] text-muted-fg">{l}</p><p className={`text-xs font-medium ${l === 'Missing' && missing ? 'text-warning' : 'text-foreground/80'}`}>{v}</p></div>
+                  <div key={l}><p className="text-meta text-muted-fg">{l}</p><p className={`text-xs font-medium ${l === 'Missing' && missing ? 'text-warning' : 'text-foreground/80'}`}>{v}</p></div>
                 ))}
               </div>
             </div>

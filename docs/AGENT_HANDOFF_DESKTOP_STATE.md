@@ -88,6 +88,63 @@ Run the gate with Node 22 (`nvm use`); the SQLite test harness requires it.
   replayed unchanged on retry, and never persisted across sessions.
 - **`sourceRestoreId` is never sent** — it is a desktop-local row id, not a server identity.
 
+## 5b. P3-1d — UI systematisation (branch `feat/desktop-ui-systematisation`, UNMERGED)
+
+Presentation only. **No product capability added, no server contract changed, no IPC or schema
+touched** — a behaviour-freeze check proves zero `electron/` runtime files changed and re-asserts
+all five handler-pinned corrections at source.
+
+What it removes, measured before and after:
+
+| Ad-hoc value | Before | After |
+|---|---|---|
+| raw `text/bg/border-white/NN` (38 distinct opacities) | 635 | **0** |
+| raw Tailwind palette (`emerald-400`, `red-500`, …) | 201 | **0** |
+| type below 11px (`text-[8px]`, `[9px]`, `[10px]`) | 223 | **0** |
+
+Replaced by one vocabulary: a five-step text hierarchy (`fg` → `fg-disabled`), a four-step type
+scale (`meta/body/title/heading`), a four-step elevation ladder (`bg-layer-1..4`), a three-step
+hairline ladder, and the existing semantic status tokens.
+
+**Contrast repair (deliberate, not incidental):** 194 call sites were rendering meaningful labels
+at 20–30% white on near-black. They now land on `fg-quaternary` (46%). `fg-disabled` is reserved
+for genuinely inert affordances and is never applied by the migration map.
+
+**Two classes of change, kept distinct:** 94 renames are *provably* zero-pixel (`--primary` and
+`--accent` were encoded from `#06B6D4`/`#8B5CF6`, i.e. cyan-500/violet-500); 316 are a deliberate
+semantic collapse of shade variants onto the considered token value.
+
+**Deliberately NOT abstracted:** "Load more" appears in one file and `role="alert"` in two —
+turning those into primitives would be inventing duplication.
+
+The mapping lives in `scripts/ui-token-map.mjs` (reviewable, not buried in a one-off command) and
+is pinned by `src/lib/designSystem.test.ts` (10 tests) so the system cannot silently erode.
+
+Gate: **965/965 · 52 files · 0 skips**, tsc ×2 clean, production build clean, `verify:package`
+PASS, preview isolation intact.
+
+**Visual validation: DONE (2026-08-13).** `?ui-preview` runs in the renderer under plain Vite, so
+ENV-1 never applied — no Electron was launched. Home, Project Detail and Project Links were
+inspected at 1024 / 1280 / 1680 px across populated, loading, empty, error and offline states.
+
+**Two real regressions were found that the whole test suite had missed, both branch-caused:**
+
+1. **The primary Button silently lost its foreground colour.** `tailwind-merge` did not know the
+   new custom `fontSize` keys, so it classified `text-meta` as a text COLOUR and dropped
+   `text-primary-foreground` from the merged class list — white on cyan at **2.42:1**. Fixed by
+   teaching the merger the custom scale in `cn()`; now **7.85:1**. This bug existed only at
+   class-merge time, which is precisely why every static check stayed green.
+2. **Inactive tab labels sat in the wrong tier.** The migration mapped 45% white onto
+   `fg-quaternary`, lumping interactive navigation in with inert metadata. Promoted to
+   `fg-tertiary`: **4.30 → 6.53**.
+
+**The scale was then retuned from measurement, not taste:** at 58/46 the Project Link explanation
+lines still landed at 4.07. `--fg-tertiary` 58→62 and `--fg-quaternary` 46→50 clear 4.5:1 while
+keeping five visibly distinct steps.
+
+Final measured state across every surface and width: **0 contrast failures, 0 horizontal overflow,
+0 clipped text, minimum font 11px.**
+
 ## 6. Blockers
 
 | ID | Blocker | Owner | Notes |

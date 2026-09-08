@@ -39,12 +39,12 @@ export function Sidebar({ currentPage, onNavigate, pendingAssociations = 0 }: Si
               type="button"
               onClick={() => onNavigate(id)}
               aria-current={active ? 'page' : undefined}
-              className={cn(navBtn, active ? 'bg-white/[0.07] text-foreground' : 'text-white/45 hover:text-white/80 hover:bg-white/[0.04]')}
+              className={cn(navBtn, active ? 'bg-layer-3 text-foreground' : 'text-fg-quaternary hover:text-fg-secondary hover:bg-layer-2')}
             >
               <Icon className={cn('w-4 h-4 shrink-0', active ? 'text-primary' : '')} />
               {label}
               {id === 'review' && pendingAssociations > 0 && (
-                <span className="ml-auto flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-[10px] font-bold">
+                <span className="ml-auto flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-primary-foreground text-meta font-bold">
                   {pendingAssociations > 99 ? '99+' : pendingAssociations}
                 </span>
               )}
@@ -61,7 +61,7 @@ export function Sidebar({ currentPage, onNavigate, pendingAssociations = 0 }: Si
         >
           <Zap className="w-4 h-4 shrink-0" />
           Copilot
-          <span className="ml-auto text-[10px] text-white/25">⌘⇧W</span>
+          <span className="ml-auto text-meta text-fg-quaternary">⌘⇧W</span>
         </button>
       </div>
       <div className="px-4 pt-3 pb-2 border-t border-border">

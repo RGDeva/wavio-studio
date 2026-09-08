@@ -128,7 +128,7 @@ export default function App() {
   if (authed === null) {
     return (
       <div className="flex items-center justify-center h-screen bg-background">
-        <div className="w-5 h-5 border-2 border-white/20 border-t-primary rounded-full animate-spin" />
+        <div className="w-5 h-5 border-2 border-hairline-focus border-t-primary rounded-full animate-spin" />
       </div>
     );
   }
@@ -147,10 +147,10 @@ export default function App() {
         </div>
       )}
       {updateReady && (
-        <div className="flex items-center justify-between px-4 py-1.5 bg-cyan-500/10 border-b border-cyan-500/20 text-xs text-cyan-400">
+        <div className="flex items-center justify-between px-4 py-1.5 bg-primary/10 border-b border-primary/20 text-xs text-primary">
           <span>A new version of Wavi Studio is ready to install.</span>
           <button
-            className="underline hover:text-cyan-300 transition-colors"
+            className="underline hover:text-primary transition-colors"
             onClick={() => (window as any).waviAPI?.app?.relaunch?.()}
           >
             Restart to update

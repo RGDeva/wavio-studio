@@ -202,14 +202,14 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-      <div className="w-full max-w-md bg-[#0f0f0f] border border-white/10 rounded-2xl shadow-2xl overflow-hidden">
+      <div className="w-full max-w-md bg-[#0f0f0f] border border-hairline-strong rounded-2xl shadow-2xl overflow-hidden">
         {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/8">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-hairline-strong">
           <div className="flex items-center gap-2.5">
-            <Package className="w-4 h-4 text-cyan-500" />
+            <Package className="w-4 h-4 text-primary" />
             <span className="text-sm font-semibold text-white">Open Project Link</span>
           </div>
-          <button onClick={onClose} className="text-white/30 hover:text-white/60 transition-colors">
+          <button onClick={onClose} className="text-fg-quaternary hover:text-fg-tertiary transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -219,7 +219,7 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
           {link && (
             <div>
               <h2 className="text-lg font-bold text-white leading-tight">{projectName}</h2>
-              <div className="flex flex-wrap gap-2 mt-1.5 text-xs text-white/40">
+              <div className="flex flex-wrap gap-2 mt-1.5 text-xs text-fg-quaternary">
                 {versionNum && <span>v{versionNum}</span>}
                 <span>{dawLabel}</span>
                 {link.fileCount != null && <span>{link.fileCount} files</span>}
@@ -229,10 +229,10 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
               {compat?.plugins?.length ? (
                 <div className="mt-2 flex flex-wrap gap-1">
                   {compat.plugins.slice(0, 5).map((p, i) => (
-                    <span key={i} className="px-1.5 py-0.5 bg-white/8 rounded text-[10px] text-white/50">{p.name}</span>
+                    <span key={i} className="px-1.5 py-0.5 bg-layer-3 rounded text-meta text-fg-tertiary">{p.name}</span>
                   ))}
                   {compat.plugins.length > 5 && (
-                    <span className="px-1.5 py-0.5 bg-white/8 rounded text-[10px] text-white/40">+{compat.plugins.length - 5}</span>
+                    <span className="px-1.5 py-0.5 bg-layer-3 rounded text-meta text-fg-quaternary">+{compat.plugins.length - 5}</span>
                   )}
                 </div>
               ) : null}
@@ -241,19 +241,19 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
               {link.files?.length > 0 && (
                 <button
                   onClick={() => setShowFiles(v => !v)}
-                  className="flex items-center gap-1 mt-2 text-[11px] text-white/30 hover:text-white/50 transition-colors"
+                  className="flex items-center gap-1 mt-2 text-meta text-fg-quaternary hover:text-fg-tertiary transition-colors"
                 >
                   {showFiles ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
                   {showFiles ? 'Hide' : 'Show'} {link.files.length} file{link.files.length !== 1 ? 's' : ''}
                 </button>
               )}
               {showFiles && (
-                <div className="mt-2 max-h-40 overflow-y-auto border border-white/8 rounded-lg divide-y divide-white/5">
+                <div className="mt-2 max-h-40 overflow-y-auto border border-hairline-strong rounded-lg divide-y divide-white/5">
                   {link.files.map((f, i) => (
-                    <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-white/[0.02]">
-                      <Music className="w-3 h-3 text-white/20 flex-shrink-0" />
-                      <span className="text-[11px] text-white/60 truncate">{f.relative_path ?? f.file_name}</span>
-                      <span className="text-[10px] text-white/25 ml-auto flex-shrink-0">{formatBytes(f.file_size)}</span>
+                    <div key={i} className="flex items-center gap-2 px-2.5 py-1.5 bg-layer-1">
+                      <Music className="w-3 h-3 text-fg-quaternary flex-shrink-0" />
+                      <span className="text-meta text-fg-tertiary truncate">{f.relative_path ?? f.file_name}</span>
+                      <span className="text-meta text-fg-quaternary ml-auto flex-shrink-0">{formatBytes(f.file_size)}</span>
                     </div>
                   ))}
                 </div>
@@ -263,20 +263,20 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
 
           {/* Phase: resolving */}
           {phase === 'resolving' && (
-            <div className="flex items-center gap-2 text-sm text-white/50">
-              <Loader2 className="w-4 h-4 animate-spin text-cyan-500" />
+            <div className="flex items-center gap-2 text-sm text-fg-tertiary">
+              <Loader2 className="w-4 h-4 animate-spin text-primary" />
               Resolving project link…
             </div>
           )}
 
           {/* Phase: existing found — 4-option duplicate restore dialog */}
           {phase === 'existing_found' && existing && (
-            <div className="bg-white/5 border border-white/10 rounded-xl p-4 space-y-3">
+            <div className="bg-layer-2 border border-hairline-strong rounded-xl p-4 space-y-3">
               <div className="flex items-start gap-2.5">
-                <FolderOpen className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
+                <FolderOpen className="w-4 h-4 text-warning mt-0.5 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-white">Already Restored</p>
-                  <p className="text-xs text-white/40 mt-0.5 font-mono break-all leading-relaxed">
+                  <p className="text-xs text-fg-quaternary mt-0.5 font-mono break-all leading-relaxed">
                     {existing.local_project_path as string}
                   </p>
                 </div>
@@ -284,28 +284,28 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
               <div className="grid grid-cols-2 gap-2">
                 <button
                   onClick={handleOpenExisting}
-                  className="flex items-center justify-center gap-1.5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-xs font-medium rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-primary hover:bg-primary text-white text-xs font-medium rounded-lg transition-colors"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Open Existing Copy
                 </button>
                 <button
                   onClick={handleRevealExisting}
-                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white/8 hover:bg-white/12 text-white/70 text-xs font-medium rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-layer-3 hover:bg-layer-4 text-fg-secondary text-xs font-medium rounded-lg transition-colors"
                 >
                   <Search className="w-3.5 h-3.5" />
                   Reveal in Finder
                 </button>
                 <button
                   onClick={() => setPhase('confirm')}
-                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white/8 hover:bg-white/12 text-white/70 text-xs font-medium rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-layer-3 hover:bg-layer-4 text-fg-secondary text-xs font-medium rounded-lg transition-colors"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   Restore Another Copy
                 </button>
                 <button
                   onClick={onClose}
-                  className="flex items-center justify-center gap-1.5 py-2.5 bg-white/5 hover:bg-white/10 text-white/40 text-xs font-medium rounded-lg transition-colors"
+                  className="flex items-center justify-center gap-1.5 py-2.5 bg-layer-2 hover:bg-layer-3 text-fg-quaternary text-xs font-medium rounded-lg transition-colors"
                 >
                   <X className="w-3.5 h-3.5" />
                   Cancel
@@ -317,40 +317,40 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
           {/* Phase: confirm (destination picker trigger) */}
           {phase === 'confirm' && (
             <div className="space-y-3">
-              <div className="text-xs text-white/40 bg-white/5 border border-white/8 rounded-lg px-3 py-2.5 space-y-1">
+              <div className="text-xs text-fg-quaternary bg-layer-2 border border-hairline-strong rounded-lg px-3 py-2.5 space-y-1">
                 <div className="flex justify-between">
-                  <span>DAW</span><span className="text-white/60">{dawLabel}</span>
+                  <span>DAW</span><span className="text-fg-tertiary">{dawLabel}</span>
                 </div>
                 {compat?.os && (
                   <div className="flex justify-between">
-                    <span>OS</span><span className="text-white/60">{compat.os}</span>
+                    <span>OS</span><span className="text-fg-tertiary">{compat.os}</span>
                   </div>
                 )}
                 {compat?.sampleRate && (
                   <div className="flex justify-between">
-                    <span>Sample Rate</span><span className="text-white/60">{compat.sampleRate} Hz</span>
+                    <span>Sample Rate</span><span className="text-fg-tertiary">{compat.sampleRate} Hz</span>
                   </div>
                 )}
                 {link?.fileCount != null && (
                   <div className="flex justify-between">
-                    <span>Files</span><span className="text-white/60">{link.fileCount}</span>
+                    <span>Files</span><span className="text-fg-tertiary">{link.fileCount}</span>
                   </div>
                 )}
                 {link?.totalSize != null && (
                   <div className="flex justify-between">
-                    <span>Download size</span><span className="text-white/60">{formatBytes(link.totalSize)}</span>
+                    <span>Download size</span><span className="text-fg-tertiary">{formatBytes(link.totalSize)}</span>
                   </div>
                 )}
               </div>
               {compat?.plugins?.length ? (
-                <p className="text-xs text-amber-400/80 flex items-start gap-1.5">
+                <p className="text-xs text-warning/80 flex items-start gap-1.5">
                   <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
                   {compat.plugins.length} plugin{compat.plugins.length !== 1 ? 's' : ''} required. Verify you have them before opening.
                 </p>
               ) : null}
               <button
                 onClick={handlePickDestination}
-                className="w-full flex items-center justify-center gap-2 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-xl transition-colors"
+                className="w-full flex items-center justify-center gap-2 py-2.5 bg-primary hover:bg-primary text-white text-sm font-medium rounded-xl transition-colors"
               >
                 <Download className="w-4 h-4" />
                 Choose Destination &amp; Restore
@@ -361,7 +361,7 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
           {/* Phase: downloading */}
           {phase === 'downloading' && (
             <ProgressRow
-              icon={<Download className="w-4 h-4 text-cyan-400" />}
+              icon={<Download className="w-4 h-4 text-primary" />}
               label="Downloading Project Pack…"
               sub={progress.downloadedBytes ? `${formatBytes(progress.downloadedBytes)} received` : undefined}
             />
@@ -370,7 +370,7 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
           {/* Phase: extracting */}
           {phase === 'extracting' && (
             <ProgressRow
-              icon={<Package className="w-4 h-4 text-purple-400" />}
+              icon={<Package className="w-4 h-4 text-accent" />}
               label="Extracting files…"
             />
           )}
@@ -378,7 +378,7 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
           {/* Phase: verifying */}
           {phase === 'verifying' && (
             <ProgressRow
-              icon={<CheckCircle2 className="w-4 h-4 text-green-400" />}
+              icon={<CheckCircle2 className="w-4 h-4 text-success" />}
               label="Verifying hashes…"
               sub={progress.verified != null ? `${progress.verified} / ${progress.total ?? '?'} files verified` : undefined}
             />
@@ -387,24 +387,24 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
           {/* Phase: done */}
           {phase === 'done' && result && (
             <div className="space-y-3">
-              <div className="flex items-start gap-2.5 bg-green-500/10 border border-green-500/20 rounded-xl px-4 py-3">
-                <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+              <div className="flex items-start gap-2.5 bg-success/10 border border-success/20 rounded-xl px-4 py-3">
+                <CheckCircle2 className="w-5 h-5 text-success flex-shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-semibold text-white">Project Restored</p>
-                  <p className="text-xs text-white/40 mt-0.5 font-mono break-all">{result.projectDir}</p>
+                  <p className="text-xs text-fg-quaternary mt-0.5 font-mono break-all">{result.projectDir}</p>
                 </div>
               </div>
               <div className="flex gap-2">
                 <button
                   onClick={handleOpenInAbleton}
-                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-medium rounded-xl transition-colors"
+                  className="flex-1 flex items-center justify-center gap-1.5 py-2.5 bg-primary hover:bg-primary text-white text-sm font-medium rounded-xl transition-colors"
                 >
                   <ExternalLink className="w-4 h-4" />
                   Open in {result.dawType ?? 'DAW'}
                 </button>
                 <button
                   onClick={handleRevealInFinder}
-                  className="px-3 flex items-center justify-center py-2.5 bg-white/8 hover:bg-white/12 text-white/70 rounded-xl transition-colors"
+                  className="px-3 flex items-center justify-center py-2.5 bg-layer-3 hover:bg-layer-4 text-fg-secondary rounded-xl transition-colors"
                 >
                   <FolderOpen className="w-4 h-4" />
                 </button>
@@ -414,22 +414,22 @@ export default function RestoreWindow({ token, onClose }: { token: string; onClo
 
           {/* Phase: error */}
           {phase === 'error' && error && (
-            <div className="bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-3 space-y-2">
+            <div className="bg-destructive/10 border border-destructive/20 rounded-xl px-4 py-3 space-y-2">
               <div className="flex items-start gap-2.5">
-                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
                 <div>
                   <p className="text-sm font-semibold text-white">
                     {ERROR_LABELS[error.code] ?? 'Restore failed'}
                   </p>
                   {error.detail && (
-                    <p className="text-xs text-white/40 mt-0.5">{error.detail}</p>
+                    <p className="text-xs text-fg-quaternary mt-0.5">{error.detail}</p>
                   )}
                 </div>
               </div>
               {error.code !== 'expired_link' && error.code !== 'permission_denied' && (
                 <button
                   onClick={() => { setError(null); setPhase('confirm'); }}
-                  className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+                  className="text-xs text-primary hover:text-primary transition-colors flex items-center gap-1"
                 >
                   <RefreshCw className="w-3 h-3" /> Try again
                 </button>
@@ -447,11 +447,11 @@ function ProgressRow({ icon, label, sub }: { icon: React.ReactNode; label: strin
     <div className="flex items-center gap-3">
       <div className="flex-shrink-0">{icon}</div>
       <div>
-        <div className="flex items-center gap-2 text-sm text-white/80">
-          <Loader2 className="w-3.5 h-3.5 animate-spin text-white/30" />
+        <div className="flex items-center gap-2 text-sm text-fg-secondary">
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-fg-quaternary" />
           {label}
         </div>
-        {sub && <p className="text-xs text-white/30 mt-0.5">{sub}</p>}
+        {sub && <p className="text-xs text-fg-quaternary mt-0.5">{sub}</p>}
       </div>
     </div>
   );

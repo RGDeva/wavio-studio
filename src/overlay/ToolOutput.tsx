@@ -32,23 +32,23 @@ export function ToolOutput({ output }: ToolOutputProps) {
   const fileName = output.filePath?.split('/').pop();
 
   return (
-    <div className="bg-[#0d1117] border border-white/8 rounded-lg overflow-hidden text-xs">
+    <div className="bg-[#0d1117] border border-hairline-strong rounded-lg overflow-hidden text-xs">
       <div className="flex items-center gap-2 px-3 py-2">
-        <Icon className="w-3.5 h-3.5 text-cyan-400 flex-shrink-0" />
-        <span className="text-white/60 flex-1">{label}</span>
+        <Icon className="w-3.5 h-3.5 text-primary flex-shrink-0" />
+        <span className="text-fg-tertiary flex-1">{label}</span>
         {output.status === 'running' && (
-          <Loader2 className="w-3 h-3 text-white/30 animate-spin" />
+          <Loader2 className="w-3 h-3 text-fg-quaternary animate-spin" />
         )}
         {output.status === 'done' && (
-          <CheckCircle className="w-3 h-3 text-emerald-400" />
+          <CheckCircle className="w-3 h-3 text-success" />
         )}
         {output.status === 'error' && (
-          <XCircle className="w-3 h-3 text-red-400" />
+          <XCircle className="w-3 h-3 text-destructive" />
         )}
         {(hasGuide || output.filePath) && output.status === 'done' && (
           <button
             onClick={() => setExpanded(!expanded)}
-            className="text-white/30 hover:text-white/60 transition-colors"
+            className="text-fg-quaternary hover:text-fg-tertiary transition-colors"
           >
             {expanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
           </button>
@@ -56,26 +56,26 @@ export function ToolOutput({ output }: ToolOutputProps) {
       </div>
 
       {output.status === 'error' && (
-        <div className="px-3 pb-2 text-red-400/80">{output.error}</div>
+        <div className="px-3 pb-2 text-destructive/80">{output.error}</div>
       )}
 
       {output.status === 'done' && output.filePath && (
         <div className="px-3 pb-1.5 flex items-center gap-1.5">
-          <span className="text-white/25">→</span>
-          <span className="font-mono text-[10px] text-cyan-400/70 truncate">{fileName}</span>
+          <span className="text-fg-quaternary">→</span>
+          <span className="font-mono text-meta text-primary/70 truncate">{fileName}</span>
         </div>
       )}
 
       {expanded && output.description && (
-        <div className="px-3 pb-2 text-white/50 border-t border-white/5 pt-2">
+        <div className="px-3 pb-2 text-fg-tertiary border-t border-hairline pt-2">
           {output.description}
         </div>
       )}
 
       {expanded && output.importGuide && (
-        <div className="px-3 pb-2 border-t border-white/5 pt-2 space-y-1">
-          <p className="text-white/30 text-[10px] uppercase tracking-wider">FL Studio Import</p>
-          <p className="text-white/60 leading-relaxed whitespace-pre-wrap">{output.importGuide}</p>
+        <div className="px-3 pb-2 border-t border-hairline pt-2 space-y-1">
+          <p className="text-fg-quaternary text-meta uppercase tracking-wider">FL Studio Import</p>
+          <p className="text-fg-tertiary leading-relaxed whitespace-pre-wrap">{output.importGuide}</p>
         </div>
       )}
     </div>
