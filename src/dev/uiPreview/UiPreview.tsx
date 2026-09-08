@@ -60,7 +60,7 @@ export default function UiPreview() {
           <Button size="compact" variant={view === 'project' ? 'primary' : 'ghost'} onClick={() => setView('project')}>Project Detail</Button>
           <Button size="compact" variant={view === 'links' ? 'primary' : 'ghost'} onClick={() => setView('links')}>Links</Button>
         </div>
-        <div className="ml-auto flex items-center gap-1">
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           {PREVIEW_STATES.map((s) => (
             <Button key={s} size="compact" variant={s === state ? 'primary' : 'ghost'} onClick={() => setState(s)}>{s}</Button>
           ))}

@@ -61,13 +61,18 @@
      opacities. Five steps is the whole vocabulary; if a sixth seems needed,
      the layout is doing work the hierarchy should.
 
-     `quaternary` is deliberately 46%, not the 20-30% the raw utilities used:
+     `quaternary` is deliberately 50%, not the 20-30% the raw utilities used:
      194 call sites were rendering meaningful labels below a readable contrast
-     ratio on near-black. Anything genuinely inert uses `disabled`. */
+     ratio on near-black. Anything genuinely inert uses `disabled`.
+
+     The 62/50 values were set by MEASURING the rendered preview, not guessed:
+     at 58/46 the Project Link explanation lines and inactive tab labels landed
+     at 4.07 and 4.30 against their card backgrounds, still short of 4.5. These
+     values clear it while keeping five visibly distinct steps. */
   --fg: 0 0% 100%;
   --fg-secondary: 0 0% 74%;
-  --fg-tertiary: 0 0% 58%;
-  --fg-quaternary: 0 0% 46%;
+  --fg-tertiary: 0 0% 62%;
+  --fg-quaternary: 0 0% 50%;
   --fg-disabled: 0 0% 32%;
 
   /* ── Type scale (P3-1d) ─────────────────────────────────────────

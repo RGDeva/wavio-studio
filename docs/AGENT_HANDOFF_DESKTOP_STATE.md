@@ -123,8 +123,27 @@ is pinned by `src/lib/designSystem.test.ts` (10 tests) so the system cannot sile
 Gate: **965/965 · 52 files · 0 skips**, tsc ×2 clean, production build clean, `verify:package`
 PASS, preview isolation intact.
 
-**Owed:** a visual pass once Electron can run. These are static assertions; nothing here proves how
-it *looks*. See ENV-1.
+**Visual validation: DONE (2026-08-13).** `?ui-preview` runs in the renderer under plain Vite, so
+ENV-1 never applied — no Electron was launched. Home, Project Detail and Project Links were
+inspected at 1024 / 1280 / 1680 px across populated, loading, empty, error and offline states.
+
+**Two real regressions were found that the whole test suite had missed, both branch-caused:**
+
+1. **The primary Button silently lost its foreground colour.** `tailwind-merge` did not know the
+   new custom `fontSize` keys, so it classified `text-meta` as a text COLOUR and dropped
+   `text-primary-foreground` from the merged class list — white on cyan at **2.42:1**. Fixed by
+   teaching the merger the custom scale in `cn()`; now **7.85:1**. This bug existed only at
+   class-merge time, which is precisely why every static check stayed green.
+2. **Inactive tab labels sat in the wrong tier.** The migration mapped 45% white onto
+   `fg-quaternary`, lumping interactive navigation in with inert metadata. Promoted to
+   `fg-tertiary`: **4.30 → 6.53**.
+
+**The scale was then retuned from measurement, not taste:** at 58/46 the Project Link explanation
+lines still landed at 4.07. `--fg-tertiary` 58→62 and `--fg-quaternary` 46→50 clear 4.5:1 while
+keeping five visibly distinct steps.
+
+Final measured state across every surface and width: **0 contrast failures, 0 horizontal overflow,
+0 clipped text, minimum font 11px.**
 
 ## 6. Blockers
 
