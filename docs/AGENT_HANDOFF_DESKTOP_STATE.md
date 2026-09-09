@@ -194,6 +194,25 @@ That was self-inflicted — a full `find ~` was scanning the home directory conc
 uncontended, the 50k import took **556ms** (83x faster) and the whole suite **25.7s** vs 622s. Both
 pass. Run the benchmarks with nothing else touching the disk.
 
+## 5c. Staging transport surface probed unauthenticated (2026-09-09)
+
+The authenticated smoke cannot run (ENV-1), but the part that needs no credentials was verified
+directly against staging (`wavi-staging-kvbq16xd5-rgdevas-projects.vercel.app/api/desktop`).
+
+All **10 locked multiplayer actions return 401** unauthenticated. A bogus `Authorization: Bearer`
+also returns 401 — it fails closed rather than falling through.
+
+The control matters more than the result: an **unknown** action name (`definitely-not-a-real-action`,
+a near-miss `list-project-collaboratorsX`, and an empty header) returns **400**, not 401. So the
+endpoint distinguishes "action not recognised" from "auth required", which is what makes the ten
+401s real evidence that every locked action is deployed and gated — rather than a blanket reject
+that would look identical if an action were missing. This is the check that was skipped the first
+time and produced the false "not deployed anywhere" claim.
+
+**What this does NOT prove:** anything past the auth boundary. Request-body correctness against the
+real server, identity resolution, pagination, operation-key replay and the confirmation envelope all
+remain unexercised end-to-end. Those need a signed-in session and are still `NOT RUN`.
+
 ## 6. Blockers
 
 | ID | Blocker | Owner | Notes |
