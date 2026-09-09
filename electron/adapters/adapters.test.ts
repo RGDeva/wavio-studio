@@ -110,6 +110,51 @@ describe('ableton adapter', () => {
     const meta = await parseAbletonLiveSet(path.join(tmp, 'Fixture Song.als'));
     expect(meta).toEqual({ bpm: 140, key: 'F' });
   });
+  // Regression: the shape of a REAL Live 12 set, which the small fixture above
+  // cannot represent. Two things broke on genuine files and neither was visible
+  // to a compact fixture:
+  //   1. MasterTrack tempo sits near the END of the document (measured at byte
+  //      293,923 / 334,317 and 154,040 / 194,360 in two real projects), far past
+  //      the old 16KB read window.
+  //   2. A loose /<Tempo>(?:<[^>]+>\s*)*<Manual …/ scan matches ANY tag, so it
+  //      runs to EOF and backtracks to the last <Manual> in the file. The decoy
+  //      below reproduces that: a naive scan reports 1 instead of 128.
+  it('parses BPM from a real-shaped set: tempo far past 16KB, with a trailing decoy <Manual>', async () => {
+    const filler = '      <Track><Name Value="pad" /></Track>\n'.repeat(1200); // ≫16KB
+    const big = `<?xml version="1.0" encoding="UTF-8"?>
+<Ableton MajorVersion="5" MinorVersion="12.0_12402">
+  <LiveSet>
+    <Tracks>
+${filler}    </Tracks>
+    <MasterTrack>
+      <DeviceChain><Mixer>
+        <Tempo>
+          <LomId Value="0" />
+          <Manual Value="128" />
+          <MidiControllerRange><Min Value="60" /><Max Value="200" /></MidiControllerRange>
+        </Tempo>
+      </Mixer></DeviceChain>
+    </MasterTrack>
+    <PostTempoDevice><Manual Value="1" /></PostTempoDevice>
+  </LiveSet>
+</Ableton>`;
+    const real = path.join(tmp, 'Real Shaped.als');
+    fs.writeFileSync(real, zlib.gzipSync(Buffer.from(big)));
+    expect(Buffer.byteLength(big)).toBeGreaterThan(16384);
+    expect(big.indexOf('<Tempo>')).toBeGreaterThan(16384);
+    expect(await parseAbletonLiveSet(real)).toEqual({ bpm: 128, key: '' });
+  });
+  // Live 12 emits no KeySignature at all (0 occurrences in both real projects),
+  // so a bare <Tonic> can only belong to a device preset and must not be
+  // reported as the project key.
+  it('ignores a <Tonic> that is not inside a KeySignature element', async () => {
+    const stray = path.join(tmp, 'Stray Tonic.als');
+    fs.writeFileSync(stray, zlib.gzipSync(Buffer.from(
+      '<Ableton><LiveSet><Device><Tonic Value="5" /></Device>' +
+      '<MasterTrack><Tempo><Manual Value="90" /></Tempo></MasterTrack></LiveSet></Ableton>'
+    )));
+    expect(await parseAbletonLiveSet(stray)).toEqual({ bpm: 90, key: '' });
+  });
   it('returns zeroed metadata for a corrupt file, never throws', async () => {
     const bad = path.join(tmp, 'bad.als');
     fs.writeFileSync(bad, Buffer.from('not gzip'));
