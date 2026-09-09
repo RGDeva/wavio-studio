@@ -146,14 +146,28 @@ export async function parseAbletonLiveSet(alsPath: string): Promise<{ bpm: numbe
     const xml: Buffer = await new Promise((resolve, reject) => {
       zlib.gunzip(raw, (err, result) => err ? reject(err) : resolve(result));
     });
-    const xmlStr = xml.toString('utf8', 0, Math.min(xml.length, 16384)); // read first 16KB only
+    const xmlStr = xml.toString('utf8');
 
-    // BPM: <Tempo><LomId Value="0" /><Manual Value="140" />
-    const bpmMatch = xmlStr.match(/<Tempo>[^<]*(?:<[^>]+>\s*)*<Manual\s+Value="([\d.]+)"/);
-    const bpm = bpmMatch ? Math.round(parseFloat(bpmMatch[1])) : 0;
+    // BPM lives in MasterTrack, near the END of a real Live set: measured at byte
+    // 293,923 of 334,317 and 154,040 of 194,360 in two real Live 12 projects. The
+    // previous 16KB read window could never reach it, so every genuine .als parsed
+    // as bpm 0 while a small synthetic fixture passed.
+    //
+    // Scope the search to the <Tempo>…</Tempo> element rather than scanning loosely:
+    // an unanchored /<Tempo>(?:<[^>]+>\s*)*<Manual Value="…"/ matches any tag, so it
+    // runs to EOF and backtracks to the LAST <Manual> in the document (yielding 1,
+    // an unrelated device value) instead of the tempo's own.
+    const tempoBlock = xmlStr.match(/<Tempo>([\s\S]*?)<\/Tempo>/);
+    const bpmMatch = tempoBlock ? tempoBlock[1].match(/<Manual\s+Value="([\d.]+)"/) : null;
+    const parsedBpm = bpmMatch ? parseFloat(bpmMatch[1]) : NaN;
+    const bpm = Number.isFinite(parsedBpm) ? Math.round(parsedBpm) : 0;
 
-    // Key: <KeySignature>...<Tonic Value="5" />  (0=C,1=Db,...,11=B)
-    const tonicMatch = xmlStr.match(/<Tonic\s+Value="(\d+)"/);
+    // Key: <KeySignature>…<Tonic Value="5" />  (0=C,1=Db,…,11=B). Live 12 sets do not
+    // emit KeySignature at all (0 occurrences in both real projects), so '' is the
+    // honest answer there. Confining the lookup to a KeySignature element keeps a bare
+    // <Tonic> belonging to a device preset from being reported as the project key.
+    const keyBlock = xmlStr.match(/<KeySignature>([\s\S]*?)<\/KeySignature>/);
+    const tonicMatch = keyBlock ? keyBlock[1].match(/<Tonic\s+Value="(\d+)"/) : null;
     const NOTE_NAMES = ['C','Db','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
     const key = tonicMatch ? (NOTE_NAMES[parseInt(tonicMatch[1])] ?? '') : '';
 

@@ -145,14 +145,63 @@ keeping five visibly distinct steps.
 Final measured state across every surface and width: **0 contrast failures, 0 horizontal overflow,
 0 clipped text, minimum font 11px.**
 
+## 5b. Ableton adapter validated against real Live 12 projects (2026-09-09)
+
+The live Ableton P0 gates need a running app, but the **adapter layer does not** — it has no
+Electron imports, so it can be driven directly over the real `.als` projects already on this Mac
+(Ableton Live 12 Suite is installed at `/Applications`). Doing that found two defects that the
+existing test fixture structurally could not catch.
+
+Correct on every real project: adapter routing (`ableton`), `isProjectFile`, folder scan and role
+classification, `Ableton Project Info/` manifest extra, `locateProjectFile`, **0 containment leaks**,
+and `../../escape.wav` rejected as `null`.
+
+**Two real defects in `parseAbletonLiveSet`, both invisible to the fixture:**
+
+1. **The 16KB read window could never reach the tempo.** MasterTrack tempo sits near the END of a
+   real set — measured at byte **293,923 of 334,317** and **154,040 of 194,360** in two real Live 12
+   projects. Every genuine `.als` therefore parsed as `bpm: 0`, while the 200-byte synthetic
+   fixture (tempo at byte ~150) passed. The runbook's §2/§3 pass criteria require correct BPM.
+2. **The regex matched the wrong element even unbounded.** `/<Tempo>(?:<[^>]+>\s*)*<Manual …/`
+   matches ANY tag, so it runs to EOF and backtracks to the **last** `<Manual>` in the document.
+   Against a real file it returned **1** — an unrelated device value — not the tempo. Defect 1 hid
+   defect 2: truncation meant the greedy scan never got the chance to mis-fire.
+
+Fixed by scoping extraction to the `<Tempo>…</Tempo>` element over the full document. Real projects
+now parse **64.52→65 BPM** and **160 BPM** (previously 0 and 0).
+
+`<KeySignature>` does not exist in Live 12 at all (**0 occurrences** in both real projects), so
+`key: ''` is the honest answer, not a bug. The lookup is now confined to a `KeySignature` element so
+a device preset's stray `<Tonic>` cannot be reported as the project key — previously it was, which
+the second regression test pins.
+
+Both new tests were **verified to fail against the old implementation** (`bpm 0` instead of 128;
+stray tonic reported as `'F'`) before the fix was restored — they are regression tests, not
+tautologies. The pre-existing fixture was left untouched and still asserts `{ bpm: 140, key: 'F' }`;
+no test was weakened.
+
+This is the same lesson as the multiplayer wire-format defects: **a fixture that encodes our own
+assumption proves nothing about the real format.** Both times the bug lived exactly in the gap
+between the synthetic shape and the real one.
+
+Gate after the fix: **967/967 · 52 files · 0 skips** (965 + the 2 new regression tests),
+tsc ×2 clean, production build clean, `verify:package` **PASS** (11,597 files, production runtime
+only). `AUTHENTICATED ELECTRON STAGING SMOKE: NOT RUN` is unchanged by this work.
+
+Note on suite timing: a first run reported 2 failures, both **performance benchmarks**
+(`security.test.ts` COUNT 44ms vs 10ms; `fs.benchmark.test.ts` 50k import 46,548ms vs 30,000ms).
+That was self-inflicted — a full `find ~` was scanning the home directory concurrently. Re-run
+uncontended, the 50k import took **556ms** (83x faster) and the whole suite **25.7s** vs 622s. Both
+pass. Run the benchmarks with nothing else touching the disk.
+
 ## 6. Blockers
 
 | ID | Blocker | Owner | Notes |
 |---|---|---|---|
-| **ENV-1** | **This Mac deletes Electron `.app` bundles.** A pristine Electron from the official cached zip, extracted to `/tmp` outside the repo, ran `--version` and was then removed. `node_modules/electron/dist/` is stripped of `Electron.app`. | host / IT | Blocks every Electron-dependent gate. Needs an allowlist for Electron or a different machine. **Do not attempt to bypass.** |
+| **ENV-1** | **This Mac will not let Electron execute.** `node_modules/electron/dist/` is stripped of `Electron.app`. A pristine Electron re-extracted from the official cached zip is now **SIGKILLed on exec (exit 137)** — verified complete first (252 files, 227MB, all Frameworks present; the zip legitimately ships no `_CodeSignature`, raw Electron is adhoc linker-signed). Re-confirmed 2026-09-09 with the Bash sandbox disabled: **same SIGKILL**, so this is host policy, not agent tooling. | host / IT | Blocks every Electron-dependent gate. Needs an allowlist for Electron or a different machine. **Do not attempt to bypass.** |
 | **ENV-2** | **`/usr/bin/git` is broken** — Xcode's CoreDevice has a symbol mismatch, so `xcode-select` cannot locate git. | host | Workaround: use `/Library/Developer/CommandLineTools/usr/bin/git` directly. |
 | **P0-SMOKE** | **Authenticated Electron staging smoke: NOT RUN.** Never performed, never claimed. | desktop, blocked by ENV-1 | The **last functional release gate**. Harness is committed and ready. |
-| **P0-ABLETON** | Ableton live E2E P0 gates open — real publish, restore round trip, deep-link import. | desktop, blocked by ENV-1 | See `docs/WAVI_ABLETON_E2E_RUNBOOK.md`. |
+| **P0-ABLETON** | Ableton live E2E P0 gates open — real publish, restore round trip, deep-link import. The **adapter layer is now validated against real Live 12 projects** (§5b); what remains blocked is only the part needing a running app. | desktop, blocked by ENV-1 | See `docs/WAVI_ABLETON_E2E_RUNBOOK.md` and §5b. |
 | **B-2** | Real-network upload metrics need a user-supplied `WAVI_AUTH_TOKEN`. | human | Non-blocking for merges. |
 | **B-3** | Credential rotation for previously leaked keys. | human | Should gate any public beta. |
 | **REL** | Production deployment is a separate gate and remains **blocked**. | human | — |
