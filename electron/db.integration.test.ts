@@ -18,7 +18,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 
 // ── ARM64 Node-compatible binary ──────────────────────────────────────────────
 import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
@@ -27,95 +27,62 @@ import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native
 // Resolved automatically from the repo's node_modules via ./test-helpers/native-sqlite.
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
-// ── Inline schema (mirrors electron/db.ts) ────────────────────────────────────
-// We replicate the CREATE TABLE statements and migration steps here rather than
-// importing db.ts directly, because db.ts runs all migrations at module load
-// time using the module-level `db` singleton (which requires the Electron-ABI binary).
+// ── Schema extracted from electron/db.ts ──────────────────────────────────────
+// db.ts cannot be imported here: it binds the Electron-ABI better-sqlite3 and
+// dies under plain Node with ERR_DLOPEN_FAILED. This file used to respond by
+// hand-copying the CREATE TABLE statements — and that copy drifted, silently
+// disabling coverage (see the note on buildSchema below). It now reads db.ts's
+// own SQL text instead, which needs no native binding and cannot drift.
+
+/**
+ * Build the schema from db.ts's OWN SQL rather than a hand-copied mirror.
+ *
+ * The previous inline copy had drifted from production in ways that silently
+ * disabled coverage:
+ *   · sync_queue was missing `upload_offset` and `upload_url` — the
+ *     resumable-upload columns — so resume was untested at the DB layer.
+ *   · sync_queue.project_id was nullable where production declares NOT NULL.
+ *   · max_retries defaulted to 4 where production uses 3.
+ *   · bounce_candidates had `created_at` where production has
+ *     `detected_at NOT NULL`.
+ *
+ * Extracting the shipped SQL (the approach dbMigration.real.test.ts already
+ * uses) means this fixture cannot drift again: change db.ts and these tests
+ * change with it.
+ */
+const dbSrc = readFileSync(join(__dirname, 'db.ts'), 'utf8');
+
+function extractSql(marker: string): string {
+  const idx = dbSrc.indexOf(marker);
+  if (idx < 0) throw new Error(`marker not found in db.ts: ${marker}`);
+  const start = dbSrc.lastIndexOf('\`', idx);
+  const end = dbSrc.indexOf('\`', idx + marker.length);
+  if (start < 0 || end < 0) throw new Error(`could not bound SQL for: ${marker}`);
+  return dbSrc.slice(start + 1, end);
+}
+
+const BASE_DDL = extractSql('CREATE TABLE IF NOT EXISTS projects');
+const BOUNCE_DDL = extractSql('CREATE TABLE IF NOT EXISTS bounce_candidates');
+const LINKS_DDL = extractSql('CREATE TABLE IF NOT EXISTS links');
+
+/** Every guarded ALTER / index statement db.ts runs, in source order. */
+const MIGRATIONS: string[] = [
+  ...[...dbSrc.matchAll(/db\.exec\('((?:ALTER TABLE|CREATE UNIQUE INDEX)[^']*)'\)/g)].map((m) => ({ at: m.index!, sql: m[1] })),
+  ...[...dbSrc.matchAll(/db\.exec\("((?:ALTER TABLE|CREATE UNIQUE INDEX)[^"]*)"\)/g)].map((m) => ({ at: m.index!, sql: m[1] })),
+].sort((a, b) => a.at - b.at).map((s) => s.sql);
 
 function buildSchema(Database: any, path = ':memory:') {
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
-
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      folder_path TEXT,
-      project_name TEXT NOT NULL,
-      daw_type TEXT DEFAULT 'unknown',
-      file_path TEXT,
-      file_size INTEGER DEFAULT 0,
-      sync_status TEXT DEFAULT 'pending',
-      cloud_id TEXT,
-      cloud_version_id TEXT,
-      version_count INTEGER DEFAULT 0,
-      modified_at TEXT,
-      created_at TEXT NOT NULL,
-      checksum TEXT,
-      last_synced_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS files (
-      id TEXT PRIMARY KEY,
-      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      file_type TEXT NOT NULL,
-      file_size INTEGER DEFAULT 0,
-      sync_status TEXT DEFAULT 'pending',
-      cloud_url TEXT,
-      cloud_asset_id TEXT,
-      checksum TEXT,
-      bpm INTEGER,
-      key_note TEXT,
-      duration REAL,
-      role TEXT DEFAULT 'unknown',
-      created_at TEXT NOT NULL,
-      modified_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS sync_queue (
-      id TEXT PRIMARY KEY,
-      project_id TEXT,
-      file_id TEXT,
-      file_name TEXT,
-      type TEXT NOT NULL,
-      status TEXT DEFAULT 'pending',
-      priority INTEGER DEFAULT 5,
-      retries INTEGER DEFAULT 0,
-      max_retries INTEGER DEFAULT 4,
-      error_message TEXT,
-      next_retry_at TEXT,
-      created_at TEXT NOT NULL,
-      started_at TEXT,
-      completed_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS versions (
-      id TEXT PRIMARY KEY,
-      project_id TEXT REFERENCES projects(id) ON DELETE CASCADE,
-      file_path TEXT,
-      checksum TEXT,
-      file_size INTEGER DEFAULT 0,
-      cloud_url TEXT,
-      label TEXT DEFAULT 'version',
-      version_type TEXT DEFAULT 'project',
-      confirmed INTEGER DEFAULT 1,
-      created_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS bounce_candidates (
-      id TEXT PRIMARY KEY,
-      project_id TEXT,
-      file_path TEXT NOT NULL,
-      file_name TEXT NOT NULL,
-      file_size INTEGER DEFAULT 0,
-      status TEXT DEFAULT 'pending',
-      checksum TEXT,
-      created_at TEXT NOT NULL
-    );
-  `);
-
+  db.exec(BASE_DDL);
+  db.exec(BOUNCE_DDL);
+  db.exec(LINKS_DDL);
+  // db.ts wraps each of these in try/catch ("column already exists"); mirror
+  // that tolerance so re-running the builder stays idempotent.
+  for (const sql of MIGRATIONS) {
+    try { db.exec(sql); } catch { /* already applied — db.ts semantics */ }
+  }
   return db;
 }
 
@@ -222,12 +189,13 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
 
   it('applies to bounce_candidates and versions tables too', () => {
     const proj = { id: 'p1', project_name: 'Test', created_at: '2026-01-01' };
-    db.prepare('INSERT INTO projects (id, project_name, created_at) VALUES (?, ?, ?)').run(proj.id, proj.project_name, proj.created_at);
+    db.prepare('INSERT INTO projects (id, project_name, file_path, daw_type, created_at, modified_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(proj.id, proj.project_name, `/tmp/${proj.id}.als`, 'ableton', proj.created_at, proj.created_at);
 
-    db.prepare(`INSERT INTO versions (id, project_id, checksum, created_at) VALUES (?, ?, ?, ?)`
-    ).run('v1', 'p1', 'abcd1234abcd1234', '2026-01-01');
+    db.prepare(`INSERT INTO versions (id, project_id, file_path, checksum, created_at) VALUES (?, ?, ?, ?, ?)`
+    ).run('v1', 'p1', '/tmp/p1.als', 'abcd1234abcd1234', '2026-01-01');
 
-    db.prepare(`INSERT INTO bounce_candidates (id, project_id, file_path, file_name, created_at, checksum) VALUES (?, ?, ?, ?, ?, ?)`
+    db.prepare(`INSERT INTO bounce_candidates (id, project_id, file_path, file_name, detected_at, checksum) VALUES (?, ?, ?, ?, ?, ?)`
     ).run('b1', 'p1', '/x', 'x.wav', '2026-01-01', 'abcd1234abcd1234');
 
     applyTruncatedHashMigration(db);
@@ -241,7 +209,7 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
   // ── 3. next_retry_at time gate ─────────────────────────────────────────────
 
   it('returns pending items with null next_retry_at immediately', () => {
-    db.prepare(`INSERT INTO sync_queue (id, type, status, created_at) VALUES ('q1','project_upload','pending','2026-01-01')`).run();
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, created_at) VALUES ('q1','p1','project_upload','pending','2026-01-01')`).run();
     const now = new Date().toISOString();
     const items = getPendingSyncItems(db, now);
     expect(items.length).toBe(1);
@@ -250,7 +218,7 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
 
   it('gates retrying items whose next_retry_at is in the future', () => {
     const future = new Date(Date.now() + 60_000).toISOString();
-    db.prepare(`INSERT INTO sync_queue (id, type, status, created_at, next_retry_at) VALUES ('q2','project_upload','retrying','2026-01-01',?)`
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, created_at, next_retry_at) VALUES ('q2','p1','project_upload','retrying','2026-01-01',?)`
     ).run(future);
     const now = new Date().toISOString();
     const items = getPendingSyncItems(db, now);
@@ -259,7 +227,7 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
 
   it('returns retrying items whose next_retry_at has passed', () => {
     const past = new Date(Date.now() - 1000).toISOString();
-    db.prepare(`INSERT INTO sync_queue (id, type, status, created_at, next_retry_at) VALUES ('q3','project_upload','retrying','2026-01-01',?)`
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, created_at, next_retry_at) VALUES ('q3','p1','project_upload','retrying','2026-01-01',?)`
     ).run(past);
     const now = new Date().toISOString();
     const items = getPendingSyncItems(db, now);
@@ -268,7 +236,7 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
   });
 
   it('does not return failed items', () => {
-    db.prepare(`INSERT INTO sync_queue (id, type, status, created_at) VALUES ('q4','project_upload','failed','2026-01-01')`).run();
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, created_at) VALUES ('q4','p1','project_upload','failed','2026-01-01')`).run();
     const items = getPendingSyncItems(db, new Date().toISOString());
     expect(items.length).toBe(0);
   });
@@ -304,7 +272,8 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
   // ── 5. cloud_version_id persistence on projects ───────────────────────────
 
   it('persists cloud_version_id on project row', () => {
-    db.prepare(`INSERT INTO projects (id, project_name, created_at) VALUES ('p10', 'TestProject', '2026-01-01')`).run();
+    db.prepare(`INSERT INTO projects (id, project_name, file_path, daw_type, created_at, modified_at)
+      VALUES ('p10', 'TestProject', '/tmp/p10.als', 'ableton', '2026-01-01', '2026-01-01')`).run();
     db.prepare('UPDATE projects SET cloud_id = ?, cloud_version_id = ? WHERE id = ?')
       .run('cloud-proj-123', 'cloud-ver-456', 'p10');
 
@@ -316,7 +285,7 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
   // ── 6. Retry does not duplicate sync_queue entries ─────────────────────────
 
   it('retry resets status to pending without creating duplicate rows', () => {
-    db.prepare(`INSERT INTO sync_queue (id, type, status, retries, created_at) VALUES ('q10','project_upload','failed',4,'2026-01-01')`).run();
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, retries, created_at) VALUES ('q10','p1','project_upload','failed',4,'2026-01-01')`).run();
 
     // Simulate retryFailed()
     db.prepare(`UPDATE sync_queue SET status = 'pending', retries = 0, error_message = NULL WHERE status = 'failed'`).run();
@@ -331,7 +300,7 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
 
   it('next_retry_at is cleared when a failed item is reset for retry', () => {
     const future = new Date(Date.now() + 60_000).toISOString();
-    db.prepare(`INSERT INTO sync_queue (id, type, status, retries, created_at, next_retry_at) VALUES ('q11','project_upload','retrying',2,'2026-01-01',?)`
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, retries, created_at, next_retry_at) VALUES ('q11','p1','project_upload','retrying',2,'2026-01-01',?)`
     ).run(future);
 
     // Reset to pending (retryFailed)
@@ -340,5 +309,47 @@ maybeDescribe('SQLite integration (real better-sqlite3, arm64 Node binary)', () 
     const now = new Date().toISOString();
     const items = getPendingSyncItems(db, now);
     expect(items.some((i: any) => i.id === 'q11')).toBe(true);
+  });
+});
+
+maybeDescribe('resumable upload columns (previously absent from the mirrored fixture)', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require(NATIVE_SQLITE_PATH);
+  let db: any;
+  beforeEach(() => {
+    db = buildSchema(Database);
+    db.prepare(`INSERT INTO projects (id, project_name, file_path, daw_type, created_at, modified_at)
+      VALUES ('pr1','Resume','/tmp/pr1.als','ableton','2026-01-01','2026-01-01')`).run();
+  });
+  afterEach(() => db?.close());
+
+  it('sync_queue carries upload_offset and upload_url', () => {
+    const cols = db.prepare('PRAGMA table_info(sync_queue)').all().map((c: any) => c.name);
+    expect(cols).toContain('upload_offset');
+    expect(cols).toContain('upload_url');
+  });
+
+  it('upload_offset defaults to 0 and survives a resume update', () => {
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, created_at)
+      VALUES ('r1','pr1','project_upload','pending','2026-01-01')`).run();
+    expect(db.prepare("SELECT upload_offset, upload_url FROM sync_queue WHERE id='r1'").get())
+      .toEqual({ upload_offset: 0, upload_url: null });
+
+    db.prepare("UPDATE sync_queue SET upload_offset = ?, upload_url = ? WHERE id = 'r1'")
+      .run(1048576, 'https://upload.example/session/abc');
+    expect(db.prepare("SELECT upload_offset, upload_url FROM sync_queue WHERE id='r1'").get())
+      .toEqual({ upload_offset: 1048576, upload_url: 'https://upload.example/session/abc' });
+  });
+
+  it('enforces the NOT NULL on sync_queue.project_id that the mirror had dropped', () => {
+    expect(() => db.prepare(
+      "INSERT INTO sync_queue (id, type, status, created_at) VALUES ('r2','project_upload','pending','2026-01-01')",
+    ).run()).toThrow(/NOT NULL constraint failed: sync_queue.project_id/);
+  });
+
+  it('uses production default max_retries = 3 (the mirror said 4)', () => {
+    db.prepare(`INSERT INTO sync_queue (id, project_id, type, status, created_at)
+      VALUES ('r3','pr1','project_upload','pending','2026-01-01')`).run();
+    expect(db.prepare("SELECT max_retries FROM sync_queue WHERE id='r3'").get().max_retries).toBe(3);
   });
 });

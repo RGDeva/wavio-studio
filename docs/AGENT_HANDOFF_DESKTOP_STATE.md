@@ -269,11 +269,39 @@ described as "mirrored from main.ts to avoid Electron bootstrap".
 Four times now the same shape: **the test exercises a copy of the thing, so the copy is
 what stays correct.** The Ableton fixture put tempo at byte ~150 when real files put it at
 ~294,000; restore mirrored the predicate but not its caller; the links migration mirrored
-the SQL but not its order; and `db.integration.test.ts` still mirrors the schema —
-its `sync_queue` is missing `upload_offset` and `upload_url` (the resumable-upload
-columns), has `project_id` nullable where production has NOT NULL, and defaults
-`max_retries` to 4 where production uses 3. Resumable upload is therefore untested at the
-DB layer. That mirror is the next one to remove.
+the SQL but not its order; and `db.integration.test.ts` mirrored the schema.
+
+**That last mirror is now removed.** It built its own CREATE TABLE statements, which had
+drifted: `sync_queue` was missing `upload_offset` and `upload_url` (the resumable-upload
+columns), `project_id` was nullable where production declares NOT NULL, `max_retries`
+defaulted to 4 where production uses 3, and `bounce_candidates` had `created_at` where
+production has `detected_at NOT NULL`. It now extracts db.ts's own SQL.
+
+Rebuilding the fixture from the real schema immediately failed **8 of 16 tests** — they had
+been inserting rows production would reject (`NOT NULL constraint failed:
+sync_queue.project_id`, `projects.file_path`, `versions.file_path`). Those tests were
+exercising impossible data. Their inserts were corrected to satisfy the real constraints,
+and four new tests cover what the drift had disabled: the resumable-upload columns
+round-tripping, the NOT NULL the mirror dropped, and the real `max_retries` default.
+
+## 5e. A test that walks the whole workflow (2026-09-30)
+
+`electron/coreWorkflow.integration.test.ts` walks **discovery → project → files → sync
+(including a resumable-upload resume) → version publish → Project Link create → account-scoped
+list → revoke** in one continuous database built from db.ts's own SQL, in db.ts's own source
+order.
+
+Every other suite tested one link in the chain, which is how a fresh-install defect survived a
+green suite. Reverted against the pre-fix db.ts this suite fails with the exact production
+error — `SqliteError: table links has no column named account_id` — so the gap is closed by a
+test that reproduces the user-visible failure, not by a unit assertion.
+
+Taking schema order from source positions is deliberate: an ALTER that drifts back above its
+CREATE now reproduces the bug here instead of shipping.
+
+**Scope:** the local/storage half. Upload, download and restore-from-archive cross the network
+inside the Electron main process and keep their own suites. Proving those end to end still needs
+a running app, so ENV-1 still gates the full claim.
 
 ## 6. Blockers
 
