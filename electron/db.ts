@@ -165,7 +165,9 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   // P3-2c: account-scope Project Link cache rows to their owning account (server
   // Privy DID). Nullable + additive: existing rows stay account_id=NULL (legacy,
   // ownership-unknown), never destructively deleted or auto-assigned.
-  try { db.exec('ALTER TABLE links ADD COLUMN account_id TEXT'); } catch { /* already exists */ }
+  // (The links.account_id migration deliberately lives with the CREATE TABLE
+  // links statement further down — running it here, before that table exists,
+  // is what broke fresh installs.)
 
   // Allow standalone files (no project) — SQLite doesn't support ALTER COLUMN so we
   // must recreate the table to drop the NOT NULL on project_id.
@@ -236,9 +238,21 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       collaborator_mode TEXT,
       expires_at TEXT,
       created_at TEXT NOT NULL,
-      revoked_at TEXT
+      revoked_at TEXT,
+      -- P3-2c account scoping. This MUST be part of the CREATE, not only the
+      -- ALTER below: on a fresh database the ALTER ran before this table
+      -- existed, failed with "no such table: links", and was swallowed by its
+      -- catch — so brand-new installs got a links table with no account_id and
+      -- every insertLink() threw "table links has no column named account_id".
+      -- Existing machines were unaffected (their links table predates the
+      -- ALTER), which is exactly why it went unnoticed.
+      account_id TEXT
     )
   `);
+  // Legacy databases whose links table was created before account_id existed.
+  // Runs AFTER the CREATE so it is a no-op on fresh DBs instead of a silent
+  // failure before them.
+  try { db.exec('ALTER TABLE links ADD COLUMN account_id TEXT'); } catch { /* already exists */ }
   // Backfill: legacy listen links recorded only as projects.share_url/tracking_id.
   try {
     db.exec(`

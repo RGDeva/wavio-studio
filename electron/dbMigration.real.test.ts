@@ -36,6 +36,21 @@ function extractQuotedSql(marker: string): string {
 
 const CREATE_LINKS_SQL = extractSql('CREATE TABLE IF NOT EXISTS links');
 const ALTER_ACCOUNT_SQL = extractQuotedSql('ALTER TABLE links ADD COLUMN account_id');
+
+/**
+ * A genuinely PRE-migration links table: the shipped CREATE with the
+ * account_id column (and its explanatory comment) stripped out.
+ *
+ * Previously these tests used CREATE_LINKS_SQL itself as "the pre-migration
+ * schema", which was only true while the shipped CREATE happened to lack the
+ * column. Now that a fresh table declares account_id up front, simulating a
+ * legacy database needs to be explicit rather than incidental.
+ */
+const LEGACY_CREATE_LINKS_SQL = CREATE_LINKS_SQL
+  .split('\n')
+  .filter((l) => !/account_id/.test(l) && !/^\s*--/.test(l))
+  .join('\n')
+  .replace(/,(\s*\))/, '$1');
 const SCOPED_SELECT_SQL = extractSql('WHERE l.account_id = ?');
 const LEGACY_SELECT_SQL = extractSql('WHERE l.account_id IS NULL');
 const APPLY_AUTH_SQL = extractSql('SET account_id = @account_id');
@@ -66,7 +81,7 @@ maybeDescribe('REAL links.account_id migration (actual db.ts SQL, real SQLite)',
   afterEach(() => db?.close());
 
   it('(1)(2)(3) pre-migration legacy rows survive; account_id added nullable; existing rows NULL', () => {
-    db.exec(CREATE_LINKS_SQL);           // pre-migration schema (no account_id)
+    db.exec(LEGACY_CREATE_LINKS_SQL);    // genuine pre-migration schema (no account_id)
     insertLegacy('legacy1');
     insertLegacy('legacy2');
     db.exec(ALTER_ACCOUNT_SQL);          // the real migration
@@ -122,5 +137,64 @@ maybeDescribe('REAL links.account_id migration (actual db.ts SQL, real SQLite)',
     expect(() => db.exec(ALTER_ACCOUNT_SQL)).toThrow();
     const row = db.prepare("SELECT tracking_id, account_id FROM links WHERE tracking_id='keep'").get();
     expect(row).toEqual({ tracking_id: 'keep', account_id: DID_A });
+  });
+});
+
+maybeDescribe('fresh-install ordering of the links schema (source-order, not assumed order)', () => {
+  let Database: any;
+  beforeEach(() => { if (!Database) Database = require(NATIVE_SQLITE_PATH); });
+
+  // The suite above runs CREATE then ALTER because that is the order the
+  // migration was *meant* to have. db.ts actually shipped the ALTER ~59 lines
+  // BEFORE the CREATE, so on a fresh database it failed with
+  // "no such table: links", was swallowed by its catch, and the table was then
+  // created without account_id — every insertLink() threw
+  // "table links has no column named account_id". Extracting the right SQL but
+  // replaying it in the intended order is what hid this.
+  //
+  // These tests take the order from db.ts's source positions instead of
+  // assuming it, so a re-ordering regression fails here.
+
+  it('db.ts creates the links table before it alters it', () => {
+    const createAt = dbSrc.indexOf('CREATE TABLE IF NOT EXISTS links');
+    const alterAt = dbSrc.indexOf('ALTER TABLE links ADD COLUMN account_id');
+    expect(createAt).toBeGreaterThan(-1);
+    if (alterAt > -1) expect(createAt).toBeLessThan(alterAt);
+  });
+
+  it('the shipped CREATE TABLE links itself declares account_id', () => {
+    // Belt and braces: even if the guarded ALTER never runs, a fresh table
+    // must already carry the column the insert statement writes to.
+    expect(CREATE_LINKS_SQL).toMatch(/account_id/);
+  });
+
+  it('replaying db.ts statements in SOURCE order lets a real insert succeed', () => {
+    const db = new Database(':memory:');
+    const steps: Array<{ at: number; sql: string; tolerant: boolean }> = [
+      { at: dbSrc.indexOf('CREATE TABLE IF NOT EXISTS links'), sql: CREATE_LINKS_SQL, tolerant: false },
+    ];
+    const alterAt = dbSrc.indexOf('ALTER TABLE links ADD COLUMN account_id');
+    if (alterAt > -1) steps.push({ at: alterAt, sql: ALTER_ACCOUNT_SQL, tolerant: true });
+    steps.sort((a, b) => a.at - b.at);
+    for (const st of steps) {
+      if (st.tolerant) { try { db.exec(st.sql); } catch { /* db.ts semantics */ } }
+      else db.exec(st.sql);
+    }
+
+    const cols = db.prepare('PRAGMA table_info(links)').all().map((c: any) => c.name);
+    expect(cols).toContain('account_id');
+
+    // The real insert statement, extracted from db.ts.
+    const insertSql = extractSql('INSERT INTO links (tracking_id');
+    expect(() => db.prepare(insertSql).run({
+      tracking_id: 'fresh-1', kind: 'project', project_id: 'p1', asset_id: null,
+      version_id: null, url: 'https://w/pl/x', label: null, allow_download: 1,
+      collaborator_mode: null, expires_at: null, created_at: new Date().toISOString(),
+      account_id: 'did:privy:fresh',
+    })).not.toThrow();
+
+    expect(db.prepare('SELECT account_id FROM links WHERE tracking_id = ?').get('fresh-1').account_id)
+      .toBe('did:privy:fresh');
+    db.close();
   });
 });

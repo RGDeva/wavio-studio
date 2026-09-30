@@ -40,6 +40,7 @@ import {
   toSafeInviteTarget, MULTIPLAYER_FAILURE_MESSAGE, INVITE_TARGET_UNRESOLVED_MESSAGE,
 } from './multiplayerRefs';
 import type { AssistantLinkFailure } from './copilotTools/localTools';
+import { isSafeRestorePath, validateArchiveEntries } from './restoreArchive';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -2352,14 +2353,6 @@ function sendRestoreProgress(evt: string, payload: Record<string, unknown>) {
   }
 }
 
-const FORBIDDEN_PATH_PATTERNS_RESTORE = [
-  /\.\./,          // zip-slip — path traversal
-  /^\//, /^\\/,    // absolute paths
-  /[\0\r\n]/,      // null / newline injection
-];
-function isSafeRestorePath(rel: string): boolean {
-  return !FORBIDDEN_PATH_PATTERNS_RESTORE.some(rx => rx.test(rel));
-}
 
 ipcMain.handle('restore:start', async (_e, opts: {
   token: string;
@@ -2440,16 +2433,13 @@ ipcMain.handle('restore:start', async (_e, opts: {
       });
     });
 
-    // Parse entry names from `unzip -l` output (lines like: `   1234  ..  filename`)
-    const entryLines = listResult.split('\n').slice(3); // skip header
-    const entryNames = entryLines
-      .map(l => l.replace(/^\s+\d+\s+[\d-]+\s+[\d:]+\s+/, '').trim())
-      .filter(n => n && !n.startsWith('---') && !n.includes('files'));
-
-    for (const name of entryNames) {
-      if (!isSafeRestorePath(name)) {
-        return { error: 'extraction_failure', detail: `Zip-slip or unsafe path detected: ${name}` };
-      }
+    // Validate every entry name before extracting anything. This used to be
+    // parsed inline; it dropped any name containing the substring "files"
+    // (intended to skip the "N files" summary row), so a crafted
+    // `../../../../ESCAPED-files.txt` was never inspected at all.
+    const scan = validateArchiveEntries(listResult);
+    if (!scan.ok) {
+      return { error: 'extraction_failure', detail: scan.reason };
     }
 
     // Second pass: extract to finalDir
