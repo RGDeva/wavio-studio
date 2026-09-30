@@ -57,6 +57,7 @@ export default defineConfig({
       'electron/stagingSmoke.test.ts',
       'src/lib/collaborationView.test.ts',
       'src/lib/designSystem.test.ts',
+      'electron/coreWorkflow.integration.test.ts',
     ],
     environment: 'node',
   },
