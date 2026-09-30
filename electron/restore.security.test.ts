@@ -32,22 +32,16 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 
-// ── Extracted helpers (mirrored from main.ts to avoid Electron bootstrap) ──────
-
-const FORBIDDEN_PATH_PATTERNS_RESTORE = [
-  /\.\./,
-  /^\//, /^\\/,
-  /[\0\r\n]/,
-];
-
-function isSafeRestorePath(rel: string): boolean {
-  return !FORBIDDEN_PATH_PATTERNS_RESTORE.some(rx => rx.test(rel));
-}
-
-function isDestinationSafe(destDir: string, candidate: string): boolean {
-  const resolved = path.resolve(destDir, candidate);
-  return resolved.startsWith(path.resolve(destDir) + path.sep) || resolved === path.resolve(destDir);
-}
+// These are now imported from the REAL implementation rather than mirrored by
+// hand. The old mirror meant these tests exercised a copy of the predicate
+// while the code that decides which names ever reach the predicate went
+// untested — which is exactly where the zip-slip validation defect lived.
+import {
+  isSafeRestorePath,
+  isDestinationSafe,
+  parseZipEntryNames,
+  validateArchiveEntries,
+} from './restoreArchive';
 
 const MAX_PACK_FILE_COUNT = 500;
 const MAX_PACK_TOTAL_SIZE = 2 * 1024 * 1024 * 1024;    // 2 GB
@@ -336,5 +330,76 @@ describe('truncated ZIP detection', () => {
     }
     expect(threw).toBe(true);
     fs.unlinkSync(tmp);
+  });
+});
+
+describe('archive entry scanning — the listing parser that feeds the predicate', () => {
+  // Real `unzip -l` output shape, reproduced from a crafted archive.
+  const listing = (rows: string[], count = rows.length) => [
+    'Archive:  /tmp/x.zip',
+    '  Length      Date    Time    Name',
+    '---------  ---------- -----   ----',
+    ...rows,
+    '---------                     -------',
+    `       21                     ${count} files`,
+  ].join('\n');
+
+  it('REGRESSION: an entry whose name contains "files" is no longer dropped', () => {
+    // The old filter was `!n.includes('files')`, intended to skip the summary
+    // row. Against this archive it showed the validator only "normal.als" —
+    // 1 of 4 entries — and approved the restore.
+    const out = parseZipEntryNames(listing([
+      '        1  00-00-1980 00:00   my files/kick drum.wav',
+      '        1  00-00-1980 00:00   Session files/Ableton Project Info/x.cfg',
+      '        1  00-00-1980 00:00   normal.als',
+      '       19  00-00-1980 00:00   ../../../../ESCAPED-files.txt',
+    ]));
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.entries).toHaveLength(4);
+    expect(out.ok && out.entries).toContain('../../../../ESCAPED-files.txt');
+  });
+
+  it('REGRESSION: the traversal entry is now rejected instead of invisible', () => {
+    const out = validateArchiveEntries(listing([
+      '        1  00-00-1980 00:00   normal.als',
+      '       19  00-00-1980 00:00   ../../../../ESCAPED-files.txt',
+    ]));
+    expect(out.ok).toBe(false);
+    expect(!out.ok && out.offending).toBe('../../../../ESCAPED-files.txt');
+  });
+
+  it('keeps legitimate names containing spaces and the word "files"', () => {
+    const out = validateArchiveEntries(listing([
+      '        1  00-00-1980 00:00   my files/kick drum.wav',
+      '        1  00-00-1980 00:00   Session files/Ableton Project Info/x.cfg',
+    ]));
+    expect(out.ok).toBe(true);
+    expect(out.ok && out.entries).toEqual([
+      'my files/kick drum.wav',
+      'Session files/Ableton Project Info/x.cfg',
+    ]);
+  });
+
+  it('fails closed when the declared entry count disagrees with what parsed', () => {
+    // A name containing a newline splits across rows, so the validator would
+    // otherwise inspect fragments rather than the real path.
+    const out = parseZipEntryNames(listing([
+      '        1  00-00-1980 00:00   good.wav',
+    ], 2));
+    expect(out.ok).toBe(false);
+    expect(!out.ok && out.reason).toMatch(/declares 2 entries but 1 parsed/);
+  });
+
+  it('fails closed on a listing with no separator rules', () => {
+    expect(parseZipEntryNames('not an archive listing').ok).toBe(false);
+  });
+
+  it('accepts a well-formed benign archive', () => {
+    const out = validateArchiveEntries(listing([
+      '        1  00-00-1980 00:00   Song.als',
+      '        1  00-00-1980 00:00   Samples/Imported/kick.wav',
+      '        0  00-00-1980 00:00   Ableton Project Info/',
+    ]));
+    expect(out.ok).toBe(true);
   });
 });

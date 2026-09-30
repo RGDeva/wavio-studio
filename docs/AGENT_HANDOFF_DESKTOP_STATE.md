@@ -213,6 +213,68 @@ time and produced the false "not deployed anywhere" claim.
 real server, identity resolution, pagination, operation-key replay and the confirmation envelope all
 remain unexercised end-to-end. Those need a signed-in session and are still `NOT RUN`.
 
+## 5d. Core-workflow defects found by testing production code instead of copies (2026-09-30)
+
+Two shipped defects, both in the core desktop workflow, both invisible to a green suite.
+
+### P0 — Project Link creation was broken on every FRESH install
+
+`db.ts` ran `ALTER TABLE links ADD COLUMN account_id` at line 168 but created the
+`links` table at line 227. On a brand-new database the ALTER hit "no such table: links",
+its `catch` swallowed the error, and `links` was then created **without** `account_id`.
+Proven against real SQLite:
+
+```
+step1  ALTER (db.ts:168) -> no such table: links [swallowed by catch]
+step2  CREATE (db.ts:227) -> ok
+insertLink()      -> FAILED: table links has no column named account_id
+linksForAccount() -> FAILED: no such column: l.account_id
+```
+
+So a new user could not create or list a Project Link at all. Existing machines were fine
+because their `links` table predates the ALTER — which is exactly why nobody saw it.
+
+Fixed by declaring `account_id` in the CREATE and moving the guarded ALTER after it (it
+now only patches legacy DBs). A scan of every `ALTER TABLE … ADD COLUMN` against its
+table's CREATE position confirms **no other ordering problems remain**.
+
+**Why the existing test missed it.** `dbMigration.real.test.ts` was written for this exact
+feature and calls itself "drift-proof" — it extracts the real SQL text from db.ts rather
+than copying it. But its helper ran `CREATE` then `ALTER`, the order the migration was
+*meant* to have, while db.ts shipped the reverse. Drift-proof on SQL text, not on order.
+The new tests derive the order from db.ts's own source positions, so they cannot repeat
+that assumption; all three fail against the old code.
+
+### Zip-slip validation in restore was decorative
+
+The `restore:start` entry check parsed `unzip -l` text and filtered with
+`!n.includes('files')` — meant to skip the "N files" summary row, but it dropped **any**
+entry whose name contained that substring. Against a 4-entry archive the validator saw
+**1 of 4** names, missing both legitimate paths (`my files/kick drum.wav`) and a crafted
+`../../../../ESCAPED-files.txt`.
+
+**Not exploitable today:** Info-ZIP `unzip` strips `../` itself and exits non-zero, so
+nothing escaped and the restore fails. But our own control did nothing, leaving containment
+resting entirely on an external binary — and `.slice(3)` plus a newline in a name would
+show the validator fragments rather than the real path.
+
+Extracted to `electron/restoreArchive.ts` (no Electron imports, so it is directly
+testable): parse between the listing's separator rules, keep names verbatim, and fail
+closed when the declared entry count disagrees with what parsed. `restore.security.test.ts`
+now imports the real implementation instead of the hand-mirrored copy it previously
+described as "mirrored from main.ts to avoid Electron bootstrap".
+
+### The pattern worth naming
+
+Four times now the same shape: **the test exercises a copy of the thing, so the copy is
+what stays correct.** The Ableton fixture put tempo at byte ~150 when real files put it at
+~294,000; restore mirrored the predicate but not its caller; the links migration mirrored
+the SQL but not its order; and `db.integration.test.ts` still mirrors the schema —
+its `sync_queue` is missing `upload_offset` and `upload_url` (the resumable-upload
+columns), has `project_id` nullable where production has NOT NULL, and defaults
+`max_retries` to 4 where production uses 3. Resumable upload is therefore untested at the
+DB layer. That mirror is the next one to remove.
+
 ## 6. Blockers
 
 | ID | Blocker | Owner | Notes |
