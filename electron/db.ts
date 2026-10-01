@@ -1401,6 +1401,17 @@ export function insertRestoredProject(p: Omit<RestoredProject, 'id'>): RestoredP
   return { id, ...p };
 }
 
+/**
+ * The restored checkout a local project was adopted from, if any.
+ *
+ * Keyed on local_project_path because adoption sets projects.file_path to the
+ * restored DAW project path — that is the only link between the two tables.
+ */
+export function getRestoredProjectByLocalPath(localProjectPath: string): RestoredProject | null {
+  return (db.prepare("SELECT * FROM restored_projects WHERE local_project_path = ? ORDER BY restored_at DESC LIMIT 1")
+    .get(localProjectPath) as RestoredProject) ?? null;
+}
+
 export function getRestoredProjectByShare(shareId: string): RestoredProject | null {
   return (db.prepare('SELECT * FROM restored_projects WHERE share_id = ? ORDER BY restored_at DESC LIMIT 1')
     .get(shareId) ?? null) as RestoredProject | null;

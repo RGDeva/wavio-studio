@@ -50,7 +50,7 @@ Everything below is from source, tests and live endpoint probes — not from pri
 |---|---|---|
 | Same-DAW open of restored project | **PARTIAL** | `RestoreWindow` calls `shell.openPath` (OS handler), which works for any registered extension. But `shell:openWithApp` — the configured-DAW path — requires `requireIndexed`, which restored files failed until adoption |
 | Per-DAW "Open in <DAW>" surface | **PASS (2026-09-30)** | thin adapters added for FL Studio, Logic, Pro Tools and Reaper — all five target DAWs now report `sameDawOpen: true`, and `daw:getCapabilities` resolves the installed application bundle by name prefix (versions/editions vary: "FL Studio 2024.app", "Ableton Live 12 Suite.app") |
-| Cross-DAW portable handoff | **MISSING** | `crossDawReconstruct: false` and `fidelityReport: false` on **every** adapter; no `project.dawproject`, `wavi/session.json` or `wavi/fidelity.json` is produced or consumed anywhere in `electron/` or `src/` — those names appear only in `docs/` |
+| Cross-DAW portable handoff | **PARTIAL (2026-09-30)** | `electron/crossDaw.ts` plans the handoff and produces a real `wavi.fidelity/1` report: source DAW, target DAW, tier (native / structured / stems / render / none), what is provided, and an explicit loss list. `fidelityReport` is now honestly true. **`crossDawReconstruct` stays false** — nothing converts a session, and conflating a report with a conversion is the overclaim this design exists to prevent. Notably, **no target DAW natively imports DAWproject** (Bitwig/Studio One do; none of Wavi's five), so the realistic tier is stems + MIDI + tempo, and the planner says so rather than pretending otherwise |
 
 ### Return
 | Step | State | Evidence |
@@ -75,8 +75,8 @@ Everything below is from source, tests and live endpoint probes — not from pri
 | Project Link receive | PASS | — | desktop/server | — |
 | Desktop import (adopt locally) | **FIXED this branch** | was the top blocker | desktop | UI affordance (below) |
 | Same-DAW launch | **PASS** | — | desktop | — |
-| Cross-DAW handoff | **MISSING** | no portable package exists in code | desktop | build the package per DR-015 (reuse DAWproject; do **not** invent a second session schema) |
-| Return child version | **UNBLOCKED this branch** | adoption was the dependency | desktop | surface "Publish changes back" in the UI |
+| Cross-DAW handoff | **PARTIAL** | planner + fidelity report exist; no package is *written* yet | desktop | emit `wavi/fidelity.json` into the restored folder, and surface the tier in the restore UI |
+| Return child version | **PASS** | — | desktop | — (affordance surfaced in Project Detail, gated on contribute rights + synced work) |
 
 ### Not a blocker, but wrong
 `electron-builder.staging.json` points at `wavi-staging-kvbq16xd5-…`, where `resolve-project-link`

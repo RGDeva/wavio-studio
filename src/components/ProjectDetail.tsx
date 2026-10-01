@@ -21,6 +21,7 @@ import { Button } from './ui/Button';
 import { Tabs } from './ui/Tabs';
 import { CollaboratorsPanel, CollaboratorActivityFeed, ContributionsList } from './CollaboratorsPanel';
 import { lineageCaption } from '../lib/collaborationView';
+import { resolveReturnAffordance, type AdoptionInfo } from '../lib/returnAffordance';
 import type { SafeContribution } from '../lib/api';
 import { Progress } from './ui/Progress';
 import { SectionHeader } from './ui/SectionHeader';
@@ -212,6 +213,43 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
     } finally { setPrioritizing(false); }
   };
 
+  // ── Return step: publish this checkout's changes back as a CHILD version ──
+  // Only meaningful for a project adopted from a Project Link. For an ordinary
+  // local project the affordance is hidden entirely rather than disabled.
+  const [adoption, setAdoption] = useState<(AdoptionInfo & { cloudId?: string | null; syncedFileCount?: number }) | null>(null);
+  const [publishingBack, setPublishingBack] = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    api.projects.getAdoptionInfo(project.id)
+      .then((info) => { if (live) setAdoption(info ?? null); })
+      .catch(() => { if (live) setAdoption(null); });
+    return () => { live = false; };
+  }, [project.id]);
+
+  const returnAffordance = useMemo(() => resolveReturnAffordance(adoption, {
+    cloudId: adoption?.cloudId ?? project.cloud_id ?? null,
+    syncedFileCount: adoption?.syncedFileCount ?? 0,
+  }), [adoption, project.cloud_id]);
+
+  const handlePublishBack = async () => {
+    if (!returnAffordance.show || !returnAffordance.enabled) return;
+    setPublishingBack(true);
+    setStatusMsg(null);
+    try {
+      const r = await api.multiplayer.publishContribution({
+        localProjectId: project.id,
+        parentVersionId: returnAffordance.parentVersionId,
+      });
+      if (!r?.ok) setStatusMsg(`Could not publish changes: ${r?.error ?? r?.reason ?? 'unknown'}`);
+      else if (r.alreadySubmitted) setStatusMsg('These changes were already sent — the original is unchanged.');
+      else setStatusMsg('Changes sent back as a new version. The version you received is unchanged.');
+    } catch (e: any) {
+      setStatusMsg(`Could not publish changes: ${e?.message ?? 'unknown'}`);
+    }
+    setPublishingBack(false);
+  };
+
   const handlePublish = async () => {
     setPublishing(true);
     setStatusMsg(null);
@@ -344,6 +382,17 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
               title={cloudReady ? 'Create an immutable version of this project' : 'Available once the project is synced'}>
               {!publishing && <RefreshCw />} Publish Version
             </Button>
+            {returnAffordance.show && (
+              <Button
+                variant="secondary"
+                onClick={handlePublishBack}
+                loading={publishingBack}
+                disabled={!returnAffordance.enabled}
+                title={returnAffordance.blockedReason ?? 'Send your changes back as a new version of the original project'}
+              >
+                {!publishingBack && <ArrowRight />} {returnAffordance.label}
+              </Button>
+            )}
             <Button variant="secondary" onClick={handleShareProject} loading={sharingProject} disabled={!cloudReady}
               title={cloudReady ? 'Share the full project (restore + open in DAW)' : 'Available once the project is synced'}>
               {!sharingProject && <Package />} Share Project

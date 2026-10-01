@@ -60,6 +60,8 @@ export default defineConfig({
       'electron/coreWorkflow.integration.test.ts',
       'electron/restoreAdoption.test.ts',
       'electron/adapters/daws.test.ts',
+      'electron/crossDaw.test.ts',
+      'src/lib/returnAffordance.test.ts',
     ],
     environment: 'node',
   },

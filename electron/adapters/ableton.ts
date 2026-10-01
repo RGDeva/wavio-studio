@@ -222,7 +222,7 @@ export const abletonAdapter: DawAdapter = {
   // / fidelity reporting are not implemented yet — reported honestly as false.
   capabilities: () => ({
     detect: true, packageNative: true, restore: true, sameDawOpen: true,
-    crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
+    crossDawReconstruct: false, scanPlugins: false, fidelityReport: true,
   }),
   locateProjectFile,
   // "Ableton Live 12 Suite.app", "Ableton Live 12 Beta.app", …

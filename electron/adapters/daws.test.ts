@@ -33,12 +33,20 @@ describe('all five target DAWs are adapted', () => {
     expect(adapter.capabilities().sameDawOpen).toBe(true);
   });
 
-  it.each(TARGETS)('$id does NOT claim cross-DAW, plugin scan or fidelity', ({ adapter }) => {
+  it.each(TARGETS)('$id does NOT claim cross-DAW reconstruction or plugin scanning', ({ adapter }) => {
     // Honesty rule: never report a capability that is not implemented.
+    // Nothing reconstructs a session and nothing scans plugins.
     const c = adapter.capabilities();
     expect(c.crossDawReconstruct).toBe(false);
     expect(c.scanPlugins).toBe(false);
-    expect(c.fidelityReport).toBe(false);
+  });
+
+  it.each(TARGETS)('$id reports fidelity, which is implemented, without implying conversion', ({ adapter }) => {
+    // crossDaw.ts produces a real tier + provided + losses report. Reporting
+    // what a recipient gets is NOT reconstruction — the pair of assertions
+    // here is what keeps those two distinct.
+    expect(adapter.capabilities().fidelityReport).toBe(true);
+    expect(adapter.capabilities().crossDawReconstruct).toBe(false);
   });
 
   it('Logic does not claim native packaging — .logicx is a package directory', () => {

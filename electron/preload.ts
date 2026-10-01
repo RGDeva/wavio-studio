@@ -48,6 +48,7 @@ contextBridge.exposeInMainWorld('waviAPI', {
   projects: {
     getAll: () => ipcRenderer.invoke('projects:getAll'),
     getById: (id: string) => ipcRenderer.invoke('projects:getById', id),
+    getAdoptionInfo: (id: string) => ipcRenderer.invoke('projects:getAdoptionInfo', id),
     getDemoStatus: (projectId: string) => ipcRenderer.invoke('projects:getDemoStatus', projectId),
   },
 
@@ -55,6 +56,13 @@ contextBridge.exposeInMainWorld('waviAPI', {
   daw: {
     getCapabilities: (opts: { dawType?: string | null; filePath?: string | null }) =>
       ipcRenderer.invoke('daw:getCapabilities', opts),
+    /** What the recipient actually gets when opening this in a different DAW. */
+    planHandoff: (opts: {
+      sourceDawType?: string | null;
+      targetDawType?: string | null;
+      assets?: Array<{ relativePath: string; role: string; fileSize?: number }>;
+      bpm?: number | null;
+    }) => ipcRenderer.invoke('daw:planHandoff', opts),
   },
 
   // Files
