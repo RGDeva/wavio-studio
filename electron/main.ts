@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -43,6 +43,7 @@ import type { AssistantLinkFailure } from './copilotTools/localTools';
 import { isSafeRestorePath, validateArchiveEntries } from './restoreArchive';
 import { planRestoreAdoption } from './restoreAdoption';
 import { resolveApplication } from './adapters/index';
+import { planCrossDawHandoff, buildFidelityReport } from './crossDaw';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -2786,6 +2787,29 @@ ipcMain.handle('folders:fileCounts', () => {
 
 // Projects
 ipcMain.handle('projects:getAll', () => getProjects());
+/**
+ * Is this local project an adopted checkout, and may its owner publish back?
+ *
+ * The renderer needs this to decide whether to offer the return action. It is
+ * derived, not stored on the project: adoption links the two tables by path.
+ */
+ipcMain.handle('projects:getAdoptionInfo', (_e, localProjectId: string) => {
+  const project = getProjectById(localProjectId) as any;
+  if (!project?.file_path) return { isAdopted: false, parentVersionId: null, collaboratorPermission: null };
+  const checkout = getRestoredProjectByLocalPath(project.file_path);
+  if (!checkout) return { isAdopted: false, parentVersionId: null, collaboratorPermission: null };
+  const files = getFilesByProject(localProjectId) as any[];
+  return {
+    isAdopted: true,
+    // The version received is the parent of anything published back.
+    parentVersionId: checkout.source_version_id ?? null,
+    collaboratorPermission: checkout.collaborator_permission ?? null,
+    projectName: checkout.project_name ?? null,
+    cloudId: project.cloud_id ?? null,
+    syncedFileCount: files.filter((f) => f.sync_status === 'synced' && f.cloud_asset_id).length,
+  };
+});
+
 ipcMain.handle('projects:getById', (_e, id: string) => getProjectById(id));
 ipcMain.handle('projects:getDemoStatus', (_e, projectId: string) => {
   const db = require('./db').getDb() as import('better-sqlite3').Database;
@@ -2871,6 +2895,31 @@ ipcMain.handle('daw:getCapabilities', (_e, opts: { dawType?: string | null; file
   // a recipient, and not an error.
   const application = resolveApplication(adapter.applicationHints, (dir) => fs.readdirSync(dir));
   return { id: adapter.id, displayName: adapter.displayName, capabilities: adapter.capabilities(), application };
+});
+
+/**
+ * Cross-DAW handoff plan for a restored/received project.
+ *
+ * Answers "what do I actually get if I open this in a different DAW?" from the
+ * assets that travelled with the version. Returns a tier plus an explicit loss
+ * list — it never claims a session was converted (DR-015: DAWproject is the
+ * structured interchange format; we consume it, we do not replace it).
+ */
+ipcMain.handle('daw:planHandoff', (_e, opts: {
+  sourceDawType?: string | null;
+  targetDawType?: string | null;
+  assets?: Array<{ relativePath: string; role: string; fileSize?: number }>;
+  bpm?: number | null;
+}) => {
+  const source = getAdapterForProject(opts?.sourceDawType ?? null, null);
+  const target = getAdapterForProject(opts?.targetDawType ?? null, null);
+  const plan = planCrossDawHandoff({
+    sourceDawId: source.id === 'generic' ? (opts?.sourceDawType ?? null) : source.id,
+    targetDawId: target.id === 'generic' ? (opts?.targetDawType ?? null) : target.id,
+    assets: opts?.assets ?? [],
+    bpm: opts?.bpm ?? null,
+  });
+  return { plan, report: buildFidelityReport(plan, new Date().toISOString()) };
 });
 
 // Files

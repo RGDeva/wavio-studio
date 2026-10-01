@@ -225,10 +225,15 @@ ${filler}    </Tracks>
 });
 
 describe('capability reporting', () => {
-  it('Ableton reports native detect/package/restore/same-DAW open; no cross-DAW/scan/fidelity yet', () => {
+  it('Ableton reports detect/package/restore/same-DAW open and fidelity; no cross-DAW or plugin scan', () => {
+    // fidelityReport flipped to true when electron/crossDaw.ts landed: we now
+    // genuinely produce a tier + provided + losses report for a handoff.
+    // crossDawReconstruct stays false — reporting what a recipient gets is not
+    // the same as reconstructing a session, and conflating them would be the
+    // exact overclaim this suite exists to prevent.
     expect(abletonAdapter.capabilities()).toEqual({
       detect: true, packageNative: true, restore: true, sameDawOpen: true,
-      crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
+      crossDawReconstruct: false, scanPlugins: false, fidelityReport: true,
     });
   });
   it('generic DAW reports restore only', () => {
@@ -240,10 +245,13 @@ describe('capability reporting', () => {
   it('capabilities are honest booleans (no true for unimplemented features)', () => {
     for (const a of [abletonAdapter, genericAdapter]) {
       const c = a.capabilities();
+      // Still unimplemented: nothing reconstructs a session, nothing scans plugins.
       expect(c.crossDawReconstruct).toBe(false);
       expect(c.scanPlugins).toBe(false);
-      expect(c.fidelityReport).toBe(false);
     }
+    // The generic adapter cannot identify a source DAW, so it reports no
+    // fidelity even though the planner itself exists.
+    expect(genericAdapter.capabilities().fidelityReport).toBe(false);
   });
 });
 

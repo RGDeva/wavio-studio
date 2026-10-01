@@ -60,7 +60,10 @@ function thinAdapter(spec: {
       sameDawOpen: true,
       crossDawReconstruct: false,
       scanPlugins: false,
-      fidelityReport: false,
+      // We now produce a real fidelity report for a cross-DAW handoff
+      // (electron/crossDaw.ts): tier, what is provided, and what is lost.
+      // This is a report, NOT reconstruction — crossDawReconstruct stays false.
+      fidelityReport: true,
     }),
     locateProjectFile,
     applicationHints: spec.applicationHints,
