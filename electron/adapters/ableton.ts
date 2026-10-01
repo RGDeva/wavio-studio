@@ -225,4 +225,6 @@ export const abletonAdapter: DawAdapter = {
     crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
   }),
   locateProjectFile,
+  // "Ableton Live 12 Suite.app", "Ableton Live 12 Beta.app", …
+  applicationHints: [{ directory: '/Applications', namePrefix: 'Ableton Live' }],
 };

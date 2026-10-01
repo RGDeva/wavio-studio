@@ -23,8 +23,10 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { existsSync, mkdirSync, writeFileSync, mkdtempSync, rmSync } from 'fs';
-import { join, tmpdir } from 'path';
+import { join, sep } from 'path';
+import { tmpdir } from 'os';
 import { shouldSkipDirTest, AUDIO_EXTS } from './discovery.test.helpers';
+import { PACKAGE_PROJECT_EXTS } from './discovery';
 
 // ── ARM64 Node-compatible binary ──────────────────────────────────────────────
 import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
@@ -364,5 +366,34 @@ maybeDescribe('Performance baseline (§7 — in-process)', () => {
     const start = Date.now();
     db.prepare('SELECT COUNT(*) as c FROM files').get();
     expect(Date.now() - start).toBeLessThan(10);
+  });
+});
+
+describe("DAW package projects (.logicx / .band) are one project, not a folder to walk", () => {
+  let root: string;
+  beforeEach(() => { root = mkdtempSync(join(tmpdir(), "wavi-logic-")); });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("records the package itself and never indexes its internals", async () => {
+    // Regression: .logicx was absent from AUDIO_EXTS so the project was never
+    // found, and absent from the skip list so the walk recursed INSIDE it —
+    // indexing Song.logicx/Media/take1.wav as if it were loose user audio.
+    const proj = join(root, "Song B.logicx");
+    mkdirSync(join(proj, "Media"), { recursive: true });
+    writeFileSync(join(proj, "Media", "take1.wav"), "x");
+    writeFileSync(join(root, "vocal.wav"), "x");
+
+    const { discoverAudioFiles } = await import("./discovery");
+    const { paths } = await discoverAudioFiles({ roots: [root], maxDepth: 6 });
+
+    expect(paths).toContain(proj);
+    expect(paths.some((f) => f.includes(`Song B.logicx${sep}Media`))).toBe(false);
+    expect(paths).toContain(join(root, "vocal.wav"));
+    expect(paths).toHaveLength(2);
+  });
+
+  it("treats a GarageBand .band package the same way", () => {
+    expect(PACKAGE_PROJECT_EXTS.has(".band")).toBe(true);
+    expect(PACKAGE_PROJECT_EXTS.has(".logicx")).toBe(true);
   });
 });

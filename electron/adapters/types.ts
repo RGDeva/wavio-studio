@@ -12,6 +12,8 @@
  * fs/path/zlib/crypto) so vitest can exercise them directly.
  */
 
+import type { ApplicationHint } from './applications';
+
 export interface ManifestEntry {
   relativePath: string;
   fileName: string;
@@ -80,4 +82,13 @@ export interface DawAdapter {
    * set the flow used inline.
    */
   locateProjectFile(restoredDir: string): string | null;
+
+  /**
+   * Where this DAW's application is typically installed, as directory +
+   * name-prefix hints rather than absolute paths: installed bundles carry
+   * versions and editions ("Ableton Live 12 Suite.app", "FL Studio 2024.app"),
+   * so an exact path would match nothing. Resolved by resolveApplication().
+   * Empty for the generic adapter, which has no single application.
+   */
+  applicationHints: ApplicationHint[];
 }

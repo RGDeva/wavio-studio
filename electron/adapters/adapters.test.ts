@@ -49,17 +49,34 @@ describe('registry', () => {
     expect(getAdapterForFile('/x/Song.ALS').id).toBe('ableton');
   });
   it('falls back to the generic adapter for unadapted DAWs', () => {
-    expect(getAdapterForFile('/x/beat.flp').id).toBe('generic');
+    // .flp used to stand in for "unadapted" here; FL Studio is adapted now, so
+    // this needs a DAW that genuinely has no adapter (Cubase / Audition) or
+    // the assertion would stop testing the fallback at all.
+    expect(getAdapterForFile('/x/song.cpr').id).toBe('generic');
+    expect(getAdapterForFile('/x/song.sesx').id).toBe('generic');
     expect(getAdapterForFile(null).id).toBe('generic');
     expect(getAdapterById('nope').id).toBe('generic');
   });
   it('resolves by stored daw_type before path', () => {
     expect(getAdapterForProject('ableton', null).id).toBe('ableton');
     expect(getAdapterForProject('Ableton Live', '/x/whatever.txt').id).toBe('ableton');
-    expect(getAdapterForProject('fl-studio', '/x/beat.flp').id).toBe('generic');
+    // daw_type wins over the path: a Reaper type with an Ableton path still
+    // resolves to Reaper.
+    expect(getAdapterForProject('reaper', '/x/Song.als').id).toBe('reaper');
+    // An unadapted daw_type falls through to the path, then to generic.
+    expect(getAdapterForProject('cubase', '/x/song.cpr').id).toBe('generic');
   });
-  it('discovery extension set keeps the exact pre-extraction membership', () => {
-    const expected = ['.flp', '.als', '.ptx', '.ptf', '.rpp', '.logic', '.band', '.npr', '.sesx', '.song', '.reason', '.bwproject', '.cpr'];
+  it('discovery extension set covers every adapted DAW plus the indexed-only ones', () => {
+    // Deliberately changed, not drift: .logicx was missing entirely, so Logic
+    // projects were never counted as project files (discovery recorded the
+    // package's internals instead) and a Logic folder could be misread as a
+    // sample library. The adapted extensions now come from the registry.
+    const expected = [
+      // adapted
+      '.als', '.flp', '.ptx', '.ptf', '.rpp', '.logicx', '.logic',
+      // indexed but not adapted
+      '.band', '.npr', '.sesx', '.song', '.reason', '.bwproject', '.cpr',
+    ];
     expect(new Set(KNOWN_DAW_PROJECT_EXTENSIONS)).toEqual(new Set(expected));
   });
 });
