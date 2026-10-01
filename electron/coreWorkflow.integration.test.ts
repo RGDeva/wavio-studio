@@ -25,6 +25,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { NATIVE_SQLITE_PATH, nativeSqliteAvailable } from './test-helpers/native-sqlite';
+import { planRestoreAdoption } from './restoreAdoption';
 
 const maybeDescribe = nativeSqliteAvailable ? describe : describe.skip;
 
@@ -164,5 +165,94 @@ maybeDescribe('core desktop workflow — fresh install, one continuous database'
     expect(() => db.prepare(`INSERT INTO files (id, file_path, file_name, file_type, created_at, modified_at)
       VALUES ('f10','/Music/loose.wav','loose.wav','wav',@t,@t)`).run({ t: now })).not.toThrow();
     expect(db.prepare("SELECT project_id FROM files WHERE id='f10'").get().project_id).toBeNull();
+  });
+});
+
+maybeDescribe('receive → adopt → return as a child version', () => {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const Database = require(NATIVE_SQLITE_PATH);
+  let db: any;
+  const now = '2026-09-30T12:00:00.000Z';
+  const DIR = '/Users/x/Music/Restored/Song A';
+
+  beforeEach(() => { db = freshDb(Database); });
+  afterEach(() => db?.close());
+
+  /** Apply an adoption plan the way restore:start does. */
+  function adopt(permission: string) {
+    let n = 0;
+    const plan = planRestoreAdoption({
+      restoreId: 'r1', projectName: 'Song A',
+      dawProjectPath: `${DIR}/Song A.als`, projectDir: DIR, dawType: 'ableton',
+      sourceProjectId: 'cloud-proj-1', sourceVersionId: 'cloud-ver-7',
+      collaboratorPermission: permission, projectFileSize: 334317,
+      restoredAssets: [
+        { absolutePath: `${DIR}/Song A.als`, fileSize: 334317, sha256: 'a'.repeat(64), role: 'project' },
+        { absolutePath: `${DIR}/Samples/kick.wav`, fileSize: 2048, sha256: 'b'.repeat(64), role: 'audio' },
+      ],
+      now, newId: () => `adopt-${++n}`,
+    });
+    if (!plan.ok) throw new Error(plan.reason);
+
+    db.prepare(`INSERT INTO projects (id, project_name, file_path, daw_type, file_size, created_at, modified_at)
+      VALUES (@id, @project_name, @file_path, @daw_type, @file_size, @created_at, @modified_at)`).run(plan.project);
+    const ins = db.prepare(`INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, role, created_at, modified_at)
+      VALUES (@id, @project_id, @file_path, @file_name, @file_type, @file_size, @checksum, @role, @created_at, @modified_at)`);
+    for (const f of plan.files) ins.run({ checksum: null, role: null, ...f });
+    db.prepare('UPDATE projects SET sync_status = ?, cloud_id = ?, cloud_version_id = ? WHERE id = ?')
+      .run('pending', plan.cloud.cloudProjectId, plan.cloud.parentVersionId, plan.project.id);
+    return plan;
+  }
+
+  it('an adopted checkout becomes a real local project with its lineage intact', () => {
+    const plan = adopt('comment');
+    const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(plan.project.id);
+    // These three are exactly what buildPublishManifestBody reads to decide
+    // WHICH server project a contribution belongs to, and what it descends from.
+    expect(row.cloud_id).toBe('cloud-proj-1');
+    expect(row.cloud_version_id).toBe('cloud-ver-7');
+    expect(row.file_path).toBe(`${DIR}/Song A.als`);
+    expect(db.prepare('SELECT COUNT(*) c FROM files WHERE project_id = ?').get(plan.project.id).c).toBe(2);
+  });
+
+  it('satisfies buildPublishManifestBody preconditions once the edits are synced', () => {
+    // The manifest builder refuses a project that is not in the DB, has no
+    // cloud_id, or has no file that is synced with a cloud_asset_id. Before
+    // adoption existed a restored checkout failed all three.
+    const plan = adopt('comment');
+    const id = plan.project.id;
+
+    const syncedCount = () => db.prepare(
+      "SELECT COUNT(*) c FROM files WHERE project_id = ? AND sync_status = 'synced' AND cloud_asset_id IS NOT NULL",
+    ).get(id).c;
+
+    expect(syncedCount()).toBe(0); // the collaborator's edits are not uploaded yet
+
+    // …normal sync pipeline uploads them…
+    db.prepare("UPDATE files SET sync_status='synced', cloud_asset_id='asset_new' WHERE project_id = ?").run(id);
+
+    const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id);
+    expect(project).toBeTruthy();
+    expect(project.cloud_id).toBeTruthy();
+    expect(syncedCount()).toBeGreaterThan(0);
+  });
+
+  it('records the child version as a descendant, leaving the received version untouched', () => {
+    const plan = adopt('comment');
+    // The received version is immutable: returning work adds a row, never
+    // rewrites cloud-ver-7.
+    db.prepare(`INSERT INTO versions (id, project_id, file_path, file_size, checksum, created_at)
+      VALUES ('child-1', @pid, @path, 400000, @sum, @t)`)
+      .run({ pid: plan.project.id, path: `${DIR}/Song A.als`, sum: 'c'.repeat(64), t: now });
+
+    const parentStill = db.prepare('SELECT cloud_version_id FROM projects WHERE id = ?').get(plan.project.id);
+    expect(parentStill.cloud_version_id).toBe('cloud-ver-7');
+    expect(db.prepare("SELECT COUNT(*) c FROM versions WHERE project_id = ?").get(plan.project.id).c).toBe(1);
+  });
+
+  it('a view-only checkout is adopted but cannot publish back', () => {
+    const plan = adopt('view');
+    expect(plan.canPublishChildVersion).toBe(false);
+    expect(db.prepare('SELECT COUNT(*) c FROM projects WHERE id = ?').get(plan.project.id).c).toBe(1);
   });
 });

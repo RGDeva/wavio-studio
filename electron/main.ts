@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -41,6 +41,7 @@ import {
 } from './multiplayerRefs';
 import type { AssistantLinkFailure } from './copilotTools/localTools';
 import { isSafeRestorePath, validateArchiveEntries } from './restoreArchive';
+import { planRestoreAdoption } from './restoreAdoption';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -2556,6 +2557,62 @@ ipcMain.handle('restore:start', async (_e, opts: {
 
   logActivity({ id: crypto.randomUUID(), type: 'restore', message: `Restored project "${projectName}" from Project Link` });
 
+  // ── Adopt the checkout as a real local project ──────────────────────────────
+  // Without this the restored folder is only a `restored_projects` row: change
+  // detection never sees the collaborator's edits, and publishing a child
+  // version is impossible because buildPublishManifestBody needs a `projects`
+  // row with cloud_id plus `files` rows. Lineage is carried across so a later
+  // publish is a CHILD of the version received, never an overwrite of it.
+  let adoptedProjectId: string | null = null;
+  let canPublishChildVersion = false;
+  try {
+    const projectStat = fs.existsSync(dawProjectPath) ? fs.statSync(dawProjectPath) : null;
+    const plan = planRestoreAdoption({
+      restoreId: restored.id,
+      projectName,
+      dawProjectPath,
+      projectDir: finalDir,
+      dawType: dawType ?? null,
+      sourceProjectId: projectId,
+      sourceVersionId: versionId,
+      collaboratorPermission: collaboratorMode ?? 'view',
+      projectFileSize: projectStat?.size ?? 0,
+      restoredAssets: extractedFiles.map((f) => ({
+        absolutePath: path.join(finalDir, f.relativePath),
+        fileSize: (() => { try { return fs.statSync(path.join(finalDir, f.relativePath)).size; } catch { return 0; } })(),
+        sha256: f.sha256 || null,
+        role: files.find((m) => (m.relative_path ?? m.file_name).replace(/^\//, '') === f.relativePath)?.role ?? null,
+      })),
+      now: new Date().toISOString(),
+      newId: () => crypto.randomUUID(),
+    });
+
+    if (!plan.ok) {
+      // Adoption is additive: a restore that cannot be adopted is still a
+      // successful restore, so surface it rather than failing the whole flow.
+      mainLog(`[restore] not adopted as a local project: ${plan.reason}`);
+    } else {
+      upsertProject(plan.project);
+      for (const f of plan.files) upsertFile(f);
+      // Content matches the server version as of now, but the collaborator's
+      // own edits are not uploaded yet — so the project stays 'pending' for the
+      // normal sync pipeline while carrying the canonical ids a child publish
+      // needs.
+      updateProjectSyncStatus(plan.project.id, 'pending', plan.cloud.cloudProjectId, plan.cloud.parentVersionId);
+
+      const watched = store.get('watchedFolders', []) as string[];
+      if (!watched.includes(plan.watchFolder)) {
+        store.set('watchedFolders', [...watched, plan.watchFolder]);
+      }
+
+      adoptedProjectId = plan.project.id;
+      canPublishChildVersion = plan.canPublishChildVersion;
+      mainLog(`[restore] adopted as local project ${plan.project.id} (${plan.files.length} files, ${plan.skipped.length} skipped, canPublishChildVersion=${plan.canPublishChildVersion})`);
+    }
+  } catch (e: any) {
+    mainLog(`[restore] adoption failed (restore itself succeeded): ${e?.message}`);
+  }
+
   sendRestoreProgress('restore_complete', { dawProjectPath, restoreId: restored.id });
 
   return {
@@ -2564,6 +2621,8 @@ ipcMain.handle('restore:start', async (_e, opts: {
     dawProjectPath,
     projectDir: finalDir,
     dawType,
+    adoptedProjectId,
+    canPublishChildVersion,
   };
 });
 
