@@ -1,6 +1,7 @@
 import * as path from 'path';
 import type { DawAdapter, ManifestEntry } from './types';
 import { abletonAdapter } from './ableton';
+import { THIN_DAW_ADAPTERS, flStudioAdapter, logicAdapter, proToolsAdapter, reaperAdapter } from './daws';
 import { safeRelativePath, classifyFileRole, findPreviewCandidate, locateProjectFile } from './common';
 
 /**
@@ -27,9 +28,12 @@ export const genericAdapter: DawAdapter = {
     crossDawReconstruct: false, scanPlugins: false, fidelityReport: false,
   }),
   locateProjectFile,
+  // No single application — the generic adapter covers DAWs we index but do
+  // not know how to launch.
+  applicationHints: [],
 };
 
-const ADAPTERS: DawAdapter[] = [abletonAdapter];
+const ADAPTERS: DawAdapter[] = [abletonAdapter, ...THIN_DAW_ADAPTERS];
 
 export function getAdapterById(id: string): DawAdapter {
   return ADAPTERS.find((a) => a.id === id) ?? genericAdapter;
@@ -42,8 +46,24 @@ export function getAdapterForFile(filePath: string | null | undefined): DawAdapt
 }
 
 /** Resolve by the daw_type string stored on local projects, then by path. */
+/**
+ * daw_type strings reaching us come from several places (local detection, the
+ * watcher's display names, and server manifests), so match on both the adapter
+ * id and the display name rather than assuming one spelling.
+ */
+const DAW_TYPE_ALIASES: Record<string, DawAdapter> = {
+  'ableton': abletonAdapter, 'ableton live': abletonAdapter,
+  'fl-studio': flStudioAdapter, 'fl studio': flStudioAdapter, 'flstudio': flStudioAdapter,
+  'logic': logicAdapter, 'logic pro': logicAdapter, 'logicx': logicAdapter,
+  'pro-tools': proToolsAdapter, 'pro tools': proToolsAdapter, 'protools': proToolsAdapter,
+  'reaper': reaperAdapter,
+};
+
 export function getAdapterForProject(dawType: string | null | undefined, filePath: string | null | undefined): DawAdapter {
-  if (dawType === 'ableton' || dawType === 'Ableton Live') return abletonAdapter;
+  if (dawType) {
+    const hit = DAW_TYPE_ALIASES[dawType.trim().toLowerCase()];
+    if (hit) return hit;
+  }
   return getAdapterForFile(filePath);
 }
 
@@ -54,8 +74,10 @@ export function getAdapterForProject(dawType: string | null | undefined, filePat
  */
 export const KNOWN_DAW_PROJECT_EXTENSIONS: ReadonlySet<string> = new Set([
   ...ADAPTERS.flatMap((a) => a.projectExtensions),
-  '.flp', '.ptx', '.ptf', '.rpp', '.logic', '.band', '.npr', '.sesx', '.song', '.reason', '.bwproject', '.cpr',
+  '.flp', '.ptx', '.ptf', '.rpp', '.logic', '.logicx', '.band', '.npr', '.sesx', '.song', '.reason', '.bwproject', '.cpr',
 ]);
 
 export type { DawAdapter, ManifestEntry };
-export { abletonAdapter };
+export { abletonAdapter, flStudioAdapter, logicAdapter, proToolsAdapter, reaperAdapter };
+export { resolveApplication } from './applications';
+export type { ApplicationHint, ResolvedApplication } from './applications';

@@ -90,12 +90,24 @@ const SKIP_DIRS = new Set([
   'Kontakt', 'iLok', 'Waves Preferences',
 ]);
 
+/**
+ * DAW projects that are macOS package DIRECTORIES rather than single files.
+ *
+ * These must be recorded as one project and never descended into. Previously
+ * neither happened: `.logicx` was absent from AUDIO_EXTS so the project itself
+ * was never found, and it was absent from the bundle list below so the walk
+ * recursed inside it — indexing package internals (e.g.
+ * `Song.logicx/Media/take1.wav`) as if they were the user's loose audio.
+ */
+export const PACKAGE_PROJECT_EXTS: ReadonlySet<string> = new Set(['.logicx', '.band']);
+
 // Name patterns that indicate a directory should be skipped
 function shouldSkipDir(name: string, fullPath: string): boolean {
   if (name.startsWith('.')) return true;           // hidden
   if (SKIP_DIRS.has(name)) return true;            // exact match
   const ext = path.extname(name).toLowerCase();
-  // Skip macOS package bundles (except .logicx which we want to index)
+  // Skip macOS package bundles. DAW package projects are handled before this
+  // is reached — they are recorded as a project, not traversed.
   if (['.app', '.framework', '.bundle', '.xcodeproj', '.pkg'].includes(ext)) return true;
   // Skip Wavio's own release output wherever it lives
   if (name === 'release' && fullPath.includes('wavio')) return true;
@@ -256,6 +268,13 @@ export async function discoverAudioFiles(
       } catch { continue; }
 
       if (entry.isDirectory()) {
+        // A DAW package project IS the project — record it and do not descend,
+        // so its internals never leak into the library as loose audio.
+        if (PACKAGE_PROJECT_EXTS.has(path.extname(entry.name).toLowerCase())) {
+          scanned++;
+          foundPaths.push(fullPath);
+          continue;
+        }
         if (shouldSkipDir(entry.name, fullPath)) continue;
         if (inode && visitedInodes.has(inode)) continue;
         if (inode) visitedInodes.add(inode);

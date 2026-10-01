@@ -59,6 +59,7 @@ export default defineConfig({
       'src/lib/designSystem.test.ts',
       'electron/coreWorkflow.integration.test.ts',
       'electron/restoreAdoption.test.ts',
+      'electron/adapters/daws.test.ts',
     ],
     environment: 'node',
   },

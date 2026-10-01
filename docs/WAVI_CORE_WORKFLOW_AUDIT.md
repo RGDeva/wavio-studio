@@ -17,7 +17,7 @@ Everything below is from source, tests and live endpoint probes — not from pri
 | Step | State | Evidence |
 |---|---|---|
 | Watched folders (add/remove/exclude/rescan) | **PASS** | `folders:*` IPC (10 handlers), `watchedFolders` store |
-| Folder scan + DAW project detection | **PASS** | `discovery.ts`; driven over real Ableton trees — nested projects, spaces in names, correct grouping |
+| Folder scan + DAW project detection | **PASS** (Logic defect fixed 2026-09-30) | `discovery.ts`; driven over real Ableton trees. **`.logicx` was broken**: absent from `AUDIO_EXTS` so a Logic project was never found, and absent from the bundle skip list so the walk recursed INSIDE the package and indexed `Song.logicx/Media/take1.wav` as loose user audio. It was also missing from `KNOWN_DAW_PROJECT_EXTENSIONS`, so a Logic folder counted zero project files and could be misread as a sample library. Package projects are now recorded as one project and never descended into |
 | Sample-library guard before import | **PASS** | `classifyFolderForImport` — name + ratio heuristic, never count alone |
 | Project association + ambiguous review | **PASS** | `association:getPending/confirm/reject/undo`, `association_queue` |
 | Rename / move reconciliation, missing state | **PASS** | `files.local_status`, `reconciled_from`, `pending-resync.test.ts` |
@@ -49,7 +49,7 @@ Everything below is from source, tests and live endpoint probes — not from pri
 | Step | State | Evidence |
 |---|---|---|
 | Same-DAW open of restored project | **PARTIAL** | `RestoreWindow` calls `shell.openPath` (OS handler), which works for any registered extension. But `shell:openWithApp` — the configured-DAW path — requires `requireIndexed`, which restored files failed until adoption |
-| Per-DAW "Open in <DAW>" surface | **PARTIAL** | only Ableton reports `sameDawOpen: true`; FL/Logic/Pro Tools/Reaper fall to `genericAdapter` with `sameDawOpen: false`, so the compatibility UI honestly says unavailable even though `openPath` would work |
+| Per-DAW "Open in <DAW>" surface | **PASS (2026-09-30)** | thin adapters added for FL Studio, Logic, Pro Tools and Reaper — all five target DAWs now report `sameDawOpen: true`, and `daw:getCapabilities` resolves the installed application bundle by name prefix (versions/editions vary: "FL Studio 2024.app", "Ableton Live 12 Suite.app") |
 | Cross-DAW portable handoff | **MISSING** | `crossDawReconstruct: false` and `fidelityReport: false` on **every** adapter; no `project.dawproject`, `wavi/session.json` or `wavi/fidelity.json` is produced or consumed anywhere in `electron/` or `src/` — those names appear only in `docs/` |
 
 ### Return
@@ -74,7 +74,7 @@ Everything below is from source, tests and live endpoint probes — not from pri
 | Project Link create | PASS | fresh-install defect fixed | desktop | — |
 | Project Link receive | PASS | — | desktop/server | — |
 | Desktop import (adopt locally) | **FIXED this branch** | was the top blocker | desktop | UI affordance (below) |
-| Same-DAW launch | PARTIAL | only Ableton advertises `sameDawOpen` | desktop | thin adapters for FL/Logic/PT/Reaper: extension + app + launch + honest capabilities |
+| Same-DAW launch | **PASS** | — | desktop | — |
 | Cross-DAW handoff | **MISSING** | no portable package exists in code | desktop | build the package per DR-015 (reuse DAWproject; do **not** invent a second session schema) |
 | Return child version | **UNBLOCKED this branch** | adoption was the dependency | desktop | surface "Publish changes back" in the UI |
 

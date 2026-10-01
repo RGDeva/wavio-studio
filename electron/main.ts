@@ -42,6 +42,7 @@ import {
 import type { AssistantLinkFailure } from './copilotTools/localTools';
 import { isSafeRestorePath, validateArchiveEntries } from './restoreArchive';
 import { planRestoreAdoption } from './restoreAdoption';
+import { resolveApplication } from './adapters/index';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -2864,7 +2865,12 @@ ipcMain.handle('projects:getDemoStatus', (_e, projectId: string) => {
 // by the project file path.
 ipcMain.handle('daw:getCapabilities', (_e, opts: { dawType?: string | null; filePath?: string | null }) => {
   const adapter = getAdapterForProject(opts?.dawType ?? null, opts?.filePath ?? null);
-  return { id: adapter.id, displayName: adapter.displayName, capabilities: adapter.capabilities() };
+  // Resolve the installed application so the UI can offer a real "Open in
+  // <DAW>" instead of only reporting that same-DAW open is possible. Null
+  // simply means the DAW is not installed on this machine — a normal state for
+  // a recipient, and not an error.
+  const application = resolveApplication(adapter.applicationHints, (dir) => fs.readdirSync(dir));
+  return { id: adapter.id, displayName: adapter.displayName, capabilities: adapter.capabilities(), application };
 });
 
 // Files
