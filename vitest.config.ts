@@ -58,6 +58,7 @@ export default defineConfig({
       'src/lib/collaborationView.test.ts',
       'src/lib/designSystem.test.ts',
       'electron/coreWorkflow.integration.test.ts',
+      'electron/restoreAdoption.test.ts',
     ],
     environment: 'node',
   },
