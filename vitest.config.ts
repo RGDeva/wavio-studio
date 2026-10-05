@@ -70,6 +70,8 @@ export default defineConfig({
       'electron/copilotTools/brainTools.test.ts',
       'electron/brain/goldenPath.integration.test.ts',
       'electron/brain/scale.test.ts',
+      'electron/brain/liveRefresh.test.ts',
+      'electron/brain/liveRefresh.integration.test.ts',
     ],
     environment: 'node',
   },

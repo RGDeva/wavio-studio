@@ -241,3 +241,42 @@ reported missing → reconciled with no duplicate row.
 ordering is order-independent at scale (where ties actually surface), and deriving memory for
 a 5,000-file project never recomputes a hash. Thresholds are deliberately loose — they catch
 an accidental quadratic, not a busy machine.
+
+## 15. Live refresh — the brain stays current by itself (2026-10-05)
+
+Derived memory previously only existed when something asked for it: the watcher
+updated the index, but nothing recomputed what the index now *implied*, so remembered
+facts went stale until a manual rescan.
+
+`brain/liveRefresh.ts` closes the loop. The watcher's existing `onEvent` callback marks the
+touched project dirty; a coalescing timer recomputes `deriveProjectMemory` and writes only
+the facts whose values actually moved.
+
+**Hooked without touching `watcher.ts`.** The callback already carried `projectId`, so the
+watcher stays unaware the brain exists — one less coupling in a file that handles ingestion.
+
+Three properties make it safe to call on *every* file event:
+
+- **Coalescing.** A DAW save touches dozens of files; 40 events produce one recompute. The
+  integration test asserts no fact key is written more than once per burst.
+- **Only real changes are written.** `planFactWrite` no-ops an unchanged value, so a
+  recompute that finds nothing leaves no trace. That is what makes over-notifying safe.
+- **Failures never reach the watcher.** Every flush is isolated per project and the
+  `markDirty` call is wrapped — refreshing memory is strictly secondary to indexing a file.
+
+Fairness is explicit: dirty projects are processed oldest-first so a quiet project cannot be
+perpetually overtaken, the interval floor is **per project** so one long export cannot starve
+the rest, and `maxPerBatch` caps a single flush. Deferred projects stay queued and the timer
+re-arms rather than stranding them.
+
+Manual Rescan is kept for recovery and **bypasses the throttle** via `forceRefresh` — a user
+clicking Rescan is asking explicitly, and making them wait out a debounce they cannot see
+would look broken.
+
+Everything the refresher writes is attributed `kind:'derived', origin:'index',
+producer:'watcher'` — asserted in the integration test, because a derived fact may only
+originate from the index. That is what stops a model's opinion being laundered into ground
+truth.
+
+Timing is driven by an injected scheduler, so the coalescing behaviour is tested instantly
+and deterministically rather than by waiting on real timers.
