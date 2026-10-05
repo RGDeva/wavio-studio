@@ -148,3 +148,96 @@ pattern.
   mixed a refactor into a new subsystem.
 - Nothing here ran inside Electron (ENV-1). The pure modules and the service are proven
   headlessly; the IPC wiring is compile-checked and reviewed, not executed.
+
+---
+
+## 8. Capability audit (2026-10-04)
+
+| Capability | Existing implementation | State | Gap closed in this pass |
+|---|---|---|---|
+| Project discovery | `discovery.ts` + `watcher.ts` | **PASS** | — (reused) |
+| File discovery | `discoverAudioFiles` | **PASS** | — (reused) |
+| Project association | `projectAssociation/` + review queue | **PASS** | — (reused) |
+| File classification | `adapters/common.classifyFileRole`, `fileClassifier.ts` | **PASS** | — (reused) |
+| Version detection | `createVersion`, `versionExistsByChecksum` | **PASS** | — (reused) |
+| Duplicate detection | checksum + path uniqueness, unique index on `(project_id, checksum)` | **PASS** | — (reused) |
+| Activity history | `activity_log` + `getActivityLog(limit)` | **PARTIAL** | **time-ranged / per-project / changed-since queries added** — a LIMIT-based log cannot answer "what changed yesterday?" without silently lying when the window is busier than the limit |
+| Text search | `searchFiles()`: 3-column `LIKE` ordered by mtime | **WEAK** | **replaced** by ranked, explainable, totally-ordered retrieval |
+| Recent projects | `getProjects()` ordered by `modified_at` | **PARTIAL** | **windowed** `getRecentProjects(since)` |
+| Recent files | `getAllFiles(limit, offset)` | **PARTIAL** | **windowed** `getRecentFiles(since)` |
+| Project context | `copilot.ts` single-project `ProjectContext` | **PARTIAL** | **bounded, attributed `wavi.context/1` pack** |
+| Assistant retrieval | 14 tools, **none reading the brain** | **MISSING** | **6 read-only brain tools wired** |
+| Semantic search | none | **ABSENT** | deliberately deferred (see §3) |
+| Persistent memory | `memory:*` on electron-store JSON | **WEAK** | **`project_facts`**: scoped, attributed, append-only |
+
+No second index was created. `projects` / `files` / `versions` / `activity_log` are extended,
+not duplicated. Two columns were added to `files` (`discovered_at`, `last_seen_at`) because
+`created_at`/`modified_at` are the FILE's own timestamps and say nothing about what Wavi
+knows — "indexed since" and "missing since" were previously unanswerable.
+
+## 9. Episodic memory
+
+`getActivityInRange`, `getActivityForProject`, `getFilesChangedSinceVersion`, plus
+`brain/timeRange.ts`, which resolves "yesterday", "this week", "last month", "last 7 days"
+against an **injected** now. Weeks start Monday: asked on a Sunday night, "this week" must
+mean the week just worked — a Sunday-start week would answer with an almost-empty window.
+
+An unrecognised range returns `null` rather than defaulting, so the assistant says "I don't
+know that range" instead of confidently answering a different question.
+
+## 10. Derived project memory
+
+`brain/derive.ts` recomputes what the index already implies, keeping **facts** and
+**inferences** in separate buckets all the way out to the tool result:
+
+- **Facts** — counts, latest version, last change, `changed-since-publish` (both timestamps
+  belong to the index, so it is not a guess).
+- **Inferences** — `likely-master`, `has-stem-set`, each carrying its evidence and a
+  strength. Nothing in a filesystem marks a file as the master; returning that as a fact
+  would let a confident wrong guess propagate downstream.
+
+Output is byte-stable for the same rows in any order — an unstable recompute would look like
+a change on every pass and flood the append-only store.
+
+## 11. Assistant integration
+
+Six read-only, offline tools in `copilotTools/brainTools.ts`: `search_music_library`,
+`find_files`, `recent_activity`, `recent_projects`, `project_memory`,
+`changed_since_version`.
+
+The direction of the arrow is the point: **the assistant asks, the brain answers.** The model
+never scans the filesystem, never computes a time window, and never decides what is true.
+Tools are omitted entirely when no brain is supplied rather than registered as stubs — a tool
+the model can see is a tool it will try.
+
+No mutation was added; delete/move/rename/publish/share keep their existing approval flows.
+
+## 12. Local-model boundary
+
+`brain/llmProvider.ts` defines the seam and ships `NullProvider` as the **default
+configuration, not a test stub** — every question answered today is answered without a model.
+
+A provider receives already-retrieved context and returns prose. It cannot read the
+filesystem, the database or the network: a provider that could fetch its own context could
+answer from something the index never saw, and the determinism guarantee would be gone.
+`phraseAnswer()` requires a deterministic answer up front, so a failing or absent model
+degrades to real output rather than taking the answer down with it.
+
+## 13. Golden path
+
+`brain/goldenPath.integration.test.ts` walks the spec fixture end to end against a REAL
+file-backed SQLite database built from db.ts's own SQL — file-backed rather than `:memory:`
+because "restart" has to mean closing and reopening, or the persistence step proves nothing.
+
+Covered: scan → 2 projects discovered → classified → associated → persisted → search
+"Sunshine vocal" (correctly preferring Sunshine's `vocal.wav` over Faith's `vocals.wav`) →
+`master-v7` identified as an inference → change detected → activity recorded → "today"
+window queried, with "yesterday" correctly empty → **restart** → same facts → file moved →
+reported missing → reconciled with no duplicate row.
+
+## 14. Scale
+
+25,000-record ranking stays interactive (~110ms), growth is linear rather than quadratic,
+ordering is order-independent at scale (where ties actually surface), and deriving memory for
+a 5,000-file project never recomputes a hash. Thresholds are deliberately loose — they catch
+an accidental quadratic, not a busy machine.

@@ -71,7 +71,13 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       duration REAL,
       role TEXT DEFAULT 'unknown',
       created_at TEXT NOT NULL,
-      modified_at TEXT NOT NULL
+      modified_at TEXT NOT NULL,
+      -- Project Brain lifecycle: when Wavi FIRST indexed this file, and when it
+      -- last confirmed the file still exists. created_at/modified_at are the
+      -- file's own timestamps and say nothing about what Wavi knows, so
+      -- "indexed since" and "missing since" were previously unanswerable.
+      discovered_at TEXT,
+      last_seen_at TEXT
     );
 
     CREATE TABLE IF NOT EXISTS sync_queue (
@@ -149,6 +155,8 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   try { db.exec("ALTER TABLE files ADD COLUMN local_status TEXT DEFAULT 'present'"); } catch { /* already exists */ }
   // Reconciliation: stores the new path after a confident rename/move match
   try { db.exec('ALTER TABLE files ADD COLUMN reconciled_from TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE files ADD COLUMN discovered_at TEXT'); } catch { /* already exists */ }
+  try { db.exec('ALTER TABLE files ADD COLUMN last_seen_at TEXT'); } catch { /* already exists */ }
   // Backward-compat: null out any 16-char truncated SHA-256 hashes written by the old fileChecksum()
   // so they are treated as unknown and rehashed on next access rather than silently mismatching
   try {
@@ -1502,4 +1510,76 @@ export function getBrainRecordRows(limit = 20_000) {
     LIMIT ?
   `).all(limit);
   return { projects, files };
+}
+
+// ── Project Brain: episodic + recency queries ────────────────────────────────
+
+/**
+ * Activity within a time range, newest first.
+ *
+ * getActivityLog(limit) could only answer "the last N things"; questions like
+ * "what changed yesterday?" need a bounded window, and a LIMIT-based answer
+ * silently lies when the window is busier than the limit.
+ */
+export function getActivityInRange(fromIso: string, toIso: string, limit = 500) {
+  return db.prepare(`
+    SELECT a.*, p.project_name
+    FROM activity_log a LEFT JOIN projects p ON a.project_id = p.id
+    WHERE a.created_at >= ? AND a.created_at <= ?
+    ORDER BY a.created_at DESC
+    LIMIT ?
+  `).all(fromIso, toIso, limit);
+}
+
+export function getActivityForProject(projectId: string, limit = 200) {
+  return db.prepare(`
+    SELECT * FROM activity_log WHERE project_id = ? ORDER BY created_at DESC LIMIT ?
+  `).all(projectId, limit);
+}
+
+/** Projects touched within a window, most recently modified first. */
+export function getRecentProjects(sinceIso: string, limit = 50) {
+  return db.prepare(`
+    SELECT * FROM projects WHERE modified_at >= ? ORDER BY modified_at DESC LIMIT ?
+  `).all(sinceIso, limit);
+}
+
+/** Files touched within a window, with their project for display. */
+export function getRecentFiles(sinceIso: string, limit = 200) {
+  return db.prepare(`
+    SELECT f.*, p.project_name, p.daw_type
+    FROM files f LEFT JOIN projects p ON f.project_id = p.id
+    WHERE f.modified_at >= ?
+    ORDER BY f.modified_at DESC LIMIT ?
+  `).all(sinceIso, limit);
+}
+
+/**
+ * Files in a project modified since a published version was created.
+ *
+ * Answers "what changed since version 4?" and "which projects have files that
+ * changed since I last shared them?" from timestamps the index already owns —
+ * no model, no guessing.
+ */
+export function getFilesChangedSinceVersion(projectId: string, versionId: string) {
+  const v = db.prepare('SELECT created_at FROM versions WHERE id = ? AND project_id = ?')
+    .get(versionId, projectId) as { created_at?: string } | undefined;
+  if (!v?.created_at) return null;
+  const rows = db.prepare(`
+    SELECT f.* FROM files f
+    WHERE f.project_id = ? AND f.modified_at > ?
+    ORDER BY f.modified_at DESC
+  `).all(projectId, v.created_at);
+  return { sinceIso: v.created_at, files: rows };
+}
+
+/** Mark a file as still present, without disturbing its own timestamps. */
+export function touchFileLastSeen(filePath: string, nowIso: string) {
+  db.prepare('UPDATE files SET last_seen_at = ? WHERE file_path = ?').run(nowIso, filePath);
+}
+
+/** Set discovered_at once, the first time Wavi ever indexed this path. */
+export function stampFileDiscovered(filePath: string, nowIso: string) {
+  db.prepare('UPDATE files SET discovered_at = COALESCE(discovered_at, ?), last_seen_at = ? WHERE file_path = ?')
+    .run(nowIso, nowIso, filePath);
 }
