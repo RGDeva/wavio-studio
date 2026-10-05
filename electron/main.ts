@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -44,6 +44,7 @@ import { isSafeRestorePath, validateArchiveEntries } from './restoreArchive';
 import { planRestoreAdoption } from './restoreAdoption';
 import { resolveApplication } from './adapters/index';
 import { planCrossDawHandoff, buildFidelityReport } from './crossDaw';
+import { createBrainService } from './brain/service';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -2921,6 +2922,87 @@ ipcMain.handle('daw:planHandoff', (_e, opts: {
   });
   return { plan, report: buildFidelityReport(plan, new Date().toISOString()) };
 });
+
+// ── Project Brain ────────────────────────────────────────────────────────────
+// Deterministic local state is the source of truth. The service composes pure
+// modules (query / retrieval / memory / contextPack) over real rows; nothing
+// here calls a model, and nothing a model says can become a derived fact.
+const brain = createBrainService({
+  getRecords: () => getBrainRecordRows() as any,
+  getFactRows: (projectId) => getProjectFactRows(projectId) as any,
+  getBelievedFactRow: (projectId, key) => getBelievedFactRow(projectId, key) as any,
+  insertFact: (row) => insertProjectFact(row as any),
+  supersedeFact: (id, at) => supersedeProjectFact(id, at),
+  getProjectPackInput: (projectId) => {
+    const project = getProjectById(projectId) as any;
+    if (!project) return null;
+    const files = (getFilesByProject(projectId) as any[]);
+    const versions = (getVersionsByProject(projectId) as any[]);
+    const checkout = project.file_path ? getRestoredProjectByLocalPath(project.file_path) : null;
+
+    // Issues the brain can state without guessing.
+    const issues: Array<{ kind: 'missing-file' | 'failed-sync' | 'unresolved-association' | 'stale-fact'; detail: string }> = [];
+    const missing = files.filter((f) => f.local_status === 'missing');
+    if (missing.length) issues.push({ kind: 'missing-file', detail: `${missing.length} file(s) are no longer on disk where Wavi last saw them.` });
+    const failed = files.filter((f) => f.sync_status === 'failed');
+    if (failed.length) issues.push({ kind: 'failed-sync', detail: `${failed.length} file(s) failed to sync.` });
+
+    return {
+      project: {
+        id: project.id,
+        name: project.project_name,
+        dawType: project.daw_type ?? null,
+        // Tempo/key are file-level in the index; surface the project file's.
+        bpm: files.find((f) => f.role === 'project')?.bpm ?? null,
+        keyNote: files.find((f) => f.role === 'project')?.key_note ?? null,
+        syncStatus: project.sync_status ?? null,
+        isAdopted: !!checkout,
+        parentVersionId: checkout?.source_version_id ?? null,
+      },
+      files: files.map((f) => ({
+        id: f.id, name: f.file_name, role: f.role ?? null, fileType: f.file_type ?? null,
+        sizeBytes: f.file_size ?? null, status: f.local_status === 'missing' ? 'missing' : (f.sync_status ?? null),
+      })),
+      versions: versions.map((v) => ({
+        versionNumber: v.version_number ?? null, createdAt: v.created_at ?? null, fileCount: v.file_count ?? null,
+      })),
+      issues,
+      // What the index itself asserts, used to overrule stale derived facts.
+      indexTruth: {
+        daw: project.daw_type ?? null,
+        fileCount: String(files.length),
+      },
+    };
+  },
+  now: () => new Date().toISOString(),
+  newId: () => crypto.randomUUID(),
+});
+
+/** Deterministic retrieval across every indexed project. */
+ipcMain.handle('brain:search', (_e, query: string, limit?: number) =>
+  brain.search(typeof query === 'string' ? query : '', Math.min(Math.max(1, limit ?? 50), 200)));
+
+/** The bounded, attributed snapshot a later local LLM agent consumes. */
+ipcMain.handle('brain:contextPack', (_e, projectId: string) => brain.contextPack(projectId));
+
+/** Everything currently believed about a project, each item attributed. */
+ipcMain.handle('brain:recall', (_e, projectId: string) => brain.recall(projectId));
+
+/**
+ * Record something about a project.
+ *
+ * origin is forced to 'user' here: this channel is driven by the UI, and a
+ * renderer must not be able to claim 'index' provenance for an assertion.
+ */
+ipcMain.handle('brain:remember', (_e, opts: { projectId: string; key: string; value: string }) =>
+  brain.remember({
+    projectId: String(opts?.projectId ?? ''),
+    key: String(opts?.key ?? ''),
+    value: String(opts?.value ?? ''),
+    kind: 'stated',
+    origin: 'user',
+    producer: 'ui',
+  }));
 
 // Files
 ipcMain.handle('files:getByProject', (_e, projectId: string) => getFilesByProject(projectId));

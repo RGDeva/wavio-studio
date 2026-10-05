@@ -288,6 +288,32 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
     )
   `);
 
+  // ── Project Brain: durable, attributed, append-only memory ──────────────
+  // Every column is declared in the CREATE rather than bolted on by a later
+  // ALTER: the links.account_id bug (an ALTER that ran before its CREATE,
+  // failed silently on fresh installs, and left the column missing) came from
+  // exactly that pattern.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_facts (
+      id             TEXT PRIMARY KEY,
+      project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      key            TEXT NOT NULL,
+      value          TEXT NOT NULL,
+      -- 'derived' (recomputable from the index) or 'stated' (an assertion)
+      kind           TEXT NOT NULL DEFAULT 'derived',
+      source_origin  TEXT NOT NULL,
+      source_producer TEXT NOT NULL,
+      observed_at    TEXT NOT NULL,
+      -- NULL = currently believed. Writes supersede rather than overwrite so
+      -- "what did we believe, and why did it change?" stays answerable.
+      superseded_at  TEXT
+    )
+  `);
+  // One believed fact per (project, key); history stays queryable because
+  // superseded rows have a non-NULL superseded_at and fall out of the index.
+  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_project_facts_believed ON project_facts(project_id, key) WHERE superseded_at IS NULL'); } catch { /* already exists */ }
+  try { db.exec('CREATE INDEX IF NOT EXISTS idx_project_facts_project ON project_facts(project_id)'); } catch { /* already exists */ }
+
   // ── Phase 1: Association tables ─────────────────────────────────────────
   db.exec(`
     CREATE TABLE IF NOT EXISTS asset_associations (
@@ -1420,4 +1446,60 @@ export function getRestoredProjectByShare(shareId: string): RestoredProject | nu
 export function touchRestoredProject(id: string): void {
   db.prepare('UPDATE restored_projects SET last_opened_at = ? WHERE id = ?')
     .run(new Date().toISOString(), id);
+}
+
+// ── Project Brain ────────────────────────────────────────────────────────────
+
+export interface ProjectFactRow {
+  id: string; project_id: string; key: string; value: string;
+  kind: string; source_origin: string; source_producer: string;
+  observed_at: string; superseded_at: string | null;
+}
+
+/** All rows for a project, believed and superseded, newest first. */
+export function getProjectFactRows(projectId: string): ProjectFactRow[] {
+  return db.prepare('SELECT * FROM project_facts WHERE project_id = ? ORDER BY observed_at DESC, id ASC')
+    .all(projectId) as ProjectFactRow[];
+}
+
+/** The currently-believed fact for a key, or null. */
+export function getBelievedFactRow(projectId: string, key: string): ProjectFactRow | null {
+  return (db.prepare('SELECT * FROM project_facts WHERE project_id = ? AND key = ? AND superseded_at IS NULL')
+    .get(projectId, key) as ProjectFactRow) ?? null;
+}
+
+export function insertProjectFact(row: ProjectFactRow): void {
+  db.prepare(`INSERT INTO project_facts
+    (id, project_id, key, value, kind, source_origin, source_producer, observed_at, superseded_at)
+    VALUES (@id, @project_id, @key, @value, @kind, @source_origin, @source_producer, @observed_at, @superseded_at)`)
+    .run(row);
+}
+
+export function supersedeProjectFact(id: string, supersededAt: string): void {
+  db.prepare('UPDATE project_facts SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL')
+    .run(supersededAt, id);
+}
+
+/**
+ * Flatten the index into records the brain can rank.
+ *
+ * Deliberately selects no absolute path: retrieval results may be handed to a
+ * model, and the opaque id is enough for main to resolve a path later.
+ */
+export function getBrainRecordRows(limit = 20_000) {
+  const projects = db.prepare(`
+    SELECT id, id AS project_id, project_name AS name, project_name, daw_type,
+           NULL AS role, NULL AS file_type, NULL AS bpm, NULL AS key_note,
+           sync_status AS status, modified_at
+    FROM projects
+  `).all();
+  const files = db.prepare(`
+    SELECT f.id, f.project_id, f.file_name AS name,
+           COALESCE(p.project_name, '') AS project_name, p.daw_type,
+           f.role, f.file_type, f.bpm, f.key_note,
+           COALESCE(f.local_status, f.sync_status) AS status, f.modified_at
+    FROM files f LEFT JOIN projects p ON f.project_id = p.id
+    LIMIT ?
+  `).all(limit);
+  return { projects, files };
 }
