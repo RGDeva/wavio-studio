@@ -1,4 +1,5 @@
 import type { ProjectContext } from '../copilotTypes';
+import { buildBrainToolSpecs, type BrainReadDeps } from './brainTools';
 import {
   CopilotToolSpec, CopilotToolResult, EnvelopeDeps, wrapTool,
 } from './envelope';
@@ -162,10 +163,14 @@ export function buildProjectToolSpecs(deps: ProjectToolDeps): CopilotToolSpec[] 
 /** Registry-shaped entries with the envelope applied. Includes the Phase-H
  *  cloud/sync tools, the P3-3 deterministic inspection tools, and honest
  *  typed declines for server-blocked capabilities. */
-export function buildProjectTools(deps: ProjectToolDeps) {
+export function buildProjectTools(deps: ProjectToolDeps & { brain?: BrainReadDeps }) {
   const specs = [
     ...buildProjectToolSpecs(deps),
     ...buildLocalInspectionToolSpecs(deps),
+    // Project Brain read tools. Omitted entirely when no brain is supplied,
+    // rather than registered as stubs that fail at call time — a tool the
+    // model can see is a tool it will try.
+    ...(deps.brain ? buildBrainToolSpecs(deps.brain) : []),
     ...buildBlockedToolSpecs(),
   ];
   return specs.map((spec) => ({

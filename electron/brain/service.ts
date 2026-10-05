@@ -16,6 +16,8 @@ import {
 } from './memory';
 import { buildContextPack, summarizePack, type ContextPack, type PackFile, type PackVersion, type PackProject, type PackIssue } from './contextPack';
 import type { IndexTruth } from './memory';
+import { parseRange, type TimeRange } from './timeRange';
+import { deriveProjectMemory, type DeriveFile, type DeriveVersion, type DerivedMemory } from './derive';
 
 /** Raw row shapes, matching the db queries. */
 export interface RawRecordRow {
@@ -40,8 +42,37 @@ export interface BrainDeps {
   getProjectPackInput: (projectId: string) => {
     project: PackProject; files: PackFile[]; versions: PackVersion[]; issues: PackIssue[]; indexTruth: IndexTruth;
   } | null;
+  /** Episodic + recency row getters. */
+  getActivityInRange: (fromIso: string, toIso: string, limit: number) => RawActivityRow[];
+  getRecentProjectRows: (sinceIso: string, limit: number) => RawProjectRow[];
+  getRecentFileRows: (sinceIso: string, limit: number) => RawRecordRow[];
+  getFilesChangedSinceVersion: (projectId: string, versionId: string) =>
+    { sinceIso: string; files: Array<Record<string, unknown>> } | null;
+  /** Rows for recomputing derived memory. */
+  getDeriveInput: (projectId: string) =>
+    { projectName: string; dawType: string | null; files: DeriveFile[]; versions: DeriveVersion[]; lastActivityAt: string | null } | null;
   now: () => string;
   newId: () => string;
+}
+
+export interface RawActivityRow {
+  id: string; type: string; message: string;
+  project_id: string | null; project_name?: string | null;
+  file_id: string | null; created_at: string;
+}
+
+export interface RawProjectRow {
+  id: string; project_name: string; daw_type: string | null;
+  sync_status: string | null; modified_at: string | null;
+}
+
+/** An activity entry, safe to hand to a model: no paths, no ids beyond opaque ones. */
+export interface SafeActivity {
+  type: string;
+  message: string;
+  projectId: string | null;
+  projectName: string | null;
+  at: string;
 }
 
 function toRecord(row: RawRecordRow, kind: BrainRecord['kind']): BrainRecord {
@@ -131,6 +162,75 @@ export function createBrainService(deps: BrainDeps) {
           deps.insertFact(rowFor(plan.fact, deps.newId()));
           return { ok: true, action: 'insert' };
       }
+    },
+
+    /**
+     * What happened in a window. Returns the resolved range alongside the
+     * events so a caller can say "nothing changed yesterday" with confidence
+     * rather than leaving an empty list ambiguous.
+     */
+    recentActivity(range: string, limit = 200): { range: TimeRange | null; events: SafeActivity[] } {
+      const r = parseRange(range, deps.now());
+      if (!r) return { range: null, events: [] };
+      const rows = deps.getActivityInRange(r.from, r.to, limit);
+      return {
+        range: r,
+        events: rows.map((a) => ({
+          type: a.type, message: a.message,
+          projectId: a.project_id ?? null, projectName: a.project_name ?? null,
+          at: a.created_at,
+        })),
+      };
+    },
+
+    /** Projects touched in a window, most recent first. */
+    recentProjects(range: string, limit = 50) {
+      const r = parseRange(range, deps.now());
+      if (!r) return { range: null, projects: [] as Array<{ id: string; name: string; dawType: string | null; syncStatus: string | null; modifiedAt: string | null }> };
+      return {
+        range: r,
+        projects: deps.getRecentProjectRows(r.from, limit).map((p) => ({
+          id: p.id, name: p.project_name, dawType: p.daw_type ?? null,
+          syncStatus: p.sync_status ?? null, modifiedAt: p.modified_at ?? null,
+        })),
+      };
+    },
+
+    /**
+     * Files changed since a published version — "what have I touched since I
+     * last shared this?". Both timestamps belong to the index, so this is a
+     * fact rather than a guess.
+     */
+    changedSince(projectId: string, versionId: string) {
+      const out = deps.getFilesChangedSinceVersion(projectId, versionId);
+      if (!out) return null;
+      return {
+        sinceIso: out.sinceIso,
+        files: out.files.map((f: any) => ({
+          id: String(f.id), name: String(f.file_name ?? ''),
+          role: f.role ?? null, modifiedAt: f.modified_at ?? null,
+          syncStatus: f.sync_status ?? null,
+        })),
+      };
+    },
+
+    /** Filtered file lookup — the same deterministic ranking, files only. */
+    findFiles(queryText: string, limit = 50) {
+      const r = this.search(queryText, limit * 2);
+      return { ...r, hits: r.hits.filter((h) => h.record.kind === 'file').slice(0, limit) };
+    },
+
+    /**
+     * Recompute derived memory for a project.
+     *
+     * Facts and inferences stay in separate buckets all the way out, so a
+     * caller can never mistake "probably the master" for something the index
+     * asserted.
+     */
+    projectMemory(projectId: string): DerivedMemory | null {
+      const input = deps.getDeriveInput(projectId);
+      if (!input) return null;
+      return deriveProjectMemory({ projectId, ...input });
     },
 
     /** The bounded, attributed snapshot a model consumes. */

@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -565,6 +565,17 @@ app.whenReady().then(async () => {
     const { registerProjectTools } = require('./agentLoop');
     const dbMod = require('./db');
     registerProjectTools(buildProjectTools({
+      // Project Brain read surface. Safe to reference here: this block runs
+      // inside app.whenReady(), after module evaluation, so the module-level
+      // `brain` const is already initialised (no temporal dead zone).
+      brain: {
+        search: (q: string, limit?: number) => brain.search(q, limit) as any,
+        findFiles: (q: string, limit?: number) => brain.findFiles(q, limit) as any,
+        recentActivity: (range: string, limit?: number) => brain.recentActivity(range, limit) as any,
+        recentProjects: (range: string, limit?: number) => brain.recentProjects(range, limit) as any,
+        projectMemory: (projectId: string) => brain.projectMemory(projectId) as any,
+        changedSince: (projectId: string, versionId: string) => brain.changedSince(projectId, versionId) as any,
+      },
       isAuthenticated: () => !!getDecryptedToken(),
       logAudit: (entry: { tool: string; params: Record<string, unknown>; outcome: string }) => {
         try {
@@ -2974,6 +2985,30 @@ const brain = createBrainService({
       },
     };
   },
+  getActivityInRange: (from, to, limit) => getActivityInRange(from, to, limit) as any,
+  getRecentProjectRows: (since, limit) => getRecentProjectRowsDb(since, limit) as any,
+  getRecentFileRows: (since, limit) => getRecentFiles(since, limit) as any,
+  getFilesChangedSinceVersion: (projectId, versionId) => getFilesChangedSinceVersion(projectId, versionId) as any,
+  getDeriveInput: (projectId) => {
+    const project = getProjectById(projectId) as any;
+    if (!project) return null;
+    const files = (getFilesByProject(projectId) as any[]).map((f) => ({
+      id: f.id, name: f.file_name, role: f.role ?? null, fileType: f.file_type ?? null,
+      sizeBytes: f.file_size ?? null, modifiedAt: f.modified_at ?? null,
+      localStatus: f.local_status ?? null, syncStatus: f.sync_status ?? null,
+      checksum: f.checksum ?? null,
+    }));
+    const versions = (getVersionsByProject(projectId) as any[]).map((v) => ({
+      id: v.id, versionNumber: v.version_number ?? null, createdAt: v.created_at ?? null,
+    }));
+    const activity = getActivityForProject(projectId, 1) as any[];
+    return {
+      projectName: project.project_name,
+      dawType: project.daw_type ?? null,
+      files, versions,
+      lastActivityAt: activity[0]?.created_at ?? null,
+    };
+  },
   now: () => new Date().toISOString(),
   newId: () => crypto.randomUUID(),
 });
@@ -2984,6 +3019,25 @@ ipcMain.handle('brain:search', (_e, query: string, limit?: number) =>
 
 /** The bounded, attributed snapshot a later local LLM agent consumes. */
 ipcMain.handle('brain:contextPack', (_e, projectId: string) => brain.contextPack(projectId));
+
+/** What happened in a window — "what did I work on this week?" */
+ipcMain.handle('brain:recentActivity', (_e, range: string, limit?: number) =>
+  brain.recentActivity(String(range ?? 'this-week'), Math.min(Math.max(1, limit ?? 200), 1000)));
+
+/** Projects touched in a window. */
+ipcMain.handle('brain:recentProjects', (_e, range: string, limit?: number) =>
+  brain.recentProjects(String(range ?? 'this-week'), Math.min(Math.max(1, limit ?? 50), 200)));
+
+/** Files changed since a published version. */
+ipcMain.handle('brain:changedSince', (_e, projectId: string, versionId: string) =>
+  brain.changedSince(String(projectId ?? ''), String(versionId ?? '')));
+
+/** Deterministic file lookup. */
+ipcMain.handle('brain:findFiles', (_e, query: string, limit?: number) =>
+  brain.findFiles(typeof query === 'string' ? query : '', Math.min(Math.max(1, limit ?? 50), 200)));
+
+/** Recomputed derived memory: facts and inferences kept apart. */
+ipcMain.handle('brain:projectMemory', (_e, projectId: string) => brain.projectMemory(String(projectId ?? '')));
 
 /** Everything currently believed about a project, each item attributed. */
 ipcMain.handle('brain:recall', (_e, projectId: string) => brain.recall(projectId));
