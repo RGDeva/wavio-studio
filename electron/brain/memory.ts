@@ -33,9 +33,19 @@ export interface FactSource {
   producer: string;
 }
 
+/**
+ * Memory scope.
+ *
+ * `null` means GLOBAL — memory that belongs to the userrather than to one
+ * project. The legacy memory:* store was global, and forcing those entries
+ * into an arbitrary project would misclassify them, so the scope is modelled
+ * honestly instead.
+ */
+export type MemoryScope = string | null;
+
 export interface ProjectFact {
   id: string;
-  projectId: string;
+  projectId: MemoryScope;
   /** Stable identifier, e.g. 'tempo', 'arrangement-note', 'collaborator-brief'. */
   key: string;
   value: string;
@@ -59,7 +69,12 @@ export type Validation = { ok: true } | { ok: false; reason: string };
  * closed: a fact that cannot be attributed, scoped or bounded is not stored.
  */
 export function validateFact(input: Partial<FactInput>): Validation {
-  if (!input.projectId) return { ok: false, reason: 'a fact must be scoped to a project' };
+  // projectId may be null (global memory), but it must be PRESENT as a key so
+  // an accidental omission is still caught rather than silently becoming global.
+  if (!('projectId' in input)) return { ok: false, reason: 'a fact must declare its scope (project id, or null for global)' };
+  if (input.projectId !== null && !input.projectId) {
+    return { ok: false, reason: 'a project-scoped fact needs a project id' };
+  }
   if (!input.key || !input.key.trim()) return { ok: false, reason: 'a fact must have a key' };
   if (input.key.length > MAX_FACT_KEY_LENGTH) return { ok: false, reason: `key exceeds ${MAX_FACT_KEY_LENGTH} characters` };
   if (typeof input.value !== 'string') return { ok: false, reason: 'a fact value must be a string' };
@@ -78,6 +93,12 @@ export function validateFact(input: Partial<FactInput>): Validation {
   }
   if (input.kind === 'stated' && src.origin === 'index') {
     return { ok: false, reason: "a stated fact cannot claim to originate from 'index'" };
+  }
+  // Global scope is for explicit human/agent memory. A DERIVED fact is
+  // recomputed from a project's rows, so a global derived fact could never be
+  // recomputed and would become unfalsifiable.
+  if (input.projectId === null && input.kind === 'derived') {
+    return { ok: false, reason: 'global memory cannot be derived — it has no project to recompute from' };
   }
   if (!input.observedAt) return { ok: false, reason: 'a fact must record when it was observed' };
   return { ok: true };

@@ -75,6 +75,8 @@ export default defineConfig({
       'electron/brain/fileLifecycle.real.test.ts',
       'electron/brain/liveGoldenPath.integration.test.ts',
       'electron/brain/activityView.test.ts',
+      'electron/brain/legacyMemoryMigration.test.ts',
+      'electron/brain/memoryUnification.real.test.ts',
     ],
     environment: 'node',
   },

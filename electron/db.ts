@@ -304,7 +304,11 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
   db.exec(`
     CREATE TABLE IF NOT EXISTS project_facts (
       id             TEXT PRIMARY KEY,
-      project_id     TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      -- NULL project_id = GLOBAL memory, not tied to one project. This is what
+      -- lets the legacy app-wide memory:* store live here instead of in a
+      -- second system. A NULL foreign key is not checked by SQLite, so the
+      -- CASCADE still applies to project-scoped rows only.
+      project_id     TEXT REFERENCES projects(id) ON DELETE CASCADE,
       key            TEXT NOT NULL,
       value          TEXT NOT NULL,
       -- 'derived' (recomputable from the index) or 'stated' (an assertion)
@@ -312,14 +316,64 @@ function _initDatabaseAtPath(dbPath: string): Database.Database {
       source_origin  TEXT NOT NULL,
       source_producer TEXT NOT NULL,
       observed_at    TEXT NOT NULL,
+      -- Free-form classification carried over from the legacy memory store
+      -- ('note', 'context', …). Provenance lives in source_*; this is what the
+      -- user called it, which is a different thing.
+      category       TEXT,
       -- NULL = currently believed. Writes supersede rather than overwrite so
       -- "what did we believe, and why did it change?" stays answerable.
       superseded_at  TEXT
     )
   `);
-  // One believed fact per (project, key); history stays queryable because
+  // ── project_facts migrations ────────────────────────────────────────────
+  // Legacy databases created project_id as NOT NULL. SQLite cannot ALTER a
+  // column, so the table is rebuilt — the same approach the files table uses
+  // to drop its own NOT NULL. Guarded by table_info so it runs at most once.
+  try {
+    const factCols = db.prepare("PRAGMA table_info(project_facts)").all() as Array<{ name: string; notnull: number }>;
+    if (factCols.length) {
+      const pid = factCols.find((c) => c.name === 'project_id');
+      const hasCategory = factCols.some((c) => c.name === 'category');
+      if (!hasCategory) {
+        try { db.exec('ALTER TABLE project_facts ADD COLUMN category TEXT'); } catch { /* already exists */ }
+      }
+      if (pid && pid.notnull === 1) {
+        db.pragma('foreign_keys = OFF');
+        db.exec(`
+          BEGIN;
+          CREATE TABLE IF NOT EXISTS project_facts_new (
+            id             TEXT PRIMARY KEY,
+            project_id     TEXT REFERENCES projects(id) ON DELETE CASCADE,
+            key            TEXT NOT NULL,
+            value          TEXT NOT NULL,
+            kind           TEXT NOT NULL DEFAULT 'derived',
+            source_origin  TEXT NOT NULL,
+            source_producer TEXT NOT NULL,
+            observed_at    TEXT NOT NULL,
+            category       TEXT,
+            superseded_at  TEXT
+          );
+          INSERT INTO project_facts_new
+            SELECT id, project_id, key, value, kind, source_origin, source_producer,
+                   observed_at, category, superseded_at
+            FROM project_facts;
+          DROP TABLE project_facts;
+          ALTER TABLE project_facts_new RENAME TO project_facts;
+          COMMIT;
+        `);
+        db.pragma('foreign_keys = ON');
+      }
+    }
+  } catch { /* leave the existing table alone rather than risk its contents */ }
+
+  // One believed fact per (scope, key); history stays queryable because
   // superseded rows have a non-NULL superseded_at and fall out of the index.
-  try { db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_project_facts_believed ON project_facts(project_id, key) WHERE superseded_at IS NULL'); } catch { /* already exists */ }
+  //
+  // COALESCE, not a plain UNIQUE(project_id, key): SQLite treats NULLs as
+  // DISTINCT in a unique index, so global rows (project_id IS NULL) would NOT
+  // be deduped and every write of the same key would pile up a new row.
+  try { db.exec('DROP INDEX IF EXISTS idx_project_facts_believed'); } catch { /* fine */ }
+  try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_project_facts_scope_key ON project_facts(COALESCE(project_id, ''), key) WHERE superseded_at IS NULL"); } catch { /* already exists */ }
   try { db.exec('CREATE INDEX IF NOT EXISTS idx_project_facts_project ON project_facts(project_id)'); } catch { /* already exists */ }
 
   // ── Phase 1: Association tables ─────────────────────────────────────────
@@ -1590,14 +1644,80 @@ export function getFilesChangedSinceVersion(projectId: string, versionId: string
   return { sinceIso: v.created_at, files: rows };
 }
 
+
+// ── Canonical memory (project_facts), replacing the legacy electron-store ────
+//
+// Scope: a string project id, or null for GLOBAL memory. The legacy memory:*
+// store was app-wide, and forcing those entries under some arbitrary project
+// would misclassify them, so the scope is modelled honestly instead.
+//
+// Writes supersede rather than overwrite, so "delete" hides a memory from the
+// user without destroying the record of it having existed.
+
+export interface MemoryRecord {
+  key: string;
+  value: string;
+  category: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** The currently-believed memory row for a scope+key, or null. */
+export function getBelievedMemoryRow(scope: string | null, key: string) {
+  return db.prepare(`
+    SELECT * FROM project_facts
+    WHERE COALESCE(project_id, '') = COALESCE(?, '') AND key = ? AND superseded_at IS NULL
+  `).get(scope ?? null, key) as any ?? null;
+}
+
 /**
- * Mark a file as still present.
+ * Believed memory for a scope, in the legacy list shape.
  *
- * The upsert paths set discovered_at/last_seen_at themselves, which is why
- * there is no separate "stamp discovered" helper: putting it at the call sites
- * meant six places to forget, and the columns sat permanently NULL because
- * every one of them did.
+ * createdAt is the EARLIEST observed_at across every row for that key,
+ * including superseded ones — the legacy store preserved createdAt across
+ * updates, and the append-only history is exactly what makes that recoverable.
  */
-export function touchFileLastSeen(filePath: string, nowIso: string) {
-  db.prepare('UPDATE files SET last_seen_at = ? WHERE file_path = ?').run(nowIso, filePath);
+export function listMemory(scope: string | null): MemoryRecord[] {
+  return db.prepare(`
+    SELECT f.key, f.value, COALESCE(f.category, 'note') AS category,
+           (SELECT MIN(h.observed_at) FROM project_facts h
+             WHERE COALESCE(h.project_id,'') = COALESCE(f.project_id,'') AND h.key = f.key) AS createdAt,
+           f.observed_at AS updatedAt
+    FROM project_facts f
+    WHERE COALESCE(f.project_id,'') = COALESCE(?, '')
+      AND f.superseded_at IS NULL
+      AND f.kind = 'stated'
+    ORDER BY f.observed_at DESC, f.key ASC
+  `).all(scope ?? null) as MemoryRecord[];
+}
+
+export function insertMemoryFact(row: {
+  id: string; project_id: string | null; key: string; value: string;
+  kind: string; source_origin: string; source_producer: string;
+  observed_at: string; category: string | null;
+}) {
+  db.prepare(`
+    INSERT INTO project_facts
+      (id, project_id, key, value, kind, source_origin, source_producer, observed_at, category, superseded_at)
+    VALUES (@id, @project_id, @key, @value, @kind, @source_origin, @source_producer, @observed_at, @category, NULL)
+  `).run(row);
+}
+
+/**
+ * Supersede exactly one record, by id.
+ *
+ * Deliberately id-scoped: deleting a memory must never touch unrelated project
+ * facts, so there is no key- or scope-wide delete here at all.
+ */
+export function supersedeMemoryFact(id: string, supersededAt: string) {
+  db.prepare('UPDATE project_facts SET superseded_at = ? WHERE id = ? AND superseded_at IS NULL')
+    .run(supersededAt, id);
+}
+
+/** Believed GLOBAL memory rows, for the legacy migration to compare against. */
+export function listMemoryRowsForMigration() {
+  return db.prepare(`
+    SELECT id, key, value, kind, observed_at FROM project_facts
+    WHERE project_id IS NULL AND superseded_at IS NULL
+  `).all() as Array<{ id: string; key: string; value: string; kind: string; observed_at: string }>;
 }

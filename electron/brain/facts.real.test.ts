@@ -29,10 +29,20 @@ const CREATE_PROJECTS = extractSql('CREATE TABLE IF NOT EXISTS projects');
 const CREATE_FACTS = extractSql('CREATE TABLE IF NOT EXISTS project_facts');
 
 /** Index statements for project_facts, in the order db.ts runs them. */
+/**
+ * Index statements for project_facts, in source order.
+ *
+ * Both quote styles are matched: the believed-fact index is double-quoted
+ * because it contains single quotes of its own —
+ * COALESCE(project_id, '') — and a single-quote-only extractor silently
+ * found nothing, built no unique index, and let the duplicate test pass
+ * vacuously.
+ */
 function factIndexStatements(): string[] {
-  return [...dbSrc.matchAll(/db\.exec\('((?:CREATE[^']*project_facts[^']*))'\)/g)]
-    .sort((a, b) => a.index! - b.index!)
-    .map((m) => m[1]);
+  return [
+    ...[...dbSrc.matchAll(/db\.exec\('((?:CREATE[^']*project_facts[^']*))'\)/g)].map((m) => ({ at: m.index!, sql: m[1] })),
+    ...[...dbSrc.matchAll(/db\.exec\("((?:CREATE[^"]*project_facts[^"]*))"\)/g)].map((m) => ({ at: m.index!, sql: m[1] })),
+  ].sort((a, b) => a.at - b.at).map((m) => m.sql);
 }
 
 maybeDescribe('project_facts on a fresh database (real SQLite)', () => {

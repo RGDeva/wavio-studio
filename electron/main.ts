@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, listMemory, getBelievedMemoryRow, insertMemoryFact, supersedeMemoryFact, listMemoryRowsForMigration, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -46,6 +46,7 @@ import { resolveApplication } from './adapters/index';
 import { planCrossDawHandoff, buildFidelityReport } from './crossDaw';
 import { createBrainService } from './brain/service';
 import { createBrainRefresher } from './brain/liveRefresh';
+import { planLegacyMemoryMigration } from './brain/legacyMemoryMigration';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -488,6 +489,11 @@ app.whenReady().then(async () => {
   const t0 = Date.now();
   const db = initDatabase({ dbName: process.env.WAVI_E2E === '1' ? 'wavio-studio-e2e.db' : 'wavio-studio.db' });
   mainLog(`Database initialized in ${Date.now() - t0}ms`);
+
+  // Fold the legacy electron-store memory blob into project_facts, so there is
+  // exactly one persistent memory from here on. Idempotent and non-fatal: the
+  // original blob is left untouched as a rollback path.
+  migrateLegacyMemoryOnce();
 
   // Secure local bounce playback (wavi-media://asset/{projectId}/{assetId}).
   // Authorization source is the local files table; approved roots are the
@@ -3661,37 +3667,87 @@ ipcMain.handle('musehub:refreshSession', async () => {
   return result;
 });
 
-// Memory — lightweight key-value store for Copilot context/preferences
-ipcMain.handle('memory:list', () => {
-  const entries = store.get('memory', {}) as Record<string, any>;
-  return Object.entries(entries).map(([key, v]) => ({
-    key,
-    value: typeof v === 'object' ? v.value : v,
-    category: typeof v === 'object' ? (v.category ?? 'note') : 'note',
-    createdAt: typeof v === 'object' ? (v.createdAt ?? new Date().toISOString()) : new Date().toISOString(),
-    updatedAt: typeof v === 'object' ? (v.updatedAt ?? new Date().toISOString()) : new Date().toISOString(),
-  }));
-});
+// ── Memory — backed by project_facts, not electron-store ─────────────────────
+//
+// These four channels keep their names and their observable behaviour; only
+// the storage changed. Project Brain is now the single persistent memory, so
+// there is no second store to drift out of sync.
+//
+// Scope is GLOBAL (project_id NULL): the legacy store was app-wide, and
+// filing those entries under an arbitrary project would misclassify them.
+// Everything here is explicit user memory — kind 'stated', origin 'user' —
+// never derived, because a person typed it.
+
+/** Runs once; safe to call on every launch. */
+function migrateLegacyMemoryOnce(): void {
+  try {
+    if (store.get('migratedMemoryV1', false) === true) return;
+    const legacy = store.get('memory', null) as Record<string, any> | null;
+    if (!legacy || typeof legacy !== 'object' || Object.keys(legacy).length === 0) {
+      store.set('migratedMemoryV1', true);
+      return;
+    }
+
+    const existing = new Map<string, { id: string; key: string; kind: 'derived' | 'stated'; value: string; observedAt: string }>();
+    for (const r of listMemoryRowsForMigration()) {
+      existing.set(r.key, { id: r.id, key: r.key, kind: r.kind === 'derived' ? 'derived' : 'stated', value: r.value, observedAt: r.observed_at });
+    }
+
+    const plan = planLegacyMemoryMigration(legacy, existing, new Date().toISOString());
+    for (const a of plan.actions) {
+      if (a.action === 'skip') continue;
+      if (a.action === 'supersede') supersedeMemoryFact(a.supersedeId, new Date().toISOString());
+      insertMemoryFact({
+        id: crypto.randomUUID(), project_id: null, key: a.fact.key, value: a.fact.value,
+        kind: a.fact.kind, source_origin: a.fact.source.origin, source_producer: a.fact.source.producer,
+        observed_at: a.fact.observedAt, category: 'note',
+      });
+    }
+    if (plan.willWrite > 0 || plan.skipped.length > 0) {
+      mainLog(`[memory] legacy migration: ${plan.willWrite} migrated, ${plan.skipped.length} skipped`);
+    }
+    // The legacy blob is deliberately NOT deleted. The transfer has succeeded,
+    // but leaving the original in place costs nothing and is the only rollback
+    // path if something about the migration proves wrong. Nothing reads it
+    // again — `migratedMemoryV1` stops this running a second time.
+    store.set('migratedMemoryV1', true);
+  } catch (e: any) {
+    // A failed migration must never stop the app from starting; the next
+    // launch retries, and the legacy data is still intact.
+    mainLog(`[memory] legacy migration failed (legacy data left untouched): ${e?.message}`);
+  }
+}
+
+ipcMain.handle('memory:list', () => listMemory(null));
+
 ipcMain.handle('memory:get', (_e, key: string) => {
-  const entries = store.get('memory', {}) as Record<string, any>;
-  const v = entries[key];
-  return v ? (typeof v === 'object' ? v.value : v) : null;
+  const row = getBelievedMemoryRow(null, String(key ?? ''));
+  return row ? row.value : null;
 });
+
 ipcMain.handle('memory:set', (_e, key: string, value: string, category = 'note') => {
-  const entries = store.get('memory', {}) as Record<string, any>;
-  const existing = entries[key];
-  entries[key] = {
-    value,
-    category,
-    createdAt: existing?.createdAt ?? new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  };
-  store.set('memory', entries);
+  const k = String(key ?? '').trim();
+  if (!k) return;
+  const now = new Date().toISOString();
+  // Supersede rather than overwrite, so the previous value stays recoverable.
+  const prior = getBelievedMemoryRow(null, k);
+  if (prior) {
+    if (prior.value === String(value) && (prior.category ?? 'note') === category) return; // no-op
+    supersedeMemoryFact(prior.id, now);
+  }
+  insertMemoryFact({
+    id: crypto.randomUUID(), project_id: null, key: k, value: String(value ?? ''),
+    kind: 'stated', source_origin: 'user', source_producer: 'ui',
+    observed_at: now, category: String(category ?? 'note'),
+  });
 });
+
 ipcMain.handle('memory:delete', (_e, key: string) => {
-  const entries = store.get('memory', {}) as Record<string, any>;
-  delete entries[key];
-  store.set('memory', entries);
+  // Supersedes exactly the one believed record for this key. It disappears
+  // from list()/get() as the user expects, and no unrelated project fact is
+  // touched — there is no key- or scope-wide delete anywhere in this path.
+  const row = getBelievedMemoryRow(null, String(key ?? ''));
+  if (row) supersedeMemoryFact(row.id, new Date().toISOString());
 });
 
 // App
