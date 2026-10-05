@@ -280,3 +280,52 @@ truth.
 
 Timing is driven by an injected scheduler, so the coalescing behaviour is tested instantly
 and deterministically rather than by waiting on real timers.
+
+## 16. Live refresh completion — lifecycle fields, coalesced activity, proofs
+
+### The gap that was left behind
+
+`discovered_at` / `last_seen_at` were added as columns **with helper functions to stamp
+them — and nothing ever called those helpers.** Both columns sat permanently NULL.
+
+The fix moved the behaviour into the upsert statements themselves rather than the call
+sites. Stamping at call sites meant six places to remember, and every one of them was
+forgotten; putting it in the SQL makes it impossible to miss.
+
+- **First discovery** sets both, in the INSERT.
+- **Later observation** advances `last_seen_at`; `discovered_at` is `COALESCE`d so a rescan
+  cannot make a long-known file look newly found.
+- **A move** reconciles the existing row *in place by id*, so the identity and
+  `discovered_at` survive a rename — no fake new file.
+- **A missing file** keeps its row, so it still knows when it was first seen and when it was
+  last actually there.
+- **A reappearance** advances `last_seen_at` only.
+
+This is why both pairs of timestamps exist: `created_at`/`modified_at` belong to the FILE,
+`discovered_at`/`last_seen_at` belong to Wavi's knowledge of it. "Indexed since" and
+"missing since" were previously unanswerable.
+
+Proven against the **real shipped SQL**, extracted from db.ts rather than copied.
+
+### Activity coalescing happens at READ time
+
+One DAW save writes dozens of low-level rows. Those are kept — each is a real observation,
+and deleting them would discard history. `brain/activityView.ts` groups them when read, so
+"what did I work on this week?" is an answer rather than a transaction dump.
+
+Grouping is bounded by a time window and never crosses project or event type: "changed this
+morning" and "changed last Tuesday" are two different facts, and flattening them would answer
+"when did this change?" wrongly. A single event still reads as itself rather than "1 × …",
+and group counts always sum to the raw total — nothing is lost.
+
+### Proofs
+
+`liveGoldenPath.integration.test.ts` runs the full sequence against a **file-backed**
+database: initial state → `master-v8.wav` appears → the only call is `markDirty` → memory and
+search both reflect v8 → "what changed recently?" returns the event → **restart** → derived
+memory, activity and `discovered_at` all survive → the first event after restart updates the
+same project without duplicating memory → rename reconciles in place → delete shows missing →
+restore converges, with the file never losing its identity.
+
+Burst behaviour is asserted **logically, not by timing**: 200 events across 10 projects
+produce exactly **10** derive calls. A timing assertion would be brittle on a busy machine.

@@ -18,6 +18,7 @@ import { buildContextPack, summarizePack, type ContextPack, type PackFile, type 
 import type { IndexTruth } from './memory';
 import { parseRange, type TimeRange } from './timeRange';
 import { deriveProjectMemory, type DeriveFile, type DeriveVersion, type DerivedMemory } from './derive';
+import { coalesceActivity, summarizeActivity } from './activityView';
 
 /** Raw row shapes, matching the db queries. */
 export interface RawRecordRow {
@@ -169,18 +170,19 @@ export function createBrainService(deps: BrainDeps) {
      * events so a caller can say "nothing changed yesterday" with confidence
      * rather than leaving an empty list ambiguous.
      */
-    recentActivity(range: string, limit = 200): { range: TimeRange | null; events: SafeActivity[] } {
+    recentActivity(range: string, limit = 200) {
       const r = parseRange(range, deps.now());
-      if (!r) return { range: null, events: [] };
+      if (!r) return { range: null, events: [] as SafeActivity[], grouped: [], byType: [] };
       const rows = deps.getActivityInRange(r.from, r.to, limit);
-      return {
-        range: r,
-        events: rows.map((a) => ({
-          type: a.type, message: a.message,
-          projectId: a.project_id ?? null, projectName: a.project_name ?? null,
-          at: a.created_at,
-        })),
-      };
+      const events = rows.map((a) => ({
+        type: a.type, message: a.message,
+        projectId: a.project_id ?? null, projectName: a.project_name ?? null,
+        at: a.created_at,
+      }));
+      // Grouped at READ time: one DAW save can write dozens of rows, and a
+      // transaction dump is not an answer. The raw events are still returned
+      // so nothing is hidden.
+      return { range: r, events, grouped: coalesceActivity(events), byType: summarizeActivity(events) };
     },
 
     /** Projects touched in a window, most recent first. */
