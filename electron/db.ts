@@ -700,6 +700,9 @@ export function upsertStandaloneFile(file: {
         bpm = COALESCE(?, bpm), key_note = COALESCE(?, key_note),
         duration = COALESCE(?, duration), role = COALESCE(?, role),
         modified_at = ?,
+        -- Observed again: refresh last_seen_at, but NEVER touch discovered_at.
+        -- A rescan must not make a long-known file look newly found.
+        last_seen_at = ?,
         sync_status = CASE
           WHEN ? != file_size OR ? != modified_at THEN 'pending'
           ELSE sync_status
@@ -710,19 +713,22 @@ export function upsertStandaloneFile(file: {
       file.bpm ?? null, file.key_note ?? null,
       file.duration ?? null, file.role ?? 'unknown',
       file.modified_at,
+      file.modified_at,
       file.file_size, file.modified_at,
       existing.id
     );
     return existing.id;
   }
   db.prepare(`
-    INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at)
-    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at, discovered_at, last_seen_at)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     file.id, file.file_path, file.file_name, file.file_type, file.file_size,
     file.checksum ?? null, file.bpm ?? null, file.key_note ?? null,
     file.duration ?? null, file.role ?? 'unknown',
-    file.created_at, file.modified_at
+    file.created_at, file.modified_at,
+    // First time Wavi has ever seen this path.
+    file.modified_at, file.modified_at
   );
   return file.id;
 }
@@ -743,9 +749,14 @@ export function upsertFile(file: {
   modified_at: string;
 }) {
   db.prepare(`
-    INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at)
-    VALUES (@id, @project_id, @file_path, @file_name, @file_type, @file_size, @checksum, @bpm, @key_note, @duration, @role, @created_at, @modified_at)
+    INSERT INTO files (id, project_id, file_path, file_name, file_type, file_size, checksum, bpm, key_note, duration, role, created_at, modified_at, discovered_at, last_seen_at)
+    VALUES (@id, @project_id, @file_path, @file_name, @file_type, @file_size, @checksum, @bpm, @key_note, @duration, @role, @created_at, @modified_at, @modified_at, @modified_at)
     ON CONFLICT(file_path) DO UPDATE SET
+      -- Observed again. discovered_at is COALESCEd, never overwritten: the
+      -- first sighting is a historical fact, and a rescan re-running this
+      -- upsert must not rewrite it.
+      discovered_at = COALESCE(files.discovered_at, excluded.discovered_at),
+      last_seen_at = excluded.last_seen_at,
       project_id = COALESCE(files.project_id, excluded.project_id),
       file_size = excluded.file_size,
       checksum = excluded.checksum,
@@ -1363,16 +1374,22 @@ export function reconcileMovedFile(opts: {
   db.prepare(`
     UPDATE files
     SET file_path=?, file_name=?, file_size=?, modified_at=?,
+        -- A move is the SAME file observed elsewhere: the row is updated in
+        -- place, so discovered_at survives and no fake new identity is created.
+        last_seen_at=?,
         local_status='present', reconciled_from=file_path,
         sync_status=CASE WHEN sync_status='missing' THEN 'synced' ELSE sync_status END
     WHERE id=?
-  `).run(opts.newPath, require('path').basename(opts.newPath), opts.newSize, opts.newMtime, opts.id);
+  `).run(opts.newPath, require('path').basename(opts.newPath), opts.newSize, opts.newMtime, opts.newMtime, opts.id);
 }
 
 /** Mark a previously-missing file as present again (e.g. restored from backup). */
-export function markFilePresent(filePath: string): void {
-  db.prepare("UPDATE files SET local_status='present' WHERE file_path=?")
-    .run(filePath);
+export function markFilePresent(filePath: string, nowIso?: string): void {
+  // A reappearance is an observation, so last_seen_at advances — but
+  // discovered_at stays put: the file was first found when it was first found,
+  // and a restore does not rewrite that history.
+  db.prepare("UPDATE files SET local_status='present', last_seen_at=COALESCE(?, last_seen_at) WHERE file_path=?")
+    .run(nowIso ?? null, filePath);
 }
 
 /** Returns DB diagnostics for the diagnostics page. */
@@ -1573,13 +1590,14 @@ export function getFilesChangedSinceVersion(projectId: string, versionId: string
   return { sinceIso: v.created_at, files: rows };
 }
 
-/** Mark a file as still present, without disturbing its own timestamps. */
+/**
+ * Mark a file as still present.
+ *
+ * The upsert paths set discovered_at/last_seen_at themselves, which is why
+ * there is no separate "stamp discovered" helper: putting it at the call sites
+ * meant six places to forget, and the columns sat permanently NULL because
+ * every one of them did.
+ */
 export function touchFileLastSeen(filePath: string, nowIso: string) {
   db.prepare('UPDATE files SET last_seen_at = ? WHERE file_path = ?').run(nowIso, filePath);
-}
-
-/** Set discovered_at once, the first time Wavi ever indexed this path. */
-export function stampFileDiscovered(filePath: string, nowIso: string) {
-  db.prepare('UPDATE files SET discovered_at = COALESCE(discovered_at, ?), last_seen_at = ? WHERE file_path = ?')
-    .run(nowIso, nowIso, filePath);
 }
