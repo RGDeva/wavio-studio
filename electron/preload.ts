@@ -64,6 +64,13 @@ contextBridge.exposeInMainWorld('waviAPI', {
     recall: (projectId: string) => ipcRenderer.invoke('brain:recall', projectId),
     remember: (opts: { projectId: string; key: string; value: string }) =>
       ipcRenderer.invoke('brain:remember', opts),
+    /** Whether the brain is keeping itself current, and how much is queued. */
+    refreshStatus: () => ipcRenderer.invoke('brain:refreshStatus'),
+    recentActivity: (range: string, limit?: number) => ipcRenderer.invoke('brain:recentActivity', range, limit),
+    recentProjects: (range: string, limit?: number) => ipcRenderer.invoke('brain:recentProjects', range, limit),
+    changedSince: (projectId: string, versionId: string) => ipcRenderer.invoke('brain:changedSince', projectId, versionId),
+    findFiles: (query: string, limit?: number) => ipcRenderer.invoke('brain:findFiles', query, limit),
+    projectMemory: (projectId: string) => ipcRenderer.invoke('brain:projectMemory', projectId),
   },
 
   daw: {

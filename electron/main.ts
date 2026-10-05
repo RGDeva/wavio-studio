@@ -45,6 +45,7 @@ import { planRestoreAdoption } from './restoreAdoption';
 import { resolveApplication } from './adapters/index';
 import { planCrossDawHandoff, buildFidelityReport } from './crossDaw';
 import { createBrainService } from './brain/service';
+import { createBrainRefresher } from './brain/liveRefresh';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
 // Project Link cache. Set on any authenticated PL response, cleared on logout.
@@ -499,6 +500,12 @@ app.whenReady().then(async () => {
 
   // Step 4: Initialize watcher manager with safe IPC sender
   watcherManager = new WatcherManager(db, (event) => {
+    // Keep Project Brain current. Marking is cheap and coalesced, so it is
+    // safe on every event; the recompute happens once per debounce window.
+    // Wrapped because memory refresh is strictly secondary to indexing and
+    // must never break the watcher's own notification path.
+    try { brainRefresher.markDirty((event as any)?.projectId ?? null); } catch { /* non-fatal */ }
+
     if (mainWindow && !mainWindow.isDestroyed()) {
       try {
         mainWindow.webContents.send('watcher:event', event);
@@ -2758,8 +2765,26 @@ ipcMain.handle('folders:rescan', async (_e, folderPath: string) => {
   scanMeta[folderPath] = { lastScanned: new Date().toISOString(), fileCount: result.found };
   store.set('folderScanMeta', scanMeta);
 
+  // A manual Rescan is the user asking explicitly, so refresh every affected
+  // project’s memory now rather than waiting out a debounce they cannot see.
+  // forceRefresh deliberately bypasses the per-project interval floor.
+  let memoryRefreshed = 0;
+  try {
+    const flushed = brainRefresher.flushNow();
+    memoryRefreshed = flushed.refreshed.length;
+    for (const proj of getProjects() as any[]) {
+      if (signal.aborted) break;
+      if (typeof proj?.file_path === 'string' && proj.file_path.startsWith(folderPath)) {
+        brainRefresher.forceRefresh(proj.id);
+        memoryRefreshed++;
+      }
+    }
+  } catch (e: any) {
+    mainLog(`[brain] rescan refresh failed (scan itself succeeded): ${e?.message}`);
+  }
+
   mainWindow?.webContents.send('discovery:progress', { phase: 'done', found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors });
-  return { found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors, durationMs, cancelled: signal.aborted };
+  return { found: result.found, imported, duplicates, scanned: result.scanned, permissionErrors: result.permissionErrors, durationMs, cancelled: signal.aborted, memoryRefreshed };
 });
 
 // Folder scan metadata (last scanned, file count)
@@ -2938,6 +2963,71 @@ ipcMain.handle('daw:planHandoff', (_e, opts: {
 // Deterministic local state is the source of truth. The service composes pure
 // modules (query / retrieval / memory / contextPack) over real rows; nothing
 // here calls a model, and nothing a model says can become a derived fact.
+/**
+ * Rows needed to recompute a project's derived memory.
+ *
+ * Shared by the brain service and the live refresher deliberately: two copies
+ * of this would drift, and a refresher deriving from slightly different rows
+ * than the reader would produce memory that disagrees with itself.
+ */
+function buildDeriveInput(projectId: string) {
+  const project = getProjectById(projectId) as any;
+  if (!project) return null;
+  const files = (getFilesByProject(projectId) as any[]).map((f) => ({
+    id: f.id, name: f.file_name, role: f.role ?? null, fileType: f.file_type ?? null,
+    sizeBytes: f.file_size ?? null, modifiedAt: f.modified_at ?? null,
+    localStatus: f.local_status ?? null, syncStatus: f.sync_status ?? null,
+    checksum: f.checksum ?? null,
+  }));
+  const versions = (getVersionsByProject(projectId) as any[]).map((v) => ({
+    id: v.id, versionNumber: v.version_number ?? null, createdAt: v.created_at ?? null,
+  }));
+  const activity = getActivityForProject(projectId, 1) as any[];
+  return {
+    projectName: project.project_name,
+    dawType: project.daw_type ?? null,
+    files, versions,
+    lastActivityAt: activity[0]?.created_at ?? null,
+  };
+}
+
+/** Convert a stored fact row into the shape the memory planner expects. */
+function factRowToFact(row: any) {
+  return {
+    id: row.id, projectId: row.project_id, key: row.key, value: row.value,
+    kind: row.kind === 'stated' ? 'stated' as const : 'derived' as const,
+    source: { origin: row.source_origin, producer: row.source_producer },
+    observedAt: row.observed_at, supersededAt: row.superseded_at,
+  };
+}
+
+/**
+ * Keeps derived project memory current from live watcher events, so the
+ * assistant never answers from a stale picture and the user never has to
+ * press Rescan for ordinary changes.
+ *
+ * Coalesced: a DAW save touching dozens of files produces one recompute, and
+ * a recompute that finds nothing changed writes nothing.
+ */
+const brainRefresher = createBrainRefresher({
+  getDeriveInput: buildDeriveInput,
+  getBelievedFact: (projectId, key) => {
+    const row = getBelievedFactRow(projectId, key) as any;
+    return row ? factRowToFact(row) : null;
+  },
+  insertFact: (f) => insertProjectFact({
+    id: f.id, project_id: f.projectId, key: f.key, value: f.value, kind: f.kind,
+    source_origin: f.source.origin, source_producer: f.source.producer,
+    observed_at: f.observedAt, superseded_at: null,
+  } as any),
+  supersedeFact: (id, at) => supersedeProjectFact(id, at),
+  newId: () => crypto.randomUUID(),
+  now: () => new Date().toISOString(),
+  schedule: (fn, ms) => setTimeout(fn, ms),
+  cancel: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+  log: (m) => mainLog(m),
+});
+
 const brain = createBrainService({
   getRecords: () => getBrainRecordRows() as any,
   getFactRows: (projectId) => getProjectFactRows(projectId) as any,
@@ -2989,29 +3079,13 @@ const brain = createBrainService({
   getRecentProjectRows: (since, limit) => getRecentProjectRowsDb(since, limit) as any,
   getRecentFileRows: (since, limit) => getRecentFiles(since, limit) as any,
   getFilesChangedSinceVersion: (projectId, versionId) => getFilesChangedSinceVersion(projectId, versionId) as any,
-  getDeriveInput: (projectId) => {
-    const project = getProjectById(projectId) as any;
-    if (!project) return null;
-    const files = (getFilesByProject(projectId) as any[]).map((f) => ({
-      id: f.id, name: f.file_name, role: f.role ?? null, fileType: f.file_type ?? null,
-      sizeBytes: f.file_size ?? null, modifiedAt: f.modified_at ?? null,
-      localStatus: f.local_status ?? null, syncStatus: f.sync_status ?? null,
-      checksum: f.checksum ?? null,
-    }));
-    const versions = (getVersionsByProject(projectId) as any[]).map((v) => ({
-      id: v.id, versionNumber: v.version_number ?? null, createdAt: v.created_at ?? null,
-    }));
-    const activity = getActivityForProject(projectId, 1) as any[];
-    return {
-      projectName: project.project_name,
-      dawType: project.daw_type ?? null,
-      files, versions,
-      lastActivityAt: activity[0]?.created_at ?? null,
-    };
-  },
+  getDeriveInput: buildDeriveInput,
   now: () => new Date().toISOString(),
   newId: () => crypto.randomUUID(),
 });
+
+/** Is the brain keeping itself current, and how much is queued? */
+ipcMain.handle('brain:refreshStatus', () => ({ pending: brainRefresher.pendingCount(), live: true }));
 
 /** Deterministic retrieval across every indexed project. */
 ipcMain.handle('brain:search', (_e, query: string, limit?: number) =>
