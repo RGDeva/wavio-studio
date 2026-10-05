@@ -53,6 +53,19 @@ contextBridge.exposeInMainWorld('waviAPI', {
   },
 
   // DAW capability report (compatibility surface)
+  /**
+   * Project Brain — deterministic retrieval and attributed memory.
+   * Read-mostly; the only write is a STATED fact, and main forces its
+   * provenance so a renderer cannot claim the index as its source.
+   */
+  brain: {
+    search: (query: string, limit?: number) => ipcRenderer.invoke('brain:search', query, limit),
+    contextPack: (projectId: string) => ipcRenderer.invoke('brain:contextPack', projectId),
+    recall: (projectId: string) => ipcRenderer.invoke('brain:recall', projectId),
+    remember: (opts: { projectId: string; key: string; value: string }) =>
+      ipcRenderer.invoke('brain:remember', opts),
+  },
+
   daw: {
     getCapabilities: (opts: { dawType?: string | null; filePath?: string | null }) =>
       ipcRenderer.invoke('daw:getCapabilities', opts),
