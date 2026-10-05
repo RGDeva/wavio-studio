@@ -329,3 +329,65 @@ restore converges, with the file never losing its identity.
 
 Burst behaviour is asserted **logically, not by timing**: 200 events across 10 projects
 produce exactly **10** derive calls. A timing assertion would be brittle on a busy machine.
+
+## 17. Memory unification — one persistent store (2026-10-05)
+
+Four `memory:*` IPC handlers still wrote an electron-store JSON blob, leaving Wavi with two
+independent memory systems. They now write `project_facts`. The channel names and observable
+behaviour are unchanged; only the storage moved, so no UI rewrite was needed.
+
+### Audit
+
+| API/channel | Was | Caller | Semantics | Migration |
+|---|---|---|---|---|
+| `memory:list` | electron-store | `CopilotPage`, overlay `CopilotPanel` (count) | all entries, global | `listMemory(null)` |
+| `memory:get` | electron-store | — (available via preload) | value by key | `getBelievedMemoryRow(null, key)` |
+| `memory:set` | electron-store | `CopilotPage` (`last_chat`, user notes) | upsert, preserves `createdAt` | supersede + insert |
+| `memory:delete` | electron-store | `CopilotPage` | hard delete | supersede (hidden, not destroyed) |
+
+Source search found **no assistant tool** reading the legacy store, so §10's "eliminate any
+bypass" required no change — only verification. Nothing writes the blob any more.
+
+### Scope — why global is modelled, not faked
+
+The legacy store was app-wide. Filing those entries under an arbitrary project would
+misclassify them, so `project_facts.project_id` is now **nullable**, where NULL means global.
+
+This required the smallest compatible extension, and one non-obvious correction:
+
+> A plain `UNIQUE(project_id, key)` does **not** dedupe global rows, because SQLite treats
+> NULLs as **distinct** in a unique index. Verified empirically before relying on it — every
+> write of `last_chat` would otherwise have piled up a new row forever. The index is now on
+> `COALESCE(project_id, '')`.
+
+Legacy databases declared `project_id NOT NULL`, so the table is rebuilt on migration — the
+same approach the `files` table already uses to drop its own NOT NULL.
+
+### Provenance
+
+User memory migrates as `kind: 'stated'`, `origin: 'user'` — explicit human assertion, never
+derived. Collapsing it into derived facts would make something a person typed
+indistinguishable from something the watcher computed. Global memory is additionally
+forbidden from being `derived` at all: it has no project to recompute from, so a derived
+global fact could never be falsified.
+
+### Conflict semantics
+
+- **Inference vs fact** — unchanged: a derived observation cannot overwrite a stated fact
+  (`planFactWrite` rejects it).
+- **Migration vs existing** — a newer Project Brain record wins; by then the legacy blob is
+  the stale copy. A `derived` fact occupying the same key is reported, not overwritten.
+- **Two explicit memories** — last write supersedes, and the prior value stays queryable, so
+  provenance and history survive the disagreement.
+
+### Delete
+
+`memory:delete` supersedes exactly one record **by id**. It disappears from `list()`/`get()`
+as the user expects, nothing unrelated is touched, and there is no key- or scope-wide delete
+anywhere in the path.
+
+### The legacy blob is not destroyed
+
+Migration is idempotent (gated on `migratedMemoryV1`), non-fatal, and leaves the original
+JSON on disk. The transfer succeeds without it, but keeping it costs nothing and is the only
+rollback path. Nothing reads it again.

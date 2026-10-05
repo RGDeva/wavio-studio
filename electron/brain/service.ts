@@ -28,7 +28,8 @@ export interface RawRecordRow {
 }
 
 export interface RawFactRow {
-  id: string; project_id: string; key: string; value: string;
+  /** null = global memory, not tied to a project. */
+  id: string; project_id: string | null; key: string; value: string;
   kind: string; source_origin: string; source_producer: string;
   observed_at: string; superseded_at: string | null;
 }
