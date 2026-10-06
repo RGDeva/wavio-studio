@@ -36,7 +36,10 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
   const [discoveryProgress, setDiscoveryProgress] = useState<DiscoveryProgress | null>(null);
   const [newKey, setNewKey] = useState('');
   const [newVal, setNewVal] = useState('');
-  const [pendingConfirm, setPendingConfirm] = useState<{ tool: string; params: Record<string, unknown>; summary: string; ctx: any } | null>(null);
+  // One card serves both paths. `proposalId` marks an AGENT proposal, which
+  // is confirmed by id alone — the cloud copilot path still re-sends its
+  // arguments, which is why the agent path deliberately does not.
+  const [pendingConfirm, setPendingConfirm] = useState<{ tool: string; params: Record<string, unknown>; summary: string; ctx: any; proposalId?: string } | null>(null);
   const [confirmBusy, setConfirmBusy] = useState(false);
   // Explicit, user-visible active-project selection. There is NO implicit
   // "last project" — the assistant acts only on the project chosen here, and
@@ -99,6 +102,37 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
     try {
       // Explicit project context — the selected project id, never an implicit default.
       const ctx = await api.copilot.getContext(selectedProjectId || null).catch(() => null);
+
+      // Agent Actions v1 — local, deterministic, and asked FIRST. "Share
+      // Sunshine" is a request to do something, and the local path can resolve
+      // the target and propose it without a round trip to the cloud. Anything
+      // it does not recognise falls straight through to the assistant below,
+      // so this narrows nothing.
+      const plan = await api.brain.proposeAction?.({
+        question: content, projectId: selectedProjectId || null,
+      }).catch(() => null);
+      if (plan && plan.kind !== 'none') {
+        if (plan.kind === 'needs_confirmation' || plan.kind === 'ready') {
+          setMessages(prev => [...prev, {
+            id: crypto.randomUUID(), role: 'assistant',
+            content: plan.summary, ts: new Date().toISOString(),
+          }]);
+          setPendingConfirm({ tool: plan.tool, params: {}, summary: plan.summary, ctx, proposalId: plan.proposalId });
+        } else {
+          // Refused, rejected or ambiguous: say so plainly and stop. Guessing
+          // past any of these is how an agent shares the wrong song.
+          const text = plan.kind === 'clarify'
+            ? `${plan.message}\n${plan.options.map(o => `• ${o.label}`).join('\n')}`
+            : plan.kind === 'refused' ? plan.message
+            : plan.kind === 'rejected' ? plan.reason
+            : 'Wavi did not act on that.';
+          setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: text, ts: new Date().toISOString() }]);
+        }
+        await api.memory.set('last_chat', content, 'context').catch(() => {});
+        setLoading(false);
+        return;
+      }
+
       const history = [...messages, userMsg].map(m => ({ role: m.role as 'user'|'assistant', content: m.content }));
       const reply = await api.copilot.chat(history, ctx).catch(() => 'Copilot unavailable — ensure you are signed in.' as const);
       if (typeof reply === 'object' && reply !== null && 'pendingConfirmation' in reply) {
@@ -120,7 +154,9 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
     if (!pendingConfirm || confirmBusy) return;
     setConfirmBusy(true);
     try {
-      const r = await api.copilot.confirmTool(pendingConfirm.tool, pendingConfirm.params, pendingConfirm.ctx);
+      const r = pendingConfirm.proposalId
+        ? await api.brain.confirmAction({ proposalId: pendingConfirm.proposalId })
+        : await api.copilot.confirmTool(pendingConfirm.tool, pendingConfirm.params, pendingConfirm.ctx);
       setMessages(prev => [...prev, {
         id: crypto.randomUUID(), role: 'assistant',
         content: r.message ?? r.error ?? (r.status === 'done' ? 'Done.' : 'Something went wrong.'),
@@ -135,7 +171,11 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
   };
 
   const handleCancelConfirm = () => {
-    // Explicit cancel: the gated action never runs.
+    // Explicit cancel: the gated action never runs. For an agent proposal the
+    // binding is discarded in main too, so a late confirmation finds nothing.
+    if (pendingConfirm?.proposalId) {
+      api.brain.cancelAction({ proposalId: pendingConfirm.proposalId }).catch(() => {});
+    }
     setPendingConfirm(null);
     setMessages(prev => [...prev, { id: crypto.randomUUID(), role: 'assistant', content: 'Cancelled — no action was taken.', ts: new Date().toISOString() }]);
   };

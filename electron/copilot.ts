@@ -126,7 +126,14 @@ function getAuthToken(): string | null {
   } catch { return null; }
 }
 
-async function buildProjectContext(requestedProjectId?: string | null): Promise<ProjectContext> {
+/**
+ * The canonical project context the copilot tools expect.
+ *
+ * Exported so the agent path uses this one rather than assembling its own: a
+ * second context builder would drift from this, and the tools' behaviour
+ * depends on the difference.
+ */
+export async function buildProjectContext(requestedProjectId?: string | null): Promise<ProjectContext> {
   const projects = getProjects() as any[];
   // Explicit project context (P3-3 hardening): resolve ONLY the project the
   // caller explicitly named. There is NO implicit "most-recently-modified"

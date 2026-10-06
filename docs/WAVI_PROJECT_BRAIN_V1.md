@@ -578,3 +578,94 @@ pipeline never reaches proposal validation.
 Every stage — proposed, rejected, confirmed, executed, failed — is written to `activity_log`
 as an `agent_action`, in plain language, with recording wrapped so it can never break the
 action itself.
+
+## 22. Agent Actions v1, completed — resolution, binding, authorization (2026-10-06)
+
+§21 shipped three gates. This adds the four that make the loop safe to actually
+close, and each lives in its own module so a caller cannot reach execution by
+assembling the pieces differently:
+
+| # | Gate | Module | Question it answers |
+|---|------|--------|---------------------|
+| 1 | Schema | `actionSchema.ts` | Is this even a proposal? |
+| 2 | Allowlist | `agentActions.ts` | May this be done at all? |
+| 3 | Arguments | `agentActions.ts` | Does the canonical tool accept these? |
+| 4 | Grounding | `agentActions.ts` | Was the model shown these entities? |
+| 5 | Resolution | `actionResolution.ts` | What is the canonical target? |
+| 6 | Authorization | `actionAuthorization.ts` | May *this user* do it? |
+| 7 | Confirmation | `proposalStore.ts` | Did the user approve *this* proposal? |
+
+### The model never supplies an identifier
+
+A model may say "Sunshine"; it may not say `p-9f3c…`. Resolution looks the name
+up against what Wavi indexed, and the resolved id **replaces** whatever the
+model offered. So a hallucinated id cannot reach the server even when the model
+is confidently wrong — it is not rejected so much as never used.
+
+An exact name wins over longer names containing it, because a user with
+Sunshine, Sunshine Remix and Sunshine 2 who says "Sunshine" means Sunshine.
+Short of exact, a phrase that *contains* a whole project name resolves to the
+longest one it contains; a phrase that is merely a *fragment* of several names
+resolves to nothing and asks. Versions order by the number Wavi assigned, never
+by timestamp — and two versions sharing the highest number means Wavi's own
+records disagree, which is a question, not a coin toss.
+
+### Confirmation binds to one exact proposal
+
+The hazard is specific: if confirming means "run this tool with these
+arguments", the arguments travel to the renderer and back, and a user who
+approved *downloads off* can have *downloads on* executed in their name. So the
+validated proposal never leaves main. The renderer gets an opaque id and a
+sentence; confirming sends the id and nothing else. There is no argument
+channel to tamper with because the arguments were never handed out.
+
+Consuming is single-use, which is also the whole idempotency story: a double
+click, a duplicated IPC message or a retried confirmation finds the proposal
+spent and does nothing. No new idempotency key is minted — the canonical tool's
+own semantics stay in charge of what reaches the server.
+
+### Permission is read, never granted
+
+A model proposing `publish_child_version` on a view-only checkout is refused
+locally, using the permission the restore recorded and the same comment-only
+contribution rule `adoptionAllowsContribution` already encodes. Creating a link
+requires `owner`: sharing a project you were merely *shown* would re-share
+someone else's work under your access. Unknown authorization fails **closed** —
+not knowing is not the same as being allowed.
+
+### The refusal layer is a courtesy, not the defence
+
+"Run rm -rf ~/Music" gets a plain answer about Wavi having no path to a
+terminal. But that pattern matching is deliberately not what makes it safe: no
+delete, move, rename, revoke, invite or shell tool is proposable at all, so a
+rephrasing defeats the courtesy and reaches nothing. Describing it the other
+way round is how prompt-level filters come to be trusted.
+
+### Execution, and whose word counts
+
+`brain:confirmAction` looks up an existing registered tool and invokes it.
+There is no second Project Link client, no HTTP, no SQL, no filesystem call.
+The tools' own envelope still performs its own validation, authentication and
+confirmation — proven by a test that invokes the real `create_project_link`
+unconfirmed and watches it refuse, and another that watches it refuse while
+signed out. The agent is not the only gate; it is the outermost one.
+
+The authoritative outcome is the tool's. The model's prediction was never
+consulted, and a failing tool is reported as failing in its own words.
+
+### Recorded, and therefore remembered
+
+Every stage — proposed, rejected, cancelled, confirmed, executed, failed —
+becomes an `agent_action` in `activity_log`, path-redacted, which Project Brain
+reads back with no type allowlist in between. The agent acts, Wavi records it,
+Brain remembers it.
+
+### One defect found in §21's own work
+
+The allowlist declared `fileId` for `reveal_file`, whose canonical parameter is
+`fileName`. That proposal would have passed every agent gate and then been
+rejected by the tool's own input validation, for a reason the user never sees.
+Four tests had encoded the wrong name along with it. `agentActionsContract.test.ts`
+now **extracts** every parameter name from the tool's own source and checks the
+allowlist against it in both directions, so this particular mirror cannot drift
+again.
