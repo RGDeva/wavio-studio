@@ -84,6 +84,8 @@ export default defineConfig({
       'electron/brain/localAgent.test.ts',
       'electron/brain/localAgentStructured.test.ts',
       'electron/brain/agentActions.test.ts',
+      'electron/brain/agentActionsContract.test.ts',
+      'electron/brain/agentActionsV1.test.ts',
     ],
     environment: 'node',
   },

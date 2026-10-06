@@ -290,24 +290,39 @@ export interface WaviAPI {
       text: string;
       source: 'model' | 'deterministic';
       citedContextIds?: string[];
-      /** A suggestion the agent made. Validated in main; still not performed. */
-      proposedAction?: {
-        tool: string; params: Record<string, unknown>;
-        mutating: boolean; requiresConfirmation: boolean; summary: string;
+      /**
+       * A suggestion the agent made, already resolved, authorized and BOUND in
+       * main. The renderer gets an id and a sentence — never the arguments, so
+       * there is nothing here to tamper with before confirming.
+       */
+      pendingAction?: {
+        proposalId: string; tool: string; summary: string;
+        requiresConfirmation: boolean; expiresAt?: string;
       };
       rejectedAction?: { tool: string; reason: string };
+      /** More than one target matched; safe refs only, never canonical ids. */
+      clarify?: { message: string; options: Array<{ ref: string; label: string }> };
       rejectionReason?: string;
     }>;
     /**
-     * Run a proposal the user chose to accept. `confirmed` must be true for a
-     * mutating action — it stands for the user's click, and main re-validates
-     * the entire proposal against freshly built context regardless, because
-     * nothing arriving from the renderer is trusted.
+     * Plan an action for a request. Nothing runs: a mutation comes back as
+     * `needs_confirmation` with an opaque proposal id and a sentence to show.
+     * Ambiguity comes back as `clarify` with safe refs, never canonical ids.
      */
-    runProposedAction: (opts: {
-      tool: string; params?: Record<string, unknown>; projectId?: string | null;
-      question?: string; confirmed?: boolean;
-    }) => Promise<{ ok: boolean; status?: string; result?: unknown; error?: string }>;
+    proposeAction: (opts: { question: string; projectId?: string | null; modelProposal?: unknown }) => Promise<
+      | { kind: 'none' }
+      | { kind: 'refused'; message: string }
+      | { kind: 'rejected'; tool: string; reason: string }
+      | { kind: 'clarify'; message: string; options: Array<{ ref: string; label: string }> }
+      | { kind: 'ready' | 'needs_confirmation'; proposalId: string; summary: string; tool: string; requiresConfirmation: boolean; expiresAt?: string }
+    >;
+    /**
+     * Execute the approved proposal. Takes the id alone, and it is single-use,
+     * so a double click cannot run the action twice.
+     */
+    confirmAction: (opts: { proposalId: string }) => Promise<{ status?: string; message?: string; error?: string; data?: unknown }>;
+    /** Decline it. Nothing ran, and nothing records that it did. */
+    cancelAction: (opts: { proposalId: string }) => Promise<{ ok: boolean }>;
   };
   app: {
     relaunch: () => Promise<void>;
@@ -409,7 +424,7 @@ const _stub: WaviAPI = {
     publishContribution: _noop, respondContribution: _noop, withdrawContribution: _noop,
   },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
-  brain: { modelStatus: _noop, ask: _noop, runProposedAction: _noop },
+  brain: { modelStatus: _noop, ask: _noop, proposeAction: _noop, confirmAction: _noop, cancelAction: _noop },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },

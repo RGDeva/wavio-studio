@@ -49,7 +49,13 @@ import { createBrainRefresher } from './brain/liveRefresh';
 import { createLocalProvider } from './brain/localProvider';
 import { setLlmProvider, getLlmProvider } from './brain/llmProvider';
 import { resolveModelState } from './brain/modelLifecycle';
-import { validateProposedAction, describeOutcome } from './brain/agentActions';
+import { describeOutcome, type ActionOutcomeRecord } from './brain/agentActions';
+import { planAgentAction, inferProposalFromRequest } from './brain/actionPlanner';
+import { createProposalStore } from './brain/proposalStore';
+import { executeConfirmedProposal } from './brain/actionExecution';
+import { OWNER_AUTHORIZATION, type ProjectAuthorization } from './brain/actionAuthorization';
+import { adoptionAllowsContribution } from './restoreAdoption';
+import { buildProjectContext } from './copilot';
 import { planLegacyMemoryMigration } from './brain/legacyMemoryMigration';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
@@ -3189,84 +3195,235 @@ ipcMain.handle('brain:ask', async (_e, opts: { question?: string; projectId?: st
   });
   // The full context is intentionally NOT returned to the renderer; the answer
   // and its grounding verdict are what the UI needs.
-  const { context: _ctx, ...safe } = result;
-  return safe;
+  const { context: _ctx, proposedAction, ...safe } = result;
+
+  // A suggestion the model made has cleared the schema, allowlist, argument
+  // and grounding gates — but not resolution, authorization or binding. Those
+  // live in the planner, so it goes through the same path a deterministic
+  // request does rather than being surfaced as if it were ready to run. The
+  // renderer therefore never receives an unbound action.
+  if (!proposedAction) return safe;
+
+  const targetId = opts?.projectId ?? null;
+  const plan = planAgentAction({
+    question,
+    context: brain.assistantContext({ query: question, projectId: targetId }),
+    modelProposal: { tool: proposedAction.tool, arguments: proposedAction.params },
+    projects: indexedProjectCandidates(),
+    versions: targetId ? projectVersionCandidates(targetId) : [],
+    authorization: targetId ? resolveProjectAuthorization(targetId) : null,
+  });
+  if (plan.kind !== 'proposal') {
+    if (plan.kind === 'rejected') {
+      recordAgentAction({ tool: plan.tool, mutating: false, outcome: 'rejected', detail: plan.reason }, targetId);
+      return { ...safe, rejectedAction: { tool: plan.tool, reason: plan.reason } };
+    }
+    if (plan.kind === 'clarify') return { ...safe, clarify: { message: plan.message, options: plan.options } };
+    return safe;
+  }
+  const bound = agentProposals.mint(plan.action, {
+    projectId: plan.projectId, summary: plan.summary, versionId: plan.versionId,
+  });
+  recordAgentAction({ tool: plan.action.tool, mutating: plan.action.mutating, outcome: 'proposed' }, plan.projectId);
+  return {
+    ...safe,
+    pendingAction: {
+      proposalId: bound.id, tool: plan.action.tool, summary: plan.summary,
+      requiresConfirmation: plan.requiresConfirmation, expiresAt: bound.expiresAt,
+    },
+  };
 });
 
 /**
- * Run an action the agent proposed.
+ * Agent Actions v1 — propose, confirm, execute.
  *
- * The proposal arrives from the renderer, so NOTHING about it is trusted: the
- * context is rebuilt here and the proposal is re-validated against it. A
- * renderer that sent a tampered tool name or a different project id gets the
- * same refusal the model would have.
+ * Three handlers, and the shape of them is the safety argument:
  *
- * Mutating actions additionally require `confirmed: true`, which the renderer
- * sets only after the user's own click. That is what reaches the existing tool
- * envelope as confirmedOutOfBand — the model never touches it, and never sees
- * this channel at all.
+ *   brain:proposeAction  plans and, for a mutation, mints a bound proposal.
+ *                        Returns an opaque id and a sentence. Nothing runs.
+ *   brain:confirmAction   takes an id ALONE. The arguments never left this
+ *                        process, so there is no channel through which a
+ *                        confirmed proposal could be swapped for another.
+ *   brain:cancelAction    discards it.
+ *
+ * Every canonical identifier in a plan was resolved here, from Wavi's own
+ * records. Anything the model offered has already been discarded.
  */
-ipcMain.handle('brain:runProposedAction', async (_e, opts: {
-  tool?: string;
-  params?: Record<string, unknown>;
-  projectId?: string | null;
+
+/** Proposals awaiting the user's click. Never serialised to the renderer. */
+const agentProposals = createProposalStore({
+  now: () => new Date(),
+  newId: () => `prop_${crypto.randomUUID()}`,
+});
+
+function recordAgentAction(rec: ActionOutcomeRecord, projectId?: string | null): void {
+  try {
+    const { redactPathsInText } = require('./copilotTools/envelope');
+    // A detail can originate in a thrown error, which may carry an absolute
+    // path. The activity log is read back into Project Brain context and shown
+    // in the UI, so it gets the same redaction every tool result gets.
+    const safe: ActionOutcomeRecord = {
+      ...rec,
+      detail: rec.detail ? String(redactPathsInText(rec.detail)) : undefined,
+    };
+    logActivity({
+      id: crypto.randomUUID(), type: 'agent_action',
+      message: redactPathsInText(describeOutcome(safe)),
+      project_id: projectId ?? undefined,
+      metadata: { tool: safe.tool, mutating: safe.mutating, outcome: safe.outcome, detail: safe.detail },
+    });
+  } catch { /* recording must never break the action */ }
+}
+
+/**
+ * This user's recorded access to a project.
+ *
+ * A project adopted from a restore carries the permission the link granted,
+ * and contribution follows the existing comment-only rule rather than a second
+ * one invented here. Anything else is a project the user made, which they own.
+ */
+function resolveProjectAuthorization(projectId: string): ProjectAuthorization | null {
+  try {
+    const project = getProjectById(projectId) as any;
+    if (!project) return null;
+    const restored = project.file_path ? getRestoredProjectByLocalPath(project.file_path) : null;
+    if (!restored) return OWNER_AUTHORIZATION;
+    const permission = restored.collaborator_permission ?? 'view';
+    return {
+      role: permission === 'comment' ? 'comment' : 'view',
+      canPublishChildVersion: adoptionAllowsContribution(permission),
+    };
+  } catch {
+    // Failing to read authorization must not read as permission.
+    return null;
+  }
+}
+
+function indexedProjectCandidates(): Array<{ id: string; name: string; updatedAt?: string | null }> {
+  try {
+    return (getProjects() as any[]).map((r) => ({
+      id: r.id, name: r.project_name, updatedAt: r.modified_at ?? null,
+    }));
+  } catch { return []; }
+}
+
+function projectVersionCandidates(projectId: string): Array<{ id: string; versionNumber: number; publishedAt?: string | null }> {
+  try {
+    return (getVersionsByProject(projectId) as any[])
+      .filter((v) => Number.isFinite(Number(v.version_number)))
+      .map((v) => ({ id: v.id, versionNumber: Number(v.version_number), publishedAt: v.created_at ?? null }));
+  } catch { return []; }
+}
+
+/**
+ * Plan an action for a request.
+ *
+ * The model's proposal is optional: when no local model is configured, a
+ * narrow deterministic reading of the request stands in, so the action path is
+ * not a privilege of users who installed one. Both go through identical gates.
+ */
+ipcMain.handle('brain:proposeAction', async (_e, opts: {
   question?: string;
-  confirmed?: boolean;
+  projectId?: string | null;
+  /** The model's raw proposal, when the caller already has one. Untrusted. */
+  modelProposal?: unknown;
 }) => {
-  const record = (outcome: Parameters<typeof describeOutcome>[0]) => {
-    try {
-      logActivity({
-        id: crypto.randomUUID(), type: 'agent_action',
-        message: describeOutcome(outcome),
-        project_id: opts?.projectId ?? undefined,
-        metadata: { tool: outcome.tool, mutating: outcome.mutating, outcome: outcome.outcome, detail: outcome.detail },
-      });
-    } catch { /* recording must never break the action */ }
-  };
+  const question = String(opts?.question ?? '');
+  const context = brain.assistantContext({ query: question, projectId: opts?.projectId ?? null });
+  const proposal = opts?.modelProposal ?? inferProposalFromRequest(question);
 
-  const toolName = String(opts?.tool ?? '');
-  // Re-validate against a FRESHLY built context, not whatever the renderer
-  // claims the context was.
-  const context = brain.assistantContext({
-    query: String(opts?.question ?? ''),
-    projectId: opts?.projectId ?? null,
+  const targetId = opts?.projectId ?? context.project?.id ?? null;
+  const plan = planAgentAction({
+    question,
+    context,
+    modelProposal: proposal,
+    projects: indexedProjectCandidates(),
+    versions: targetId ? projectVersionCandidates(targetId) : [],
+    authorization: targetId ? resolveProjectAuthorization(targetId) : null,
   });
-  const v = validateProposedAction({ tool: toolName, params: opts?.params ?? {} }, context);
-  if (!v.ok) {
-    record({ tool: toolName || '(none)', mutating: false, outcome: 'rejected', detail: v.reason });
-    return { status: 'error', error: v.reason };
+
+  if (plan.kind === 'refused') {
+    recordAgentAction({ tool: '(refused)', mutating: false, outcome: 'rejected', detail: plan.category }, targetId);
+    return { kind: 'refused', message: plan.message };
+  }
+  if (plan.kind === 'rejected') {
+    recordAgentAction({ tool: plan.tool, mutating: false, outcome: 'rejected', detail: plan.reason }, targetId);
+    return { kind: 'rejected', tool: plan.tool, reason: plan.reason };
+  }
+  if (plan.kind === 'clarify') {
+    return { kind: 'clarify', message: plan.message, options: plan.options };
+  }
+  if (plan.kind === 'none') return { kind: 'none' };
+
+  // A read-only action still needs the user to ask for it, but not to approve
+  // it: it shows them something they can already see.
+  if (!plan.requiresConfirmation) {
+    const bound = agentProposals.mint(plan.action, { projectId: plan.projectId, summary: plan.summary, versionId: plan.versionId });
+    return { kind: 'ready', proposalId: bound.id, summary: plan.summary, tool: plan.action.tool, requiresConfirmation: false };
   }
 
-  if (v.action.requiresConfirmation && opts?.confirmed !== true) {
-    // Not an error — the expected path for a mutation. The renderer shows a
-    // confirmation card and calls back with confirmed: true.
-    record({ tool: v.action.tool, mutating: true, outcome: 'proposed' });
-    return { status: 'needs_confirmation', summary: v.action.summary, tool: v.action.tool };
+  const bound = agentProposals.mint(plan.action, { projectId: plan.projectId, summary: plan.summary, versionId: plan.versionId });
+  recordAgentAction({ tool: plan.action.tool, mutating: true, outcome: 'proposed' }, plan.projectId);
+  return {
+    kind: 'needs_confirmation',
+    proposalId: bound.id,
+    summary: plan.summary,
+    tool: plan.action.tool,
+    requiresConfirmation: true,
+    expiresAt: bound.expiresAt,
+  };
+});
+
+/**
+ * Execute a proposal the user approved.
+ *
+ * Takes the id and nothing else. Consumption is single-use, so a double click
+ * or a duplicated message finds the proposal already spent — that, rather than
+ * a new idempotency key, is what stops a second link being created.
+ */
+ipcMain.handle('brain:confirmAction', async (_e, opts: { proposalId?: string }) => {
+  const consumed = agentProposals.consume(String(opts?.proposalId ?? ''));
+  if (!consumed.ok) {
+    return {
+      status: 'error',
+      error: consumed.reason === 'expired'
+        ? 'That suggestion has expired. Ask again and Wavi will re-check the project first.'
+        : consumed.reason === 'already-used'
+          ? 'That action has already run.'
+          : 'That suggestion is no longer available.',
+    };
   }
-  if (v.action.requiresConfirmation) record({ tool: v.action.tool, mutating: true, outcome: 'confirmed' });
+  const { proposal } = consumed;
+  if (proposal.action.requiresConfirmation) {
+    recordAgentAction({ tool: proposal.action.tool, mutating: true, outcome: 'confirmed' }, proposal.projectId);
+  }
 
   const { getToolByName } = require('./agentLoop');
-  const tool = getToolByName(v.action.tool);
-  if (!tool) {
-    record({ tool: v.action.tool, mutating: v.action.mutating, outcome: 'failed', detail: 'tool not registered' });
-    return { status: 'error', error: 'That action is not available right now.' };
-  }
+  const { sanitizeToolResult } = require('./copilotTools/envelope');
+  const outcome = await executeConfirmedProposal(proposal, {
+    getTool: (name: string) => getToolByName(name),
+    // The tool receives the project AND the version this plan resolved, so it
+    // shares exactly what the user approved rather than re-deriving "latest".
+    buildToolContext: async (pr) => {
+      if (!pr.projectId) return null;
+      const base = await buildProjectContext(pr.projectId);
+      // The version the plan resolved, so the tool shares what was approved.
+      return pr.versionId ? { ...base, versionId: pr.versionId } : base;
+    },
+    record: (rec) => recordAgentAction(rec, proposal.projectId),
+    sanitize: sanitizeToolResult,
+  });
 
-  try {
-    // Execution goes through the EXISTING registry and its envelope, which
-    // already sanitises results and audit-logs the invocation.
-    const { sanitizeToolResult } = require('./copilotTools/envelope');
-    const result = await tool.handler(
-      { ...v.action.params, projectId: opts?.projectId ?? undefined },
-      null,
-      { confirmedOutOfBand: v.action.requiresConfirmation === true },
-    );
-    record({ tool: v.action.tool, mutating: v.action.mutating, outcome: 'executed' });
-    return sanitizeToolResult(result);
-  } catch (e: any) {
-    record({ tool: v.action.tool, mutating: v.action.mutating, outcome: 'failed', detail: e?.message });
-    return { status: 'error', error: 'That action could not be completed.' };
-  }
+  // The authoritative outcome is the tool's. No prediction is reported.
+  return outcome.ok
+    ? { status: outcome.status, message: outcome.message, data: outcome.data }
+    : { status: 'error', error: outcome.error };
+});
+
+/** The user declined. Nothing ran, and nothing claims it did. */
+ipcMain.handle('brain:cancelAction', (_e, opts: { proposalId?: string }) => {
+  const discarded = agentProposals.discard(String(opts?.proposalId ?? ''));
+  return { ok: discarded };
 });
 
 /** Explicit user memory across both scopes, each item attributed. */

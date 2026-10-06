@@ -59,21 +59,23 @@ describe('the allowlist is the boundary', () => {
     }
   });
 
-  it('requires declared arguments', () => {
+  it('requires declared arguments, named as the canonical tool names them', () => {
+    // reveal_file takes fileName. An allowlist that said "fileId" would produce
+    // a proposal that passes every gate here and is then rejected by the tool.
     const r = validateProposedAction({ tool: 'reveal_file' }, ctx());
     expect(r.ok).toBe(false);
-    expect(!r.ok && r.reason).toMatch(/missing required argument "fileId"/);
+    expect(!r.ok && r.reason).toMatch(/missing required argument "fileName"/);
   });
 });
 
 describe('entity grounding — it cannot act on what it was not shown', () => {
   it('accepts a file that is in context, by id or by name', () => {
-    expect(validateProposedAction({ tool: 'reveal_file', params: { fileId: 'f2' } }, ctx()).ok).toBe(true);
-    expect(validateProposedAction({ tool: 'reveal_file', params: { fileId: 'master-v8.wav' } }, ctx()).ok).toBe(true);
+    expect(validateProposedAction({ tool: 'reveal_file', params: { fileName: 'f2' } }, ctx()).ok).toBe(true);
+    expect(validateProposedAction({ tool: 'reveal_file', params: { fileName: 'master-v8.wav' } }, ctx()).ok).toBe(true);
   });
 
   it('REFUSES a file that is not in context', () => {
-    const r = validateProposedAction({ tool: 'reveal_file', params: { fileId: 'secrets.wav' } }, ctx());
+    const r = validateProposedAction({ tool: 'reveal_file', params: { fileName: 'secrets.wav' } }, ctx());
     expect(r.ok).toBe(false);
     expect(!r.ok && r.reason).toMatch(/not in context/);
   });
@@ -99,8 +101,8 @@ describe('entity grounding — it cannot act on what it was not shown', () => {
   });
 
   it('matches ids case-insensitively but never loosely', () => {
-    expect(validateProposedAction({ tool: 'reveal_file', params: { fileId: 'MASTER-V8.WAV' } }, ctx()).ok).toBe(true);
-    expect(validateProposedAction({ tool: 'reveal_file', params: { fileId: 'master-v8' } }, ctx()).ok).toBe(false);
+    expect(validateProposedAction({ tool: 'reveal_file', params: { fileName: 'MASTER-V8.WAV' } }, ctx()).ok).toBe(true);
+    expect(validateProposedAction({ tool: 'reveal_file', params: { fileName: 'master-v8' } }, ctx()).ok).toBe(false);
   });
 });
 
