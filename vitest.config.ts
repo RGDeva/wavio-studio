@@ -83,6 +83,7 @@ export default defineConfig({
       'electron/brain/contextGoldenPath.real.test.ts',
       'electron/brain/localAgent.test.ts',
       'electron/brain/localAgentStructured.test.ts',
+      'electron/brain/agentActions.test.ts',
     ],
     environment: 'node',
   },

@@ -19,6 +19,7 @@
 import type { AssistantContext } from './assistantContext';
 import { buildGroundedPrompt, verifyGrounded, contextItemIds, type GroundingResult } from './grounding';
 import { parseModelResponse, validateCitations, type Confidence } from './modelResponse';
+import { validateProposedAction, type ValidatedAction } from './agentActions';
 
 export interface AnswerResult {
   text: string;
@@ -35,6 +36,15 @@ export interface AnswerResult {
   confidence?: Confidence;
   /** Context ids the model cited, when its answer was used. */
   citedContextIds?: string[];
+  /**
+   * A validated suggestion for the user to accept or ignore. Present only
+   * when it passed the allowlist and entity-grounding checks. NOTHING has
+   * been executed — this is a proposal, and mutating ones still require the
+   * existing out-of-band confirmation before anything happens.
+   */
+  proposedAction?: ValidatedAction;
+  /** Why a suggestion was dropped, when one was. */
+  rejectedAction?: { tool: string; reason: string };
   context: AssistantContext;
 }
 
@@ -162,6 +172,17 @@ export async function answerQuestion(question: string, deps: AnswerDeps): Promis
     return reject(`unsupported claims: ${grounding.unsupported.join(', ')}`, grounding);
   }
 
+  // 4. A suggested action is validated independently. A bad suggestion is
+  //    dropped and reported; it never invalidates an otherwise good answer,
+  //    and it is never executed here under any circumstances.
+  let proposedAction: ValidatedAction | undefined;
+  let rejectedAction: { tool: string; reason: string } | undefined;
+  if (parsed.value.proposedAction) {
+    const v = validateProposedAction(parsed.value.proposedAction, ctx);
+    if (v.ok) proposedAction = v.action;
+    else rejectedAction = { tool: parsed.value.proposedAction.tool, reason: v.reason };
+  }
+
   return {
     text: parsed.value.answer,
     source: 'model',
@@ -169,6 +190,8 @@ export async function answerQuestion(question: string, deps: AnswerDeps): Promis
     grounding,
     confidence: parsed.value.confidence,
     citedContextIds: parsed.value.citedContextIds,
+    ...(proposedAction ? { proposedAction } : {}),
+    ...(rejectedAction ? { rejectedAction } : {}),
     context: ctx,
   };
 }

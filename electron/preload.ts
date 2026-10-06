@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld('waviAPI', {
     /** Whether the brain is keeping itself current, and how much is queued. */
     refreshStatus: () => ipcRenderer.invoke('brain:refreshStatus'),
     ask: (opts: { question: string; projectId?: string | null }) => ipcRenderer.invoke('brain:ask', opts),
+    /** Run an agent-proposed action. Mutations need confirmed:true from a user gesture. */
+    runProposedAction: (opts: { tool: string; params?: Record<string, unknown>; projectId?: string | null; question?: string; confirmed?: boolean }) =>
+      ipcRenderer.invoke('brain:runProposedAction', opts),
     modelStatus: () => ipcRenderer.invoke('brain:modelStatus'),
     setLocalModel: (cfg: { enabled?: boolean; endpoint?: string; model?: string }) =>
       ipcRenderer.invoke('brain:setLocalModel', cfg),

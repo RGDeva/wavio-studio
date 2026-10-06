@@ -279,9 +279,35 @@ export interface WaviAPI {
     getCloudFiles: (opts: { cloudProjectId: string }) => Promise<{ assets?: unknown[]; versions?: unknown[]; error?: string }>;
     onOpenLink: (cb: (data: { token: string }) => void) => void;
   };
-  /** Project Brain — read-only local knowledge. */
+  /** Project Brain — local knowledge, and the local agent above it. */
   brain: {
     modelStatus: () => Promise<{ state: string; label: string; usable: boolean; fallback: string; detail?: string }>;
+    /**
+     * Ask a question. Always answers: a local model only ever rephrases what
+     * the index already knows, and is skipped entirely when unavailable.
+     */
+    ask: (opts: { question: string; projectId?: string | null }) => Promise<{
+      text: string;
+      source: 'model' | 'deterministic';
+      citedContextIds?: string[];
+      /** A suggestion the agent made. Validated in main; still not performed. */
+      proposedAction?: {
+        tool: string; params: Record<string, unknown>;
+        mutating: boolean; requiresConfirmation: boolean; summary: string;
+      };
+      rejectedAction?: { tool: string; reason: string };
+      rejectionReason?: string;
+    }>;
+    /**
+     * Run a proposal the user chose to accept. `confirmed` must be true for a
+     * mutating action — it stands for the user's click, and main re-validates
+     * the entire proposal against freshly built context regardless, because
+     * nothing arriving from the renderer is trusted.
+     */
+    runProposedAction: (opts: {
+      tool: string; params?: Record<string, unknown>; projectId?: string | null;
+      question?: string; confirmed?: boolean;
+    }) => Promise<{ ok: boolean; status?: string; result?: unknown; error?: string }>;
   };
   app: {
     relaunch: () => Promise<void>;
@@ -383,7 +409,7 @@ const _stub: WaviAPI = {
     publishContribution: _noop, respondContribution: _noop, withdrawContribution: _noop,
   },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
-  brain: { modelStatus: _noop },
+  brain: { modelStatus: _noop, ask: _noop, runProposedAction: _noop },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },

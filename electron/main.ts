@@ -49,6 +49,7 @@ import { createBrainRefresher } from './brain/liveRefresh';
 import { createLocalProvider } from './brain/localProvider';
 import { setLlmProvider, getLlmProvider } from './brain/llmProvider';
 import { resolveModelState } from './brain/modelLifecycle';
+import { validateProposedAction, describeOutcome } from './brain/agentActions';
 import { planLegacyMemoryMigration } from './brain/legacyMemoryMigration';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
@@ -3190,6 +3191,82 @@ ipcMain.handle('brain:ask', async (_e, opts: { question?: string; projectId?: st
   // and its grounding verdict are what the UI needs.
   const { context: _ctx, ...safe } = result;
   return safe;
+});
+
+/**
+ * Run an action the agent proposed.
+ *
+ * The proposal arrives from the renderer, so NOTHING about it is trusted: the
+ * context is rebuilt here and the proposal is re-validated against it. A
+ * renderer that sent a tampered tool name or a different project id gets the
+ * same refusal the model would have.
+ *
+ * Mutating actions additionally require `confirmed: true`, which the renderer
+ * sets only after the user's own click. That is what reaches the existing tool
+ * envelope as confirmedOutOfBand — the model never touches it, and never sees
+ * this channel at all.
+ */
+ipcMain.handle('brain:runProposedAction', async (_e, opts: {
+  tool?: string;
+  params?: Record<string, unknown>;
+  projectId?: string | null;
+  question?: string;
+  confirmed?: boolean;
+}) => {
+  const record = (outcome: Parameters<typeof describeOutcome>[0]) => {
+    try {
+      logActivity({
+        id: crypto.randomUUID(), type: 'agent_action',
+        message: describeOutcome(outcome),
+        project_id: opts?.projectId ?? undefined,
+        metadata: { tool: outcome.tool, mutating: outcome.mutating, outcome: outcome.outcome, detail: outcome.detail },
+      });
+    } catch { /* recording must never break the action */ }
+  };
+
+  const toolName = String(opts?.tool ?? '');
+  // Re-validate against a FRESHLY built context, not whatever the renderer
+  // claims the context was.
+  const context = brain.assistantContext({
+    query: String(opts?.question ?? ''),
+    projectId: opts?.projectId ?? null,
+  });
+  const v = validateProposedAction({ tool: toolName, params: opts?.params ?? {} }, context);
+  if (!v.ok) {
+    record({ tool: toolName || '(none)', mutating: false, outcome: 'rejected', detail: v.reason });
+    return { status: 'error', error: v.reason };
+  }
+
+  if (v.action.requiresConfirmation && opts?.confirmed !== true) {
+    // Not an error — the expected path for a mutation. The renderer shows a
+    // confirmation card and calls back with confirmed: true.
+    record({ tool: v.action.tool, mutating: true, outcome: 'proposed' });
+    return { status: 'needs_confirmation', summary: v.action.summary, tool: v.action.tool };
+  }
+  if (v.action.requiresConfirmation) record({ tool: v.action.tool, mutating: true, outcome: 'confirmed' });
+
+  const { getToolByName } = require('./agentLoop');
+  const tool = getToolByName(v.action.tool);
+  if (!tool) {
+    record({ tool: v.action.tool, mutating: v.action.mutating, outcome: 'failed', detail: 'tool not registered' });
+    return { status: 'error', error: 'That action is not available right now.' };
+  }
+
+  try {
+    // Execution goes through the EXISTING registry and its envelope, which
+    // already sanitises results and audit-logs the invocation.
+    const { sanitizeToolResult } = require('./copilotTools/envelope');
+    const result = await tool.handler(
+      { ...v.action.params, projectId: opts?.projectId ?? undefined },
+      null,
+      { confirmedOutOfBand: v.action.requiresConfirmation === true },
+    );
+    record({ tool: v.action.tool, mutating: v.action.mutating, outcome: 'executed' });
+    return sanitizeToolResult(result);
+  } catch (e: any) {
+    record({ tool: v.action.tool, mutating: v.action.mutating, outcome: 'failed', detail: e?.message });
+    return { status: 'error', error: 'That action could not be completed.' };
+  }
 });
 
 /** Explicit user memory across both scopes, each item attributed. */

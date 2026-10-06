@@ -540,3 +540,41 @@ and LM Studio all expose — so no native dependency and no bundled weights.
 `NullProvider` remains installed unless a loopback endpoint **and** a model name are both
 configured. `createLocalProvider` returns null otherwise rather than a half-configured
 provider.
+
+## 21. Agent Actions v1 — the model proposes, code decides (2026-10-06)
+
+The agent may now **suggest** an action. It still cannot perform one.
+
+A proposal must survive three gates before a human sees it, and a human before
+anything happens:
+
+1. **Allowlist.** Only tools named in `ACTION_ALLOWLIST`. A tool that exists in the registry
+   and is not on the list is refused — so the agent can never reach a capability merely
+   because one was added elsewhere in the app. Nothing destructive is on the list, and that
+   is a property of the list rather than of the prompt: no delete, move, rename or revoke.
+2. **Entity grounding.** Every id and filename in the arguments must appear in the context the
+   model was shown. A proposal naming a *different project* is the most dangerous shape one
+   can take, and it is refused outright rather than repaired — an almost-right proposal is
+   still one the model got wrong, and silently fixing it would hide the failure.
+3. **Confirmation.** `requiresConfirmation` is set from the allowlist, never from the
+   proposal. A model emitting `requiresConfirmation: false` has no effect whatsoever.
+
+### Execution reuses what already existed
+
+Nothing new executes anything. `brain:runProposedAction` rebuilds the context and
+**re-validates server-side** — the proposal arrives from the renderer, so none of it is
+trusted — then calls the existing tool registry, whose envelope already sanitises results and
+audit-logs the invocation. `confirmedOutOfBand` comes from the user's own click, and the
+model never sees that channel at all.
+
+### A bad suggestion does not spoil a good answer
+
+A malformed or disallowed proposal is dropped and reported in `rejectedAction`; the answer
+survives. Conversely, if the *answer* fails grounding, its suggestion dies with it — the
+pipeline never reaches proposal validation.
+
+### Recorded
+
+Every stage — proposed, rejected, confirmed, executed, failed — is written to `activity_log`
+as an `agent_action`, in plain language, with recording wrapped so it can never break the
+action itself.
