@@ -44,6 +44,11 @@ import { isSafeRestorePath, validateArchiveEntries } from './restoreArchive';
 import { planRestoreAdoption } from './restoreAdoption';
 import { resolveApplication } from './adapters/index';
 import { planCrossDawHandoff, buildFidelityReport } from './crossDaw';
+import {
+  planPortableHandoff, PACKAGE_DIR, SESSION_FILE, FIDELITY_FILE, README_FILE,
+  type HandoffInput, type VerifiedCopy,
+} from './portablePackage';
+import { materializeHandoff } from './portableMaterialize';
 import { createBrainService } from './brain/service';
 import { createBrainRefresher } from './brain/liveRefresh';
 import { createLocalProvider } from './brain/localProvider';
@@ -2983,6 +2988,146 @@ ipcMain.handle('daw:planHandoff', (_e, opts: {
     bpm: opts?.bpm ?? null,
   });
   return { plan, report: buildFidelityReport(plan, new Date().toISOString()) };
+});
+
+/**
+ * Build the portable cross-DAW handoff — a derived checkout on disk.
+ *
+ * This is where the fidelity verdict stops being a transient UI string and
+ * becomes a folder a recipient can open in Finder and work from. Nothing is
+ * converted: no `.flp` is generated from an `.als`, and no
+ * `project.dawproject` is fabricated so the file exists.
+ *
+ * Three properties the implementation is shaped around:
+ *
+ *   - The assets come from Wavi's own index, not from the caller, so a
+ *     renderer cannot ask for a package describing files it invented.
+ *   - It is DERIVED. The planner refuses a root overlapping the source, every
+ *     write is containment-checked against the root at the moment of writing,
+ *     and no source file is touched.
+ *   - Metadata is generated from what was actually written and hashed, never
+ *     from the plan. A manifest describing bytes that never landed is the
+ *     failure this exists to prevent.
+ */
+ipcMain.handle('daw:buildPortableHandoff', async (_e, opts: {
+  projectId?: string;
+  /** DAW the recipient intends to use. Null means "any". */
+  targetDawType?: string | null;
+  /** Where to build. Defaults to a sibling folder beside the project. */
+  handoffRoot?: string | null;
+}) => {
+  const projectId = String(opts?.projectId ?? '');
+  const project = getProjectById(projectId) as any;
+  if (!project) return { ok: false, error: 'That project is not in your library.' };
+
+  const sourceProjectDir = path.dirname(project.file_path);
+  const target = getAdapterForProject(opts?.targetDawType ?? null, null);
+  const source = getAdapterForProject(project.daw_type ?? null, project.file_path ?? null);
+  const sourceDawId = source.id === 'generic' ? (project.daw_type ?? null) : source.id;
+  const targetDawId = target.id === 'generic' ? (opts?.targetDawType ?? null) : target.id;
+
+  // A sibling of the project folder by default: outside the source (so the
+  // original cannot be overwritten) but somewhere the user will find it.
+  const safeName = String(project.project_name ?? 'project').replace(/[^\w.\- ]+/g, '_').trim() || 'project';
+  const defaultRoot = path.join(
+    path.dirname(sourceProjectDir),
+    `${safeName} — portable${targetDawId ? ` for ${targetDawId}` : ''}`,
+  );
+  const handoffRoot = opts?.handoffRoot ? path.resolve(opts.handoffRoot) : defaultRoot;
+
+  // The destination must be somewhere Wavi may write at all.
+  const rootCheck = validateSafePath(path.dirname(handoffRoot));
+  if (!rootCheck.ok) return { ok: false, error: 'That handoff folder is outside the folders Wavi can write to.' };
+
+  const rows = getFilesByProject(projectId) as any[];
+  const assets = rows
+    .map((f) => ({
+      absolutePath: f.file_path as string,
+      relativePath: path.relative(sourceProjectDir, f.file_path as string),
+      role: (f.role ?? 'unknown') as string,
+      fileSize: typeof f.file_size === 'number' ? f.file_size : undefined,
+      sha256: (f.checksum ?? null) as string | null,
+      bpm: typeof f.bpm === 'number' ? f.bpm : null,
+    }))
+    .filter((a) => a.relativePath && !a.relativePath.startsWith('..') && !path.isAbsolute(a.relativePath));
+
+  // The project file's own tempo is the project's tempo; a stem's BPM is a
+  // measurement of that stem and can legitimately disagree. Never inferred
+  // from a filename.
+  const bpm = assets.find((a) => a.role === 'project')?.bpm ?? null;
+
+  const versions = getVersionsByProject(projectId) as any[];
+  const latest = versions.reduce<any>((best, v) =>
+    (!best || Number(v.version_number) > Number(best.version_number)) ? v : best, null);
+  // Lineage for the return path. A restored checkout knows the canonical
+  // parent it must publish a CHILD of; this carries it into the handoff so the
+  // existing adoption/publish path still applies.
+  const restored = project.file_path ? getRestoredProjectByLocalPath(project.file_path) : null;
+
+  const input: HandoffInput = {
+    handoffRoot,
+    sourceProjectDir,
+    projectName: project.project_name,
+    sourceDawId,
+    targetDawId,
+    assets: assets.map(({ bpm: _b, ...a }) => a),
+    bpm,
+    sourceVersionLabel: latest ? `v${latest.version_number}` : null,
+    lineage: restored
+      ? { sourceProjectRef: restored.source_project_id, sourceVersionRef: restored.source_version_id }
+      : null,
+    generatedAt: new Date().toISOString(),
+  };
+
+  const plan = planPortableHandoff(input);
+  if (plan.refusal) return { ok: false, error: plan.refusal };
+
+  // One materializer, shared with the tests that exercise it against a real
+  // temporary directory. A second copy here would be the one that drifts.
+  const written = materializeHandoff(plan, {
+    mkdirSync: (dir, o) => { fs.mkdirSync(dir, o); },
+    readFileSync: (f) => fs.readFileSync(f),
+    writeFileSync: (f, data, enc) => { fs.writeFileSync(f, data as any, enc as any); },
+    statSync: (f) => fs.statSync(f),
+    sha256: (data) => crypto.createHash('sha256').update(data).digest('hex'),
+  });
+  if (written.error) return { ok: false, error: written.error };
+  const verified = written.verified;
+  const failures = written.failures;
+
+  const mismatches = written.checksumMismatches;
+  logActivity({
+    id: crypto.randomUUID(), type: 'portable_handoff_built',
+    message: `Prepared a ${plan.tier} handoff for "${project.project_name}"${targetDawId ? ` → ${targetDawId}` : ''}`,
+    project_id: projectId,
+    metadata: {
+      tier: plan.tier, sourceDaw: sourceDawId, targetDaw: targetDawId,
+      assetCount: verified.length, failures: failures.length, checksumMismatches: mismatches.length,
+    },
+  });
+
+  return {
+    // A handoff with unreadable assets or a bad checksum is NOT a success.
+    ok: written.ok,
+    root: plan.root,
+    tier: plan.tier,
+    summary: plan.crossDawPlan.summary,
+    losses: plan.crossDawPlan.losses,
+    warnings: plan.warnings,
+    counts: {
+      stems: verified.filter((v) => v.bucket === 'stems').length,
+      midi: verified.filter((v) => v.bucket === 'midi').length,
+      renders: verified.filter((v) => v.bucket === 'renders').length,
+    },
+    nativeProjectIncluded: verified.some((v) => v.bucket === 'root' && !v.to.toLowerCase().endsWith('.dawproject')),
+    dawprojectIncluded: verified.some((v) => v.to.toLowerCase().endsWith('.dawproject')),
+    files: [SESSION_FILE, FIDELITY_FILE, README_FILE],
+    packageDirName: PACKAGE_DIR,
+    assets: verified.map((v) => ({ path: v.to, bucket: v.bucket, bytes: v.bytes })),
+    failures,
+    checksumMismatches: mismatches,
+    rejected: plan.rejected,
+  };
 });
 
 // ── Project Brain ────────────────────────────────────────────────────────────

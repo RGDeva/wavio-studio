@@ -13,7 +13,7 @@
  *  - Idempotent: upsertStandaloneFile uses file_path as unique key
  */
 
-import { readdirSync, statSync, lstatSync } from 'fs';
+import { readdirSync, statSync, lstatSync, existsSync } from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { app } from 'electron';
@@ -100,6 +100,23 @@ const SKIP_DIRS = new Set([
  * `Song.logicx/Media/take1.wav`) as if they were the user's loose audio.
  */
 export const PACKAGE_PROJECT_EXTS: ReadonlySet<string> = new Set(['.logicx', '.band']);
+
+/**
+ * Is this directory a Wavi portable handoff?
+ *
+ * A handoff is a derived checkout holding a COPY of someone else's project
+ * file. Discovered as a project it would become a duplicate of the original
+ * and could be synced and published as if it were new work — so the walk stops
+ * at the marker Wavi wrote when it built the folder.
+ *
+ * The existence check is injected so this stays testable without a filesystem.
+ */
+export function isPortableHandoffDir(
+  fullPath: string,
+  exists: (p: string) => boolean,
+): boolean {
+  return exists(path.join(fullPath, 'wavi', '.wavi-portable-handoff'));
+}
 
 // Name patterns that indicate a directory should be skipped
 function shouldSkipDir(name: string, fullPath: string): boolean {
@@ -276,6 +293,9 @@ export async function discoverAudioFiles(
           continue;
         }
         if (shouldSkipDir(entry.name, fullPath)) continue;
+        // A derived handoff checkout is not a project. Checked here rather
+        // than by name because the user chooses where handoffs are built.
+        if (isPortableHandoffDir(fullPath, (p) => existsSync(p))) continue;
         if (inode && visitedInodes.has(inode)) continue;
         if (inode) visitedInodes.add(inode);
         walk(fullPath, depth + 1);
