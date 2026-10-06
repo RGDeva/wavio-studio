@@ -70,6 +70,21 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
     return () => api.off('discovery:progress', handler);
   }, []);
 
+  /**
+   * Honest local-AI state. Deliberately a single quiet badge rather than a
+   * panel: the user needs to know whether answers are being phrased by a local
+   * model, not to be given an AI dashboard. Never blocks anything — Project
+   * Brain answers in every state.
+   */
+  const [aiState, setAiState] = useState<{ label: string; usable: boolean; detail?: string } | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.brain?.modelStatus?.()
+      .then((s: any) => { if (live && s) setAiState({ label: s.label, usable: s.usable, detail: s.detail }); })
+      .catch(() => { /* status is cosmetic; never surface a failure here */ });
+    return () => { live = false; };
+  }, []);
+
   const loadMemories = useCallback(async () => {
     try { setMemories(await api.memory.list()); } catch {}
   }, []);
@@ -189,6 +204,14 @@ export function CopilotPage({ visible }: { visible?: boolean }) {
           <div className="flex items-center gap-2">
             <Zap className="w-4 h-4 text-primary" />
             <h1 className="text-base font-semibold text-white">Wavi Copilot</h1>
+            {aiState && (
+              <span
+                title={`${aiState.detail ?? ''} Answers come from your local index either way.`.trim()}
+                className={`ml-1 px-2 py-0.5 rounded-md text-meta border border-hairline-strong ${aiState.usable ? 'text-fg-tertiary' : 'text-fg-quaternary'}`}
+              >
+                {aiState.label}
+              </span>
+            )}
             {/* Explicit active-project selector. Tools act ONLY on this project;
                 the selection is threaded to every context/chat/tool call. */}
             <label className="ml-2 flex items-center gap-1 px-2 py-0.5 rounded-md text-meta border border-hairline-strong text-fg-quaternary" title="Tools act on this project">

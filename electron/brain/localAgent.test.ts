@@ -185,18 +185,34 @@ describe('the answer pipeline', () => {
   });
 
   it('uses the model when its wording is grounded', async () => {
+    // Replies must now be the structured contract: free prose is
+    // unverifiable, so it is rejected regardless of how good it reads.
     const r = await answerQuestion('q', {
       context: ctx,
-      callModel: async () => ({ text: 'Your latest master looks like master-v8.wav.', provider: 'local-http' }),
+      callModel: async () => ({
+        text: JSON.stringify({
+          answer: 'Your latest master looks like master-v8.wav.',
+          citedContextIds: ['G1'],
+          confidence: 'medium',
+        }),
+        provider: 'local-http',
+      }),
     });
     expect(r.source).toBe('model');
     expect(r.grounding?.grounded).toBe(true);
+    expect(r.confidence).toBe('medium');
   });
 
   it('DISCARDS a model answer that invents a file, and says so', async () => {
     const r = await answerQuestion('q', {
       context: ctx,
-      callModel: async () => ({ text: 'Your master is final-master-v99.wav.', provider: 'local-http' }),
+      callModel: async () => ({
+        text: JSON.stringify({
+          answer: 'Your master is final-master-v99.wav.',
+          citedContextIds: [], confidence: 'high',
+        }),
+        provider: 'local-http',
+      }),
     });
     expect(r.source).toBe('deterministic');
     expect(r.grounding?.grounded).toBe(false);

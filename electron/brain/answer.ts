@@ -17,7 +17,8 @@
  * Pure except for the injected provider call.
  */
 import type { AssistantContext } from './assistantContext';
-import { buildGroundedPrompt, verifyGrounded, type GroundingResult } from './grounding';
+import { buildGroundedPrompt, verifyGrounded, contextItemIds, type GroundingResult } from './grounding';
+import { parseModelResponse, validateCitations, type Confidence } from './modelResponse';
 
 export interface AnswerResult {
   text: string;
@@ -28,6 +29,12 @@ export interface AnswerResult {
   grounding?: GroundingResult;
   /** Set when a model answered but was rejected, so the UI can say so. */
   rejectedModelOutput?: string;
+  /** Why the model's answer was discarded, when it was. */
+  rejectionReason?: string;
+  /** The model's own confidence, when its answer was used. */
+  confidence?: Confidence;
+  /** Context ids the model cited, when its answer was used. */
+  citedContextIds?: string[];
   context: AssistantContext;
 }
 
@@ -125,20 +132,43 @@ export async function answerQuestion(question: string, deps: AnswerDeps): Promis
     return { text: deterministic, source: 'deterministic', provider: model?.provider ?? 'none', context: ctx };
   }
 
-  const grounding = verifyGrounded(model.text, ctx);
-  if (!grounding.grounded) {
-    // The model asserted something the context does not support. Discard it —
-    // a fluent wrong answer about someone's files is worse than a plain right
-    // one — but keep it for display so the failure is visible, not silent.
-    return {
-      text: deterministic,
-      source: 'deterministic',
-      provider: model.provider,
-      grounding,
-      rejectedModelOutput: model.text,
-      context: ctx,
-    };
+  const reject = (reason: string, grounding?: GroundingResult): AnswerResult => ({
+    text: deterministic,
+    source: 'deterministic',
+    provider: model!.provider,
+    grounding,
+    rejectedModelOutput: model!.text,
+    rejectionReason: reason,
+    context: ctx,
+  });
+
+  // 1. The reply must parse into the agreed structure. Free prose is
+  //    unverifiable, so malformed output is discarded rather than shown.
+  const parsed = parseModelResponse(model.text);
+  if (!parsed.ok) return reject(parsed.reason);
+
+  // 2. Citations must name context lines that actually exist. A model citing
+  //    F9 when the context stopped at F3 has invented a source — a cheaper
+  //    and stronger signal than inspecting the prose.
+  const citations = validateCitations(parsed.value, contextItemIds(ctx));
+  if (!citations.valid) {
+    return reject(`cited context that does not exist: ${citations.unknown.join(', ')}`);
   }
 
-  return { text: model.text.trim(), source: 'model', provider: model.provider, grounding, context: ctx };
+  // 3. And the prose itself must not assert files, counts or versions the
+  //    context never mentioned.
+  const grounding = verifyGrounded(parsed.value.answer, ctx);
+  if (!grounding.grounded) {
+    return reject(`unsupported claims: ${grounding.unsupported.join(', ')}`, grounding);
+  }
+
+  return {
+    text: parsed.value.answer,
+    source: 'model',
+    provider: model.provider,
+    grounding,
+    confidence: parsed.value.confidence,
+    citedContextIds: parsed.value.citedContextIds,
+    context: ctx,
+  };
 }
