@@ -15,6 +15,7 @@
  * Pure: no I/O, no model, no Electron.
  */
 import type { AssistantContext } from './assistantContext';
+import { RESPONSE_SCHEMA_INSTRUCTION } from './modelResponse';
 
 // ── What counts as a checkable claim ─────────────────────────────────────────
 //
@@ -159,36 +160,36 @@ export function renderContextForModel(ctx: AssistantContext): string {
 
   if (ctx.userMemory.length) {
     lines.push('', 'WHAT THE USER TOLD WAVI:');
-    for (const m of ctx.userMemory) {
-      lines.push(`- ${m.value.value} [${m.value.scope} memory, ${m.attribution.origin}]`);
-    }
+    ctx.userMemory.forEach((m, i) => {
+      lines.push(`[M${i + 1}] ${m.value.value} (${m.value.scope} memory, from ${m.attribution.origin})`);
+    });
   }
 
   if (ctx.facts.length) {
     lines.push('', 'MEASURED FACTS (from scanning the files):');
-    for (const f of ctx.facts) lines.push(`- ${f.value.key}: ${f.value.value}`);
+    ctx.facts.forEach((f, i) => lines.push(`[K${i + 1}] ${f.value.key}: ${f.value.value}`));
   }
 
   if (ctx.inferences.length) {
     lines.push('', 'GUESSES (not certain):');
-    for (const i of ctx.inferences) {
-      lines.push(`- ${i.value.key}: ${i.value.value} — ${i.attribution.evidence ?? 'no evidence recorded'} (${i.attribution.strength ?? 'unknown'} confidence)`);
-    }
+    ctx.inferences.forEach((inf, i) => {
+      lines.push(`[G${i + 1}] ${inf.value.key}: ${inf.value.value} — ${inf.attribution.evidence ?? 'no evidence recorded'} (${inf.attribution.strength ?? 'unknown'} confidence)`);
+    });
   }
 
   if (ctx.files.length) {
     lines.push('', 'FILES:');
-    for (const f of ctx.files) lines.push(`- ${f.name}${f.role ? ` (${f.role})` : ''}${f.status === 'missing' ? ' [MISSING]' : ''}`);
+    ctx.files.forEach((f, i) => lines.push(`[F${i + 1}] ${f.name}${f.role ? ` (${f.role})` : ''}${f.status === 'missing' ? ' — MISSING' : ''}`));
   }
 
   if (ctx.versions.length) {
     lines.push('', 'VERSIONS:');
-    for (const v of ctx.versions) lines.push(`- v${v.versionNumber ?? '?'}${v.createdAt ? ` on ${v.createdAt.slice(0, 10)}` : ''}`);
+    ctx.versions.forEach((v, i) => lines.push(`[V${i + 1}] v${v.versionNumber ?? '?'}${v.createdAt ? ` on ${v.createdAt.slice(0, 10)}` : ''}`));
   }
 
   if (ctx.recentActivity.length) {
     lines.push('', 'RECENT ACTIVITY:');
-    for (const a of ctx.recentActivity) lines.push(`- ${a.message}`);
+    ctx.recentActivity.forEach((a, i) => lines.push(`[A${i + 1}] ${a.message}`));
   }
 
   if (ctx.conflicts.length) {
@@ -229,6 +230,7 @@ export function buildGroundedPrompt(opts: {
     '- If something is marked a guess, say it is a guess.',
     '- If the answer says nothing is known, say that plainly. Do not speculate.',
     '- Keep it short.',
+    '- Cite the bracketed ids ([M1], [F2], ...) of the context lines you used.',
     '',
     '--- CONTEXT ---',
     renderContextForModel(opts.context),
@@ -236,6 +238,26 @@ export function buildGroundedPrompt(opts: {
     '--- CORRECT ANSWER ---',
     opts.deterministicAnswer,
     '',
-    '--- YOUR REPHRASING ---',
+    RESPONSE_SCHEMA_INSTRUCTION,
+    '',
+    '--- YOUR JSON ---',
   ].join('\n');
+}
+
+/**
+ * Every id the context offers, for validating citations.
+ *
+ * Must mirror renderContextForModel exactly: an id the renderer emits but
+ * this omits would make a legitimate citation look fabricated, which is the
+ * worst possible direction for this check to fail in.
+ */
+export function contextItemIds(ctx: AssistantContext): Set<string> {
+  const ids = new Set<string>();
+  ctx.userMemory.forEach((_, i) => ids.add(`M${i + 1}`));
+  ctx.facts.forEach((_, i) => ids.add(`K${i + 1}`));
+  ctx.inferences.forEach((_, i) => ids.add(`G${i + 1}`));
+  ctx.files.forEach((_, i) => ids.add(`F${i + 1}`));
+  ctx.versions.forEach((_, i) => ids.add(`V${i + 1}`));
+  ctx.recentActivity.forEach((_, i) => ids.add(`A${i + 1}`));
+  return ids;
 }

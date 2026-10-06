@@ -48,6 +48,7 @@ import { createBrainService } from './brain/service';
 import { createBrainRefresher } from './brain/liveRefresh';
 import { createLocalProvider } from './brain/localProvider';
 import { setLlmProvider, getLlmProvider } from './brain/llmProvider';
+import { resolveModelState } from './brain/modelLifecycle';
 import { planLegacyMemoryMigration } from './brain/legacyMemoryMigration';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
@@ -3128,10 +3129,34 @@ function refreshLocalProvider(): { enabled: boolean; displayName: string } {
   return { enabled: !!provider, displayName: getLlmProvider().displayName };
 }
 
-/** Current local-model status, for settings UI. */
+/**
+ * Current local-model status.
+ *
+ * Probing is a short loopback call and is never awaited during startup — the
+ * renderer asks for this when it wants to show the badge, and Project Brain
+ * answers regardless of the result.
+ */
 ipcMain.handle('brain:modelStatus', async () => {
+  const cfg = store.get('localModel', null) as { enabled?: boolean; endpoint?: string; model?: string } | null;
   const p = getLlmProvider();
-  return { id: p.id, displayName: p.displayName, available: await p.isAvailable().catch(() => false) };
+  if (!cfg?.enabled || p.id === 'none') return resolveModelState({ configured: false, reachable: false });
+
+  try {
+    const reachable = await p.isAvailable();
+    let installedModels: string[] | undefined;
+    if (reachable && cfg.endpoint) {
+      // Ask the runtime what it actually has, so "model not pulled" can be
+      // distinguished from "runtime not running".
+      try {
+        const res = await fetch(`${new URL(cfg.endpoint).origin}/api/tags`, { signal: AbortSignal.timeout(2_000) });
+        const data = await res.json() as { models?: Array<{ name?: string }> };
+        installedModels = (data?.models ?? []).map((x) => String(x?.name ?? '')).filter(Boolean);
+      } catch { /* leave undefined — reachable is still true */ }
+    }
+    return resolveModelState({ configured: true, reachable, installedModels, wantedModel: cfg.model ?? null });
+  } catch (e: any) {
+    return resolveModelState({ configured: true, reachable: false, error: e?.message });
+  }
 });
 
 /** Configure the optional local model. Loopback endpoints only. */

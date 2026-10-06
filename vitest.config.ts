@@ -82,6 +82,7 @@ export default defineConfig({
       'electron/brain/assistantContext.test.ts',
       'electron/brain/contextGoldenPath.real.test.ts',
       'electron/brain/localAgent.test.ts',
+      'electron/brain/localAgentStructured.test.ts',
     ],
     environment: 'node',
   },

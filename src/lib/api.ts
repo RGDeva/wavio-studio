@@ -279,6 +279,10 @@ export interface WaviAPI {
     getCloudFiles: (opts: { cloudProjectId: string }) => Promise<{ assets?: unknown[]; versions?: unknown[]; error?: string }>;
     onOpenLink: (cb: (data: { token: string }) => void) => void;
   };
+  /** Project Brain — read-only local knowledge. */
+  brain: {
+    modelStatus: () => Promise<{ state: string; label: string; usable: boolean; fallback: string; detail?: string }>;
+  };
   app: {
     relaunch: () => Promise<void>;
   };
@@ -379,6 +383,7 @@ const _stub: WaviAPI = {
     publishContribution: _noop, respondContribution: _noop, withdrawContribution: _noop,
   },
   project: { publishVersion: _noop, createLink: _noop, revokeLink: _noop, getCloudFiles: _noop, onOpenLink: () => {} },
+  brain: { modelStatus: _noop },
   app: { relaunch: _noop },
   bounces: { getPending: () => Promise.resolve([]), resolve: _noop },
   versions: { getByProject: () => Promise.resolve([]) },
