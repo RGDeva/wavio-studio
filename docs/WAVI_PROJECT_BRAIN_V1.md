@@ -486,3 +486,57 @@ A 25,000-file library yields at most 20 file records, and the result reports wha
 
 `{ kind, origin, producer, strength?, evidence?, scope? }` — never flattened to a sentence,
 so a guess can never be read as a measurement.
+
+## 20. Local Agent v1 — an optional model that cannot invent facts (2026-10-06)
+
+Project Brain already decided what is true. This connects an **optional** local open-model
+runtime so Wavi can say it in natural language — without cloud AI, and without the model ever
+becoming a source of claims.
+
+### The pipeline, in order
+
+```
+question → Project Brain context → DETERMINISTIC answer
+         → (optional) local model rephrases it
+         → verify the rephrasing against the context
+         → use it only if grounded, else keep the deterministic text
+```
+
+The deterministic answer is built **first** and is always correct. The model's only job is
+wording. If no model is installed, if it times out, or if it invents something, the user still
+gets a true answer — which is what makes it genuinely optional rather than nominally optional.
+
+### Grounding is enforced, not requested
+
+A prompt that *asks* a model to stick to the context is a request. `grounding.ts` makes it
+checkable: filenames, counts and version tokens in the model's output are verified against the
+context before any of it reaches the user. An answer naming `master-v12.wav` when the user has
+`master-v8.wav` is **discarded** — and kept for display, so the rejection is visible rather
+than silent.
+
+Three details the tests forced:
+
+- **The filename pattern excluded spaces.** With spaces it swallowed preceding words, so
+  "latest master looks like master-v8.wav" matched as one token and failed a perfectly good
+  answer.
+- **`v42` needed its own pattern** — `\b` does not fire between the `v` and the digits, so a
+  bare number regex never saw version tokens, and "the latest version is v43" would have
+  passed unchecked.
+- **Small numbers are exempt.** Flagging "2 of them" would make the verifier noise and get it
+  switched off, which is worse than not having one.
+
+### Local means local
+
+`validateLocalEndpoint` accepts loopback only, and is checked **before every request**, not
+once at construction. A "local provider" pointed at someone's server would quietly ship the
+user's workspace off the machine — the one thing this design exists to prevent. A remote
+endpoint fails closed with no request attempted, asserted in tests.
+
+The transport is the Ollama-style HTTP API (`/api/generate`), which Ollama, llama.cpp's server
+and LM Studio all expose — so no native dependency and no bundled weights.
+
+### Default state
+
+`NullProvider` remains installed unless a loopback endpoint **and** a model name are both
+configured. `createLocalProvider` returns null otherwise rather than a half-configured
+provider.

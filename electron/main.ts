@@ -46,6 +46,8 @@ import { resolveApplication } from './adapters/index';
 import { planCrossDawHandoff, buildFidelityReport } from './crossDaw';
 import { createBrainService } from './brain/service';
 import { createBrainRefresher } from './brain/liveRefresh';
+import { createLocalProvider } from './brain/localProvider';
+import { setLlmProvider, getLlmProvider } from './brain/llmProvider';
 import { planLegacyMemoryMigration } from './brain/legacyMemoryMigration';
 
 // Server-authoritative account DID (Privy) for the active session; scopes the
@@ -494,6 +496,15 @@ app.whenReady().then(async () => {
   // exactly one persistent memory from here on. Idempotent and non-fatal: the
   // original blob is left untouched as a rollback path.
   migrateLegacyMemoryOnce();
+
+  // Install the optional local model if one is configured. NullProvider stays
+  // in place otherwise — Wavi answers from Project Brain either way.
+  try {
+    const st = refreshLocalProvider();
+    if (st.enabled) mainLog(`[brain] local model configured: ${st.displayName}`);
+  } catch (e: any) {
+    mainLog(`[brain] local model not installed: ${e?.message}`);
+  }
 
   // Secure local bounce playback (wavi-media://asset/{projectId}/{assetId}).
   // Authorization source is the local files table; approved roots are the
@@ -3102,6 +3113,59 @@ ipcMain.handle('brain:refreshStatus', () => ({ pending: brainRefresher.pendingCo
  */
 ipcMain.handle('brain:assistantContext', (_e, opts: { query?: string; projectId?: string | null }) =>
   brain.assistantContext({ query: String(opts?.query ?? ''), projectId: opts?.projectId ?? null }));
+
+/**
+ * Install (or clear) the optional local model from settings.
+ *
+ * Returns null and leaves NullProvider in place unless a loopback endpoint
+ * and model are both configured — "no local model" stays the default state,
+ * and a remote endpoint is refused outright by createLocalProvider.
+ */
+function refreshLocalProvider(): { enabled: boolean; displayName: string } {
+  const cfg = store.get('localModel', null) as { enabled?: boolean; endpoint?: string; model?: string } | null;
+  const provider = createLocalProvider(cfg);
+  if (provider) setLlmProvider(provider);
+  return { enabled: !!provider, displayName: getLlmProvider().displayName };
+}
+
+/** Current local-model status, for settings UI. */
+ipcMain.handle('brain:modelStatus', async () => {
+  const p = getLlmProvider();
+  return { id: p.id, displayName: p.displayName, available: await p.isAvailable().catch(() => false) };
+});
+
+/** Configure the optional local model. Loopback endpoints only. */
+ipcMain.handle('brain:setLocalModel', (_e, cfg: { enabled?: boolean; endpoint?: string; model?: string }) => {
+  store.set('localModel', cfg ?? { enabled: false });
+  return refreshLocalProvider();
+});
+
+/**
+ * Ask Wavi a question about the workspace.
+ *
+ * The brain builds the answer; a local model, if installed and reachable, only
+ * rephrases it, and its output is discarded unless it verifies against the
+ * context. Works with no model at all.
+ */
+ipcMain.handle('brain:ask', async (_e, opts: { question?: string; projectId?: string | null }) => {
+  const question = String(opts?.question ?? '').trim();
+  if (!question) return { text: 'Ask me something about your projects.', source: 'deterministic', provider: 'none' };
+
+  const provider = getLlmProvider();
+  const result = await brain.ask({
+    question,
+    projectId: opts?.projectId ?? null,
+    callModel: async (prompt) => {
+      if (!(await provider.isAvailable().catch(() => false))) return null;
+      const res = await provider.complete({ question, context: prompt });
+      return res?.text ? { text: res.text, provider: res.provider } : null;
+    },
+  });
+  // The full context is intentionally NOT returned to the renderer; the answer
+  // and its grounding verdict are what the UI needs.
+  const { context: _ctx, ...safe } = result;
+  return safe;
+});
 
 /** Explicit user memory across both scopes, each item attributed. */
 ipcMain.handle('brain:recallMemory', (_e, opts: { projectId?: string | null; scope?: 'global' | 'project' | 'both' }) =>
