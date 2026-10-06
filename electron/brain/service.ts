@@ -20,6 +20,7 @@ import { parseRange, type TimeRange } from './timeRange';
 import { deriveProjectMemory, type DeriveFile, type DeriveVersion, type DerivedMemory } from './derive';
 import { coalesceActivity, summarizeActivity } from './activityView';
 import { buildAssistantContext, type ContextLimits, type AssistantContext } from './assistantContext';
+import { answerQuestion, type AnswerResult } from './answer';
 
 /** Raw row shapes, matching the db queries. */
 export interface RawRecordRow {
@@ -339,6 +340,22 @@ export function createBrainService(deps: BrainDeps) {
         limits: opts.limits,
         now: deps.now(),
       });
+    },
+
+    /**
+     * Answer a natural-language question about the workspace.
+     *
+     * The deterministic answer is built first and is always returned unless a
+     * local model produces a rephrasing that passes grounding verification.
+     * No model is required, and no model can introduce a claim.
+     */
+    async ask(opts: {
+      question: string;
+      projectId?: string | null;
+      callModel?: (prompt: string) => Promise<{ text: string; provider: string } | null>;
+    }): Promise<AnswerResult> {
+      const context = this.assistantContext({ query: opts.question, projectId: opts.projectId ?? null });
+      return answerQuestion(opts.question, { context, callModel: opts.callModel });
     },
 
     /** The bounded, attributed snapshot a model consumes. */

@@ -81,6 +81,7 @@ export default defineConfig({
       'electron/brain/recallMemory.real.test.ts',
       'electron/brain/assistantContext.test.ts',
       'electron/brain/contextGoldenPath.real.test.ts',
+      'electron/brain/localAgent.test.ts',
     ],
     environment: 'node',
   },

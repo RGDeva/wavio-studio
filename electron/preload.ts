@@ -66,6 +66,10 @@ contextBridge.exposeInMainWorld('waviAPI', {
       ipcRenderer.invoke('brain:remember', opts),
     /** Whether the brain is keeping itself current, and how much is queued. */
     refreshStatus: () => ipcRenderer.invoke('brain:refreshStatus'),
+    ask: (opts: { question: string; projectId?: string | null }) => ipcRenderer.invoke('brain:ask', opts),
+    modelStatus: () => ipcRenderer.invoke('brain:modelStatus'),
+    setLocalModel: (cfg: { enabled?: boolean; endpoint?: string; model?: string }) =>
+      ipcRenderer.invoke('brain:setLocalModel', cfg),
     assistantContext: (opts: { query?: string; projectId?: string | null }) =>
       ipcRenderer.invoke('brain:assistantContext', opts ?? {}),
     recallMemory: (opts?: { projectId?: string | null; scope?: 'global' | 'project' | 'both' }) =>
