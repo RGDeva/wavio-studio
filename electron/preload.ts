@@ -93,6 +93,8 @@ contextBridge.exposeInMainWorld('waviAPI', {
     getCapabilities: (opts: { dawType?: string | null; filePath?: string | null }) =>
       ipcRenderer.invoke('daw:getCapabilities', opts),
     /** What the recipient actually gets when opening this in a different DAW. */
+    buildPortableHandoff: (opts: { projectId: string; targetDawType?: string | null; handoffRoot?: string | null }) =>
+      ipcRenderer.invoke('daw:buildPortableHandoff', opts),
     planHandoff: (opts: {
       sourceDawType?: string | null;
       targetDawType?: string | null;

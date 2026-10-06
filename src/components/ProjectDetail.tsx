@@ -29,6 +29,10 @@ import { FileRow } from './ui/FileRow';
 import { EmptyState } from './ui/EmptyState';
 import { Skeleton } from './ui/Skeleton';
 import { deriveCompatibilityRows, compatibilityHeadline, DawCapabilityReport } from '../lib/compatibilityView';
+import {
+  deriveHandoffRows, deriveAvailableLines, handoffHeadline, deriveHandoffProblems,
+  dawDisplayName, type HandoffResult,
+} from '../lib/handoffView';
 
 /** Honest one-line explanation for a non-confirmed link mutation. */
 function describeLinkResult(r: LinkResult): string {
@@ -92,6 +96,11 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   const [playing, setPlaying] = useState(false);
   const [playError, setPlayError] = useState(false);
   const [compat, setCompat] = useState<DawCapabilityReport | null>(null);
+  // Cross-DAW handoff. Null until the user asks for one: building it writes a
+  // folder to disk, which is not something to do on merely opening a tab.
+  const [handoffTarget, setHandoffTarget] = useState<string>('');
+  const [handoff, setHandoff] = useState<HandoffResult | null>(null);
+  const [handoffBusy, setHandoffBusy] = useState(false);
   const [online, setOnline] = useState(typeof navigator === 'undefined' ? true : navigator.onLine);
 
   // One honest Project Link boundary for this view — typed results, session-scoped
@@ -102,6 +111,26 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
   // projects must not paint the previous project's files (which would let the
   // media element load a bounce from the prior project).
   const loadedProjectRef = useRef<string>(project.id);
+
+  // A handoff belongs to one project; showing the previous project's verdict
+  // would be worse than showing none.
+  useEffect(() => { setHandoff(null); setHandoffBusy(false); }, [project.id]);
+
+  const buildHandoff = useCallback(async () => {
+    if (handoffBusy) return;
+    setHandoffBusy(true);
+    try {
+      const r = await api.daw.buildPortableHandoff({
+        projectId: project.id,
+        targetDawType: handoffTarget || null,
+      });
+      setHandoff(r as HandoffResult);
+    } catch (e) {
+      setHandoff({ ok: false, error: (e as Error)?.message ?? 'The handoff could not be prepared.' });
+    } finally {
+      setHandoffBusy(false);
+    }
+  }, [project.id, handoffTarget, handoffBusy]);
 
   const load = useCallback(async () => {
     const forProject = project.id;
@@ -623,6 +652,86 @@ export function ProjectDetail({ project, onClose, onNavigate }: ProjectDetailPro
                         <span className={row.tone === 'ok' ? 'text-success' : row.tone === 'warn' ? 'text-warning' : 'text-fg-quaternary'}>{row.value}</span>
                       </div>
                     ))}
+                  </div>
+
+                  {/* Cross-DAW handoff. Concise by intent: what you get, what
+                      you do not, and nothing resembling a dashboard. */}
+                  <div className="mt-5 pt-4 border-t border-hairline-strong space-y-3">
+                    <p className="text-xs font-semibold text-foreground/75">Open in another DAW</p>
+                    <p className="text-meta text-fg-quaternary leading-relaxed">
+                      {handoffHeadline(project.daw_type ?? null, handoffTarget || null, handoff)}
+                    </p>
+
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={handoffTarget}
+                        onChange={(e) => { setHandoffTarget(e.target.value); setHandoff(null); }}
+                        className="bg-layer-2 border border-hairline-strong rounded-lg px-2 py-1.5 text-meta text-fg-secondary"
+                        aria-label="DAW to prepare the handoff for"
+                      >
+                        <option value="">Any DAW</option>
+                        {['ableton', 'fl-studio', 'logic', 'pro-tools', 'reaper'].map((id) => (
+                          <option key={id} value={id}>{dawDisplayName(id)}</option>
+                        ))}
+                      </select>
+                      <button
+                        onClick={buildHandoff}
+                        disabled={handoffBusy}
+                        className="px-3 py-1.5 rounded-lg text-meta font-semibold bg-primary/15 hover:bg-primary/25 text-primary disabled:opacity-40"
+                      >
+                        {handoffBusy ? 'Preparing…' : handoff ? 'Rebuild' : 'Prepare handoff'}
+                      </button>
+                      {handoff?.root && (
+                        <button
+                          onClick={() => api.shell.revealInFinder(handoff.root!)}
+                          className="px-3 py-1.5 rounded-lg text-meta font-medium text-fg-tertiary hover:text-fg border border-hairline-strong"
+                        >
+                          Reveal
+                        </button>
+                      )}
+                    </div>
+
+                    {handoff && (
+                      <div className="space-y-2">
+                        <div className="space-y-1">
+                          {deriveHandoffRows(project.daw_type ?? null, handoffTarget || null, handoff).map((row) => (
+                            <div key={row.label} className="flex items-center justify-between text-meta py-1 border-b border-border-subtle last:border-0">
+                              <span className="text-muted-fg">{row.label}</span>
+                              <span className={row.tone === 'ok' ? 'text-success' : row.tone === 'warn' ? 'text-warning' : 'text-fg-quaternary'}>{row.value}</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        {deriveAvailableLines(handoff).length > 0 && (
+                          <div>
+                            <p className="text-meta text-muted-fg mb-1">Available</p>
+                            <ul className="text-meta text-fg-tertiary space-y-0.5">
+                              {deriveAvailableLines(handoff).map((l) => <li key={l}>{l}</li>)}
+                            </ul>
+                          </div>
+                        )}
+
+                        {(handoff.losses?.length ?? 0) > 0 && (
+                          <div>
+                            <p className="text-meta text-muted-fg mb-1">Not preserved</p>
+                            <ul className="text-meta text-fg-quaternary space-y-0.5">
+                              {handoff.losses!.map((l) => <li key={l}>{l}</li>)}
+                            </ul>
+                          </div>
+                        )}
+
+                        {/* A broken handoff is a different thing from a lossy
+                            one, and must not read as more boilerplate. */}
+                        {deriveHandoffProblems(handoff).length > 0 && (
+                          <div className="bg-warning/5 border border-warning/30 rounded-lg p-2.5">
+                            <p className="text-meta font-semibold text-warning mb-1">These files are missing or unreliable</p>
+                            <ul className="text-meta text-fg-tertiary space-y-0.5">
+                              {deriveHandoffProblems(handoff).map((l) => <li key={l}>{l}</li>)}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </>
               )}
