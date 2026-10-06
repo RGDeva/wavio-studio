@@ -53,8 +53,27 @@ export interface BrainDeps {
   /** Rows for recomputing derived memory. */
   getDeriveInput: (projectId: string) =>
     { projectName: string; dawType: string | null; files: DeriveFile[]; versions: DeriveVersion[]; lastActivityAt: string | null } | null;
+  /** Believed STATED memory for a scope (null = global), with provenance. */
+  listMemoryWithProvenance: (scope: string | null) => MemoryRow[];
   now: () => string;
   newId: () => string;
+}
+
+export interface MemoryRow {
+  key: string; value: string; category: string;
+  kind: string; origin: string; producer: string; observedAt: string;
+}
+
+/** One remembered item, attributed so the assistant can hedge correctly. */
+export interface RecalledMemory {
+  key: string;
+  value: string;
+  category: string;
+  /** 'global' or the project it belongs to. */
+  scope: 'global' | 'project';
+  /** e.g. "you told me (ui)" — plain enough to quote back to a person. */
+  attribution: string;
+  observedAt: string;
 }
 
 export interface RawActivityRow {
@@ -234,6 +253,44 @@ export function createBrainService(deps: BrainDeps) {
       const input = deps.getDeriveInput(projectId);
       if (!input) return null;
       return deriveProjectMemory({ projectId, ...input });
+    },
+
+    /**
+     * Everything the user has explicitly told Wavi, across both scopes.
+     *
+     * Global memory and project memory are returned in SEPARATE buckets rather
+     * than merged: a note about one song must not silently read as a standing
+     * preference, and the assistant needs to know which it is before acting on
+     * it. Derived facts are deliberately excluded — those are the index's own
+     * bookkeeping and are served by project_memory.
+     */
+    recallMemory(opts: { projectId?: string | null; scope?: 'global' | 'project' | 'both' } = {}): {
+      global: RecalledMemory[];
+      project: RecalledMemory[];
+      projectId: string | null;
+    } {
+      const want = opts.scope ?? 'both';
+      const projectId = opts.projectId ?? null;
+
+      const toRecalled = (r: MemoryRow, scope: 'global' | 'project'): RecalledMemory => ({
+        key: r.key,
+        value: r.value,
+        category: r.category,
+        scope,
+        // Provenance in words. 'stated' + 'user' is a person speaking; an agent
+        // assertion is labelled as such so it is never mistaken for the user's.
+        attribution: r.origin === 'user'
+          ? `you told Wavi (via ${r.producer})`
+          : `recorded by ${r.origin} (${r.producer})`,
+        observedAt: r.observedAt,
+      });
+
+      const globalRows = want === 'project' ? [] : deps.listMemoryWithProvenance(null).map((r) => toRecalled(r, 'global'));
+      const projectRows = (want === 'global' || !projectId)
+        ? []
+        : deps.listMemoryWithProvenance(projectId).map((r) => toRecalled(r, 'project'));
+
+      return { global: globalRows, project: projectRows, projectId };
     },
 
     /** The bounded, attributed snapshot a model consumes. */

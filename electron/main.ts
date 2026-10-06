@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
-import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, listMemory, getBelievedMemoryRow, insertMemoryFact, supersedeMemoryFact, listMemoryRowsForMigration, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
+import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, listMemory, getBelievedMemoryRow, insertMemoryFact, supersedeMemoryFact, listMemoryRowsForMigration, listMemoryWithProvenance, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
 import { detectBpm } from './bpmDetector';
@@ -588,6 +588,7 @@ app.whenReady().then(async () => {
         recentProjects: (range: string, limit?: number) => brain.recentProjects(range, limit) as any,
         projectMemory: (projectId: string) => brain.projectMemory(projectId) as any,
         changedSince: (projectId: string, versionId: string) => brain.changedSince(projectId, versionId) as any,
+        recallMemory: (opts: { projectId?: string | null; scope?: 'global' | 'project' | 'both' }) => brain.recallMemory(opts) as any,
       },
       isAuthenticated: () => !!getDecryptedToken(),
       logAudit: (entry: { tool: string; params: Record<string, unknown>; outcome: string }) => {
@@ -3086,12 +3087,17 @@ const brain = createBrainService({
   getRecentFileRows: (since, limit) => getRecentFiles(since, limit) as any,
   getFilesChangedSinceVersion: (projectId, versionId) => getFilesChangedSinceVersion(projectId, versionId) as any,
   getDeriveInput: buildDeriveInput,
+  listMemoryWithProvenance: (scope) => listMemoryWithProvenance(scope) as any,
   now: () => new Date().toISOString(),
   newId: () => crypto.randomUUID(),
 });
 
 /** Is the brain keeping itself current, and how much is queued? */
 ipcMain.handle('brain:refreshStatus', () => ({ pending: brainRefresher.pendingCount(), live: true }));
+
+/** Explicit user memory across both scopes, each item attributed. */
+ipcMain.handle('brain:recallMemory', (_e, opts: { projectId?: string | null; scope?: 'global' | 'project' | 'both' }) =>
+  brain.recallMemory(opts ?? {}));
 
 /** Deterministic retrieval across every indexed project. */
 ipcMain.handle('brain:search', (_e, query: string, limit?: number) =>

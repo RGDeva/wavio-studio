@@ -391,3 +391,50 @@ anywhere in the path.
 Migration is idempotent (gated on `migratedMemoryV1`), non-fatal, and leaves the original
 JSON on disk. The transfer succeeds without it, but keeping it costs nothing and is the only
 rollback path. Nothing reads it again.
+
+## 18. Memory retrieval — the assistant's single memory interface (2026-10-06)
+
+Memory was stored canonically after §17, but nothing exposed it: `project_memory` returned
+only **derived** facts and inferences, and **no tool reached global memory at all**. A user
+could tell Wavi something and the assistant could never recall it.
+
+`recall_memory` closes that. One read-only, offline tool covering both scopes.
+
+### Buckets, not a merged list
+
+Global memory and project memory come back **separately**. Merging them would let a note
+about one song read as a standing preference, which the assistant would then apply
+everywhere. The tool result keeps `global` and `project` apart, and each item carries its
+own `scope`.
+
+### Provenance in words
+
+Every item carries an attribution the assistant can read back to a person:
+
+- `you told Wavi (via ui)` — a human assertion
+- `recorded by agent (copilot)` — something the assistant itself noted
+
+Without that distinction the assistant could quote its own earlier note back as the user's
+instruction.
+
+### Derived facts are excluded
+
+`recall_memory` returns `kind: 'stated'` only. Derived facts are the index's own bookkeeping;
+surfacing them here would let the assistant claim the user said something the watcher
+computed. `project_memory` remains the place for those, with its own facts/inferences split.
+
+### Paths
+
+The existing boundary reduces an absolute path to its final name before a result leaves the
+main process, so a memory like *"Sunshine vocals are usually exported to /Bounces"* reaches
+the model as `Bounces`. That is asserted directly in the end-to-end test. The tool
+description says so explicitly, so the model quotes it as a folder name rather than inventing
+a full path.
+
+### Still read-only
+
+No mutation capability was added; writing stays on the existing approved paths. A test asserts
+no tool name matches delete/remove/write/forget/set.
+
+Proven end to end against a file-backed database: write → **restart** → retrieve through the
+tool, with cross-project isolation and no duplication.

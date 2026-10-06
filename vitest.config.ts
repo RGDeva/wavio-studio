@@ -77,6 +77,8 @@ export default defineConfig({
       'electron/brain/activityView.test.ts',
       'electron/brain/legacyMemoryMigration.test.ts',
       'electron/brain/memoryUnification.real.test.ts',
+      'electron/brain/recallMemory.test.ts',
+      'electron/brain/recallMemory.real.test.ts',
     ],
     environment: 'node',
   },

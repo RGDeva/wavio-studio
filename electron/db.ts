@@ -1714,6 +1714,30 @@ export function supersedeMemoryFact(id: string, supersededAt: string) {
     .run(supersededAt, id);
 }
 
+/**
+ * Believed memory for a scope, carrying its provenance.
+ *
+ * listMemory() returns the legacy UI shape; this one keeps kind/origin/producer
+ * so the assistant can say WHERE a memory came from — the difference between
+ * "you told me" and "the index worked it out" is the whole point of the
+ * fact/inference split, and it would be lost if retrieval flattened it.
+ */
+export function listMemoryWithProvenance(scope: string | null) {
+  return db.prepare(`
+    SELECT key, value, COALESCE(category, 'note') AS category,
+           kind, source_origin AS origin, source_producer AS producer,
+           observed_at AS observedAt
+    FROM project_facts
+    WHERE COALESCE(project_id, '') = COALESCE(?, '')
+      AND superseded_at IS NULL
+      AND kind = 'stated'
+    ORDER BY observed_at DESC, key ASC
+  `).all(scope ?? null) as Array<{
+    key: string; value: string; category: string;
+    kind: string; origin: string; producer: string; observedAt: string;
+  }>;
+}
+
 /** Believed GLOBAL memory rows, for the legacy migration to compare against. */
 export function listMemoryRowsForMigration() {
   return db.prepare(`

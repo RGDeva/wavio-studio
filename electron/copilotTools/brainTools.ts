@@ -37,6 +37,11 @@ export interface BrainReadDeps {
     facts: Array<{ key: string; value: string }>;
     inferences: Array<{ key: string; value: string; evidence: string; strength: string }>;
   } | null;
+  recallMemory: (opts: { projectId?: string | null; scope?: 'global' | 'project' | 'both' }) => {
+    global: Array<{ key: string; value: string; category: string; scope: string; attribution: string; observedAt: string }>;
+    project: Array<{ key: string; value: string; category: string; scope: string; attribution: string; observedAt: string }>;
+    projectId: string | null;
+  };
   changedSince: (projectId: string, versionId: string) => {
     sinceIso: string;
     files: Array<{ id: string; name: string; role: string | null; modifiedAt: string | null; syncStatus: string | null }>;
@@ -158,6 +163,45 @@ export function buildBrainToolSpecs(deps: BrainReadDeps): CopilotToolSpec[] {
           facts: Object.fromEntries(m.facts.map((f) => [f.key, f.value])),
           inferences: m.inferences.map((i) => ({ what: i.key, value: i.value, why: i.evidence, confidence: i.strength })),
         });
+      },
+    },
+    {
+      name: 'recall_memory',
+      description:
+        'What the user has explicitly told Wavi to remember — both their standing, app-wide notes and notes attached to a specific project. '
+        + 'Each item says where it came from. Read-only, offline. '
+        + 'Note: absolute file paths are reduced to the final folder or file name before leaving the app, so quote them as a name, not a full path.',
+      parameters: {
+        scope: { type: 'string', description: "'global', 'project', or 'both' (default).", required: false },
+        projectId: { type: 'string', description: 'Project id for project-scoped memory (defaults to the active project).', required: false },
+      },
+      execution: 'local',
+      run: async (params, ctx) => {
+        const rawScope = String(params?.scope ?? 'both').toLowerCase();
+        const scope = (rawScope === 'global' || rawScope === 'project' || rawScope === 'both') ? rawScope : 'both';
+        const projectId = String(params?.projectId ?? (ctx as BrainToolContext)?.projectId ?? '') || null;
+
+        if (scope === 'project' && !projectId) {
+          return err('No project selected — open a project first, or ask for global memory.');
+        }
+        const out = deps.recallMemory({ projectId, scope });
+        const total = out.global.length + out.project.length;
+        if (total === 0) {
+          // An explicit empty answer, so the model says "nothing is remembered"
+          // rather than filling the silence from its own context.
+          return ok('Nothing has been explicitly remembered yet.', { global: [], project: [], total: 0 });
+        }
+        return ok(
+          `${total} remembered item${total === 1 ? '' : 's'}` +
+          `${out.project.length ? ` (${out.project.length} for this project)` : ''}.`,
+          {
+            // Kept in separate buckets: a note about one song must not read as
+            // a standing preference.
+            global: out.global,
+            project: out.project,
+            total,
+          },
+        );
       },
     },
     {
