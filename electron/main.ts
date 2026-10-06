@@ -3095,6 +3095,14 @@ const brain = createBrainService({
 /** Is the brain keeping itself current, and how much is queued? */
 ipcMain.handle('brain:refreshStatus', () => ({ pending: brainRefresher.pendingCount(), live: true }));
 
+/**
+ * THE context boundary for a future local model: one bounded, attributed
+ * snapshot assembled from deterministic state. A model consumes this and
+ * nothing else — it never queries the database or the filesystem itself.
+ */
+ipcMain.handle('brain:assistantContext', (_e, opts: { query?: string; projectId?: string | null }) =>
+  brain.assistantContext({ query: String(opts?.query ?? ''), projectId: opts?.projectId ?? null }));
+
 /** Explicit user memory across both scopes, each item attributed. */
 ipcMain.handle('brain:recallMemory', (_e, opts: { projectId?: string | null; scope?: 'global' | 'project' | 'both' }) =>
   brain.recallMemory(opts ?? {}));

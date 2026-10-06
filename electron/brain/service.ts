@@ -19,6 +19,7 @@ import type { IndexTruth } from './memory';
 import { parseRange, type TimeRange } from './timeRange';
 import { deriveProjectMemory, type DeriveFile, type DeriveVersion, type DerivedMemory } from './derive';
 import { coalesceActivity, summarizeActivity } from './activityView';
+import { buildAssistantContext, type ContextLimits, type AssistantContext } from './assistantContext';
 
 /** Raw row shapes, matching the db queries. */
 export interface RawRecordRow {
@@ -291,6 +292,53 @@ export function createBrainService(deps: BrainDeps) {
         : deps.listMemoryWithProvenance(projectId).map((r) => toRecalled(r, 'project'));
 
       return { global: globalRows, project: projectRows, projectId };
+    },
+
+    /**
+     * THE context boundary a local or cloud model consumes later.
+     *
+     * Assembles project identity, relevant user memory from both scopes,
+     * deterministic facts, inferences, files, versions and recent activity —
+     * each attributed, all bounded by named limits. Nothing below this line
+     * touches a model; nothing above it should touch the database.
+     */
+    assistantContext(opts: { query: string; projectId?: string | null; limits?: ContextLimits }): AssistantContext {
+      const projectId = opts.projectId ?? null;
+      const derive = projectId ? deps.getDeriveInput(projectId) : null;
+      const memoryRows = [
+        ...deps.listMemoryWithProvenance(null).map((r) => ({ ...r, scope: 'global' as const })),
+        // Only the CURRENT project's memory is gathered — another project's
+        // notes are never fetched, so they cannot leak into this context.
+        ...(projectId ? deps.listMemoryWithProvenance(projectId).map((r) => ({ ...r, scope: 'project' as const })) : []),
+      ];
+      const memoryDerived = projectId ? this.projectMemory(projectId) : null;
+
+      return buildAssistantContext({
+        query: opts.query ?? '',
+        project: derive && projectId
+          ? { id: projectId, name: derive.projectName, dawType: derive.dawType }
+          : null,
+        memory: memoryRows.map((r) => ({
+          key: r.key, value: r.value, category: r.category,
+          scope: r.scope, origin: r.origin, producer: r.producer, observedAt: r.observedAt,
+        })),
+        facts: memoryDerived?.facts ?? [],
+        inferences: memoryDerived?.inferences ?? [],
+        files: (derive?.files ?? []).map((f) => ({
+          // Name only — a path must never reach a model.
+          id: f.id, name: f.name, role: f.role, status: f.localStatus, modifiedAt: f.modifiedAt,
+        })),
+        versions: (derive?.versions ?? []).map((v) => ({
+          versionNumber: v.versionNumber, createdAt: v.createdAt, fileCount: null,
+        })),
+        recentActivity: projectId
+          ? this.recentActivity('this-week').events
+              .filter((e) => e.projectId === projectId)
+              .map((e) => ({ type: e.type, message: e.message, at: e.at }))
+          : [],
+        limits: opts.limits,
+        now: deps.now(),
+      });
     },
 
     /** The bounded, attributed snapshot a model consumes. */

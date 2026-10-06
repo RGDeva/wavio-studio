@@ -438,3 +438,51 @@ no tool name matches delete/remove/write/forget/set.
 
 Proven end to end against a file-backed database: write → **restart** → retrieve through the
 tool, with cross-project isolation and no duplication.
+
+## 19. The assistant context boundary (2026-10-06)
+
+`brain/assistantContext.ts` is the single boundary a local or cloud model will consume. It
+assembles project identity, relevant user memory from both scopes, deterministic facts,
+inferences, files, versions and recent activity — each attributed, all bounded.
+
+Nothing below this line touches a model; nothing above it should touch the database.
+
+### Relevance is lexical and deterministic
+
+Returning every memory for every request would bury the relevant one. Selection is a count of
+query terms matching a memory's key/value/category — explainable, reproducible, no embeddings.
+
+Two corrections the tests forced:
+
+- **Fallback only for broad questions.** Originally any query with no matches fell back to
+  "return everything". That is right for *"what do you remember?"* and wrong for *"what do I
+  do when sharing demos?"* — the latter should answer *nothing*, not hand the model unrelated
+  notes. The fallback now triggers only when the query carries no usable terms.
+- **Stopwords and stem matching.** A raw substring test made *"Which DAW do I usually use?"*
+  match *"I **usually** export vocals…"*, and `for` matched almost any sentence. Filler words
+  are now dropped, and matching is token-or-shared-prefix (≥5 chars), so `export`/`exported`
+  and `collaborator`/`collaborations` relate while fragments inside unrelated words do not.
+
+### Conflicts are surfaced, not scored
+
+Comparison happens **by key only**. "I prefer FL Studio for collaborations" and "this project
+is Ableton" are different claims about different things; a universal relevance score across
+categories would invent a disagreement there.
+
+Where the same key does collide, the **index wins** for current file state — it re-reads the
+disk, and a remembered filename goes stale the moment the user bounces again. The statement is
+still returned with its provenance so the caller can explain rather than silently drop it.
+
+An explicit statement outranks an **inference** about the same subject: the inference is kept,
+with its evidence annotated to say the user has stated a value that takes precedence.
+
+### Limits
+
+`CONTEXT_LIMITS` is exported and named rather than scattered through `slice()` calls:
+8 memories per scope, 20 files, 5 versions, 15 activity events, 20 facts, 8 inferences.
+A 25,000-file library yields at most 20 file records, and the result reports what it dropped.
+
+### Provenance stays structured
+
+`{ kind, origin, producer, strength?, evidence?, scope? }` — never flattened to a sentence,
+so a guess can never be read as a measurement.

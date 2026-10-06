@@ -79,6 +79,8 @@ export default defineConfig({
       'electron/brain/memoryUnification.real.test.ts',
       'electron/brain/recallMemory.test.ts',
       'electron/brain/recallMemory.real.test.ts',
+      'electron/brain/assistantContext.test.ts',
+      'electron/brain/contextGoldenPath.real.test.ts',
     ],
     environment: 'node',
   },
