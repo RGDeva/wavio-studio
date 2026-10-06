@@ -25,6 +25,7 @@ function deps(over: Partial<BrainReadDeps> = {}): BrainReadDeps {
       facts: [{ key: 'file-count', value: '4' }, { key: 'changed-since-publish', value: 'yes' }],
       inferences: [{ key: 'likely-master', value: 'master-v7.wav', evidence: 'only master-like file', strength: 'strong' }],
     }),
+    recallMemory: () => ({ global: [], project: [], projectId: null }),
     changedSince: () => ({ sinceIso: '2026-10-02T00:00:00.000Z', files: [{ id: 'f1', name: 'master-v7.wav', role: 'audio', modifiedAt: '2026-10-06T00:00:00.000Z', syncStatus: 'pending' }] }),
     ...over,
   };
@@ -35,9 +36,13 @@ const tools = (d = deps()) => Object.fromEntries(buildBrainToolSpecs(d).map((t) 
 
 describe('the tool surface stays read-only', () => {
   it('exposes exactly the expected read tools', () => {
+    // recall_memory joined the set when memory retrieval landed: memory was
+    // stored canonically but nothing exposed it, so the assistant could never
+    // recall what a user told it.
     expect(Object.keys(tools()).sort()).toEqual([
       'changed_since_version', 'find_files', 'project_memory',
-      'recent_activity', 'recent_projects', 'search_music_library',
+      'recall_memory', 'recent_activity', 'recent_projects',
+      'search_music_library',
     ]);
   });
 
