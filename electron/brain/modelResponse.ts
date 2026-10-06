@@ -22,6 +22,12 @@ export interface ModelAnswer {
   /** Ids of context items the answer relies on, e.g. ['M1', 'F2']. */
   citedContextIds: string[];
   confidence: Confidence;
+  /**
+   * An action the model SUGGESTS. Carried through as opaque data and
+   * validated separately against the allowlist and the context — nothing here
+   * is trusted, and a malformed proposal must not invalidate a good answer.
+   */
+  proposedAction?: { tool: string; params?: Record<string, unknown> };
 }
 
 export type ParseResult =
@@ -99,9 +105,30 @@ export function parseModelResponse(raw: string): ParseResult {
     return { ok: false, reason: `"confidence" must be one of high|medium|low` };
   }
 
+  // A proposal is optional, and a bad one is dropped rather than failing the
+  // whole reply: the answer may be perfectly good even when the suggestion is
+  // not. Validation against the allowlist happens downstream.
+  let proposedAction: ModelAnswer['proposedAction'];
+  const pa = o.proposedAction;
+  if (pa && typeof pa === 'object' && !Array.isArray(pa)) {
+    const tool = (pa as Record<string, unknown>).tool;
+    const params = (pa as Record<string, unknown>).params;
+    if (typeof tool === 'string' && tool.trim()) {
+      proposedAction = {
+        tool: tool.trim(),
+        params: params && typeof params === 'object' && !Array.isArray(params)
+          ? params as Record<string, unknown>
+          : undefined,
+      };
+    }
+  }
+
   return {
     ok: true,
-    value: { answer: o.answer.trim(), citedContextIds: cited, confidence: confRaw as Confidence },
+    value: {
+      answer: o.answer.trim(), citedContextIds: cited, confidence: confRaw as Confidence,
+      ...(proposedAction ? { proposedAction } : {}),
+    },
   };
 }
 
@@ -130,7 +157,8 @@ export const RESPONSE_SCHEMA_INSTRUCTION = [
   '{',
   '  "answer": "<your reply in one or two short sentences>",',
   '  "citedContextIds": ["<ids of the context lines you used, e.g. M1, F2>"],',
-  '  "confidence": "high" | "medium" | "low"',
+  '  "confidence": "high" | "medium" | "low",',
+  '  "proposedAction": { "tool": "<one of the allowed actions>", "params": { } }   // optional',
   '}',
   'If the context does not answer the question, say so in "answer", cite nothing, and use "low".',
 ].join('\n');

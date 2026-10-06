@@ -16,6 +16,7 @@
  */
 import type { AssistantContext } from './assistantContext';
 import { RESPONSE_SCHEMA_INSTRUCTION } from './modelResponse';
+import { describeAllowlistForPrompt } from './agentActions';
 
 // ── What counts as a checkable claim ─────────────────────────────────────────
 //
@@ -237,6 +238,8 @@ export function buildGroundedPrompt(opts: {
     '',
     '--- CORRECT ANSWER ---',
     opts.deterministicAnswer,
+    '',
+    describeAllowlistForPrompt(),
     '',
     RESPONSE_SCHEMA_INSTRUCTION,
     '',
