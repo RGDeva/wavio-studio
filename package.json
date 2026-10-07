@@ -19,7 +19,12 @@
     "test": "vitest run",
     "postinstall": "electron-rebuild -f -w better-sqlite3 || true",
     "build:mac:staging": "node scripts/build-staging.mjs",
-    "verify:package": "node scripts/verify-package.mjs"
+    "verify:package": "node scripts/verify-package.mjs",
+    "release:mac": "node scripts/release-mac.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
+    "release:preflight": "node scripts/release-preflight.mjs",
+    "release:mac:unsigned": "node scripts/release-mac.mjs --unsigned",
+    "verify:release:unsigned": "node scripts/verify-release.mjs --unsigned"
   },
   "engines": {
     "node": ">=22.0.0 <23.0.0"
@@ -101,7 +106,9 @@
     "protocols": [
       {
         "name": "wavi-protocol",
-        "schemes": ["wavi"]
+        "schemes": [
+          "wavi"
+        ]
       }
     ],
     "mac": {
@@ -126,7 +133,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "notarize": true
     },
     "dmg": {
       "sign": false
@@ -144,6 +152,7 @@
         "AppImage",
         "deb"
       ]
-    }
+    },
+    "artifactName": "Wavi-Studio-${version}-${arch}.${ext}"
   }
 }

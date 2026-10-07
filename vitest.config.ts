@@ -37,6 +37,7 @@ export default defineConfig({
       'electron/mediaProtocol.test.ts',
       'electron/adapters/adapters.test.ts',
       'electron/portableHandoff.test.ts',
+      'electron/macRelease.test.ts',
       'src/lib/compatibilityView.test.ts',
       'src/lib/handoffView.test.ts',
       'src/dev/uiPreview/isPreviewEnabled.test.ts',
