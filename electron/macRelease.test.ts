@@ -18,6 +18,8 @@ import {
   RELEASE_MATRIX, builderArgsFor, expectedArtifacts,
   parseCodesign, parseSpctl, parseStapler, summarizeVerification,
   parseMachoArchs, machoNameFor, classifyToolFailure, ticketFileEvidence,
+  notarizeConfigArgs, artifactFileName, releaseArtifactNames,
+  buildReleaseManifest, auditManifest, assessPublicEligibility, PUBLIC_REQUIREMENTS,
 // @ts-expect-error — plain ESM module shared with the release scripts
 } from '../scripts/macSigning.mjs';
 
@@ -368,5 +370,172 @@ describe('the verdict never overstates what was checked', () => {
     expect(v.claim).toMatch(/hardened runtime/);
     expect(v.claim).toMatch(/notarized/);
     expect(v.claim).toMatch(/stapled/);
+  });
+});
+
+describe('notarization is configured, not left to chance', () => {
+  it('the build config sets mac.notarize explicitly', () => {
+    // electron-builder 24.13.3 SKIPS notarization with only a warning when
+    // `notarize` is unset, even with credentials present. Leaving it undefined
+    // is the silent-success this whole pipeline exists to prevent.
+    const pkg = JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'));
+    expect(pkg.build.mac.notarize).toBe(true);
+  });
+
+  it('uses the NATIVE mechanism, not a historical afterSign hook', () => {
+    // electron-builder 24.13.3 bundles @electron/notarize 2.2.1 and notarizes
+    // (and staples the .app) itself. An afterSign hook alongside it would
+    // notarize twice.
+    const pkg = JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'));
+    expect(pkg.build.afterSign).toBeUndefined();
+    expect(require('node:fs').existsSync('scripts/notarize.mjs')).toBe(false);
+  });
+
+  it('passes a team id on the command line for the Apple-ID path only', () => {
+    // electron-builder reads credentials from the environment but the team id
+    // from CONFIG, so that one value has to be injected at build time. It is
+    // never committed: a team id checked in for one developer is wrong for
+    // every other.
+    const appleId = detectNotarizationCredentials({ APPLE_ID: 'a@b.c', APPLE_APP_SPECIFIC_PASSWORD: 'p', APPLE_TEAM_ID: 'TEAM123' });
+    expect(notarizeConfigArgs(appleId, { APPLE_TEAM_ID: 'TEAM123' })).toEqual(['-c.mac.notarize.teamId=TEAM123']);
+    // The API-key path needs nothing extra.
+    const apiKey = detectNotarizationCredentials({ APPLE_API_KEY: 'k', APPLE_API_KEY_ID: 'i', APPLE_API_ISSUER: 's' });
+    expect(notarizeConfigArgs(apiKey, {})).toEqual([]);
+  });
+
+  it('recognises a stored keychain profile, electron-builder’s third method', () => {
+    const r = detectNotarizationCredentials({ APPLE_KEYCHAIN_PROFILE: 'wavi-notary' });
+    expect(r).toMatchObject({ canNotarize: true, method: 'keychain-profile' });
+  });
+});
+
+describe('artifact naming for a public download page', () => {
+  it('is explicit about architecture and contains no spaces', () => {
+    // GitHub rewrote the v1.0.0 asset "Wavi Studio-1.0.0-arm64.dmg" to
+    // "Wavi.Studio-1.0.0-arm64.dmg". A download URL should not depend on how a
+    // host mangles a space.
+    expect(artifactFileName('1.1.0', 'arm64', 'dmg')).toBe('Wavi-Studio-1.1.0-arm64.dmg');
+    expect(artifactFileName('1.1.0', 'x64', 'dmg')).toBe('Wavi-Studio-1.1.0-x64.dmg');
+    for (const a of releaseArtifactNames('1.1.0')) {
+      expect(a.file).not.toMatch(/\s/);
+      expect(a.file).toContain(a.arch);
+    }
+  });
+
+  it('never produces an x64 file whose name omits the architecture', () => {
+    // The old scheme gave x64 the bare name "Wavi Studio-1.1.0.dmg", which is
+    // indistinguishable from "the default download" to anyone reading a URL.
+    const names = releaseArtifactNames('1.1.0').map((a: any) => a.file);
+    expect(names).toContain('Wavi-Studio-1.1.0-x64.dmg');
+    expect(names).not.toContain('Wavi-Studio-1.1.0.dmg');
+  });
+
+  it('matches the artifactName template in the build config', () => {
+    const pkg = JSON.parse(require('node:fs').readFileSync('package.json', 'utf8'));
+    expect(pkg.build.artifactName).toBe('Wavi-Studio-${version}-${arch}.${ext}');
+  });
+
+  it('covers all four cells', () => {
+    expect(releaseArtifactNames('1.1.0')).toHaveLength(4);
+  });
+});
+
+describe('release manifest', () => {
+  const artifact = (over: Record<string, unknown> = {}) => ({
+    arch: 'arm64', filename: 'Wavi-Studio-1.1.0-arm64.dmg', bytes: 111, sha256: 'a'.repeat(64),
+    signed: true, signingIdentity: 'Developer ID Application: Acme (AB12CD34EF)',
+    notarized: true, stapled: true, packageVerified: true, publicDownloadEligible: true, ...over,
+  });
+
+  it('records what was verified, in a shape the website can consume', () => {
+    const m = buildReleaseManifest({
+      version: '1.1.0', sourceCommit: 'c305c7e5', generatedAt: '2026-10-07T00:00:00.000Z',
+      artifacts: [artifact()],
+    });
+    expect(m).toMatchObject({ schema: 'wavi.release/1', version: '1.1.0', sourceCommit: 'c305c7e5' });
+    expect(m.artifacts[0]).toMatchObject({
+      platform: 'darwin', arch: 'arm64', notarized: true, stapled: true, publicDownloadEligible: true,
+    });
+  });
+
+  it('coerces every guarantee to a strict boolean, so undefined is never truthy', () => {
+    // A field the verifier could not determine must read false, not absent.
+    const m = buildReleaseManifest({
+      version: '1.1.0', sourceCommit: null, generatedAt: 'now',
+      artifacts: [{ arch: 'x64', filename: 'f', bytes: 1, sha256: 'b' }] as any,
+    });
+    expect(m.artifacts[0]).toMatchObject({
+      signed: false, notarized: false, stapled: false,
+      packageVerified: false, publicDownloadEligible: false, signingIdentity: null,
+    });
+  });
+
+  it('refuses a manifest carrying a local path', () => {
+    // It is built as if already published, because it will be.
+    const m = buildReleaseManifest({
+      version: '1.1.0', sourceCommit: 'c', generatedAt: 'n',
+      artifacts: [artifact({ filename: '/Users/someone/release/app.dmg' })],
+    });
+    const audit = auditManifest(m);
+    expect(audit.ok).toBe(false);
+    expect(audit.leaks).toContain('absolute user path');
+  });
+
+  it('refuses a manifest carrying credentials', () => {
+    const m: any = buildReleaseManifest({
+      version: '1.1.0', sourceCommit: 'c', generatedAt: 'n', artifacts: [artifact()],
+    });
+    m.notes = 'APPLE_API_KEY=abc';
+    expect(auditManifest(m).ok).toBe(false);
+  });
+
+  it('passes a clean manifest', () => {
+    expect(auditManifest(buildReleaseManifest({
+      version: '1.1.0', sourceCommit: 'c305c7e5', generatedAt: 'n', artifacts: [artifact()],
+    })).ok).toBe(true);
+  });
+});
+
+describe('the public eligibility gate', () => {
+  const ALL_MET = {
+    archMatches: true, packageVerified: true, developerIdSigned: true,
+    hardenedRuntime: true, notarized: true, stapled: true,
+    noSecretsOrDevPaths: true, sourceCommitMatches: true,
+  };
+
+  it('is eligible only when every mandatory requirement is verified', () => {
+    expect(assessPublicEligibility(ALL_MET).publicDownloadEligible).toBe(true);
+  });
+
+  it('a single unmet requirement blocks it, and says which', () => {
+    for (const key of PUBLIC_REQUIREMENTS) {
+      const r = assessPublicEligibility({ ...ALL_MET, [key]: false });
+      expect(r.publicDownloadEligible, `${key} must be mandatory`).toBe(false);
+      expect(r.unmet).toContain(key);
+    }
+  });
+
+  it('treats unknown as not eligible — there is no state between checked and no', () => {
+    expect(assessPublicEligibility({ ...ALL_MET, notarized: undefined as any }).publicDownloadEligible).toBe(false);
+    // Not even a truthy non-boolean counts.
+    expect(assessPublicEligibility({ ...ALL_MET, notarized: 'yes' as any }).publicDownloadEligible).toBe(false);
+    expect(assessPublicEligibility({}).publicDownloadEligible).toBe(false);
+    expect(assessPublicEligibility(null as any).publicDownloadEligible).toBe(false);
+  });
+
+  it('an unsigned build is never eligible, however structurally sound', () => {
+    // The state this repository is actually in: everything structural passes.
+    const r = assessPublicEligibility({
+      archMatches: true, packageVerified: true, noSecretsOrDevPaths: true, sourceCommitMatches: true,
+      developerIdSigned: false, hardenedRuntime: false, notarized: false, stapled: false,
+    });
+    expect(r.publicDownloadEligible).toBe(false);
+    expect(r.unmet).toEqual(['developerIdSigned', 'hardenedRuntime', 'notarized', 'stapled']);
+  });
+
+  it('has no override parameter', () => {
+    // The point of this function is to be the thing a tired person cannot talk
+    // themselves past at 2am, so it takes findings and nothing else.
+    expect(assessPublicEligibility.length).toBe(1);
   });
 });

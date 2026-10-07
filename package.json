@@ -21,9 +21,10 @@
     "build:mac:staging": "node scripts/build-staging.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "release:mac": "node scripts/release-mac.mjs",
-    "release:mac:local": "node scripts/release-mac.mjs --allow-unsigned",
     "verify:release": "node scripts/verify-release.mjs",
-    "verify:release:local": "node scripts/verify-release.mjs --local"
+    "release:preflight": "node scripts/release-preflight.mjs",
+    "release:mac:unsigned": "node scripts/release-mac.mjs --unsigned",
+    "verify:release:unsigned": "node scripts/verify-release.mjs --unsigned"
   },
   "engines": {
     "node": ">=22.0.0 <23.0.0"
@@ -132,7 +133,8 @@
             "x64"
           ]
         }
-      ]
+      ],
+      "notarize": true
     },
     "dmg": {
       "sign": false
@@ -151,6 +153,6 @@
         "deb"
       ]
     },
-    "afterSign": "scripts/notarize.mjs"
+    "artifactName": "Wavi-Studio-${version}-${arch}.${ext}"
   }
 }

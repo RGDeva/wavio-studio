@@ -118,6 +118,16 @@ export function detectNotarizationCredentials(env = {}) {
     return { canNotarize: true, method: 'api-key', missing: [], reason: 'Using an App Store Connect API key.' };
   }
 
+  // Option 3 in electron-builder's own resolution order: a notarytool profile
+  // already stored in a keychain. Supported, and the only method that keeps
+  // the password out of the environment entirely.
+  if (env.APPLE_KEYCHAIN_PROFILE) {
+    return {
+      canNotarize: true, method: 'keychain-profile', missing: [],
+      reason: `Using the stored notarytool profile "${env.APPLE_KEYCHAIN_PROFILE}".`,
+    };
+  }
+
   const appleIdVars = ['APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID'];
   const appleIdPresent = appleIdVars.filter((v) => env[v]);
   if (appleIdPresent.length === appleIdVars.length) {
@@ -136,8 +146,25 @@ export function detectNotarizationCredentials(env = {}) {
     missing,
     reason: partial
       ? `Notarization credentials are incomplete — missing ${missing.join(', ')}. A partially configured build fails after packaging, so it is refused up front.`
-      : 'No notarization credentials. Set APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER, or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID.',
+      : 'No notarization credentials. Set APPLE_API_KEY + APPLE_API_KEY_ID + APPLE_API_ISSUER (recommended), or APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID, or APPLE_KEYCHAIN_PROFILE.',
   };
+}
+
+/**
+ * Extra electron-builder config the notarization method needs.
+ *
+ * `mac.notarize: true` in package.json is enough for the API-key path. The
+ * Apple-ID path goes through notarytool, which requires a team id, and
+ * electron-builder reads that from CONFIG rather than the environment — so it
+ * is passed on the command line at build time. A team id is an identifier
+ * rather than a secret, but it is still never written into the repository,
+ * because a value committed for one developer is wrong for everyone else.
+ */
+export function notarizeConfigArgs(notary, env = {}) {
+  if (notary.method === 'apple-id' && env.APPLE_TEAM_ID) {
+    return [`-c.mac.notarize.teamId=${env.APPLE_TEAM_ID}`];
+  }
+  return [];
 }
 
 // ── The build matrix ────────────────────────────────────────────────────────
@@ -397,4 +424,126 @@ export function classifyToolFailure(stderr) {
     return { usable: false, reason: 'the tool is not installed' };
   }
   return { usable: true, reason: null };
+}
+
+
+// ── Artifact naming ─────────────────────────────────────────────────────────
+
+/**
+ * The public filename for one artifact.
+ *
+ * Mirrors `artifactName` in the build config, and exists so the verifier can
+ * assert the files it expects rather than globbing whatever happens to be
+ * present. No spaces: GitHub rewrote the v1.0.0 asset "Wavi Studio-1.0.0-arm64.dmg"
+ * to "Wavi.Studio-1.0.0-arm64.dmg", and a download URL on wavi.stream should
+ * not depend on how a host mangles a space.
+ */
+export function artifactFileName(version, arch, ext) {
+  return `Wavi-Studio-${version}-${arch}.${ext}`;
+}
+
+/** Every file a complete mac release must contain. */
+export function releaseArtifactNames(version) {
+  return RELEASE_MATRIX.map((cell) => ({
+    ...cell,
+    file: artifactFileName(version, cell.arch, cell.target === 'zip' ? 'zip' : 'dmg'),
+  }));
+}
+
+// ── Release manifest ────────────────────────────────────────────────────────
+
+/**
+ * Build the machine-readable manifest the website workflow will consume.
+ *
+ * Deliberately records what was VERIFIED, not what was requested: `signed`,
+ * `notarized` and `stapled` come from the verifier's findings, so a manifest
+ * can never describe a guarantee the artifact does not carry.
+ *
+ * Nothing local goes in — no absolute paths, no usernames, no credentials. The
+ * manifest is intended to be published, so it is built as if it already were.
+ */
+export function buildReleaseManifest({ version, sourceCommit, generatedAt, artifacts }) {
+  return {
+    schema: 'wavi.release/1',
+    product: 'Wavi Studio',
+    version,
+    sourceCommit,
+    generatedAt,
+    artifacts: artifacts.map((a) => ({
+      platform: 'darwin',
+      arch: a.arch,
+      filename: a.filename,
+      bytes: a.bytes,
+      sha256: a.sha256,
+      signed: a.signed === true,
+      signingIdentity: a.signingIdentity ?? null,
+      notarized: a.notarized === true,
+      stapled: a.stapled === true,
+      packageVerified: a.packageVerified === true,
+      publicDownloadEligible: a.publicDownloadEligible === true,
+    })),
+  };
+}
+
+/** Patterns that must never appear in a manifest destined for the web. */
+const MANIFEST_FORBIDDEN = [
+  { label: 'absolute user path', re: /\/Users\/[^/"\s]+/ },
+  { label: 'home path', re: /\/home\/[^/"\s]+/ },
+  { label: 'windows user path', re: /C:\\\\Users\\\\/ },
+  { label: 'bearer token', re: /Bearer\s+[A-Za-z0-9._-]{20,}/ },
+  { label: 'privy DID', re: /did:privy:/ },
+  { label: 'apple password', re: /APPLE_APP_SPECIFIC_PASSWORD|APPLE_API_KEY/ },
+  { label: 'private key', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----/ },
+];
+
+/**
+ * Would publishing this manifest leak anything?
+ *
+ * Checked on the serialised form rather than field by field, because the leak
+ * that matters is whatever actually ends up in the file — including anything a
+ * future field quietly carries along.
+ */
+export function auditManifest(manifest) {
+  const text = JSON.stringify(manifest);
+  const leaks = MANIFEST_FORBIDDEN.filter((f) => f.re.test(text)).map((f) => f.label);
+  return { ok: leaks.length === 0, leaks };
+}
+
+// ── The public eligibility gate ──────────────────────────────────────────────
+
+/**
+ * The mandatory requirements for linking an artifact publicly.
+ *
+ * One list, one gate, no override. The reason there is no `force` flag
+ * anywhere in the release scripts is that the whole purpose of this function is
+ * to be the thing a tired person cannot talk themselves past at 2am.
+ */
+export const PUBLIC_REQUIREMENTS = [
+  'archMatches',
+  'packageVerified',
+  'developerIdSigned',
+  'hardenedRuntime',
+  'notarized',
+  'stapled',
+  'noSecretsOrDevPaths',
+  'sourceCommitMatches',
+];
+
+/**
+ * Decide whether an artifact may be linked from the website.
+ *
+ * `true` requires every requirement to be explicitly true. Anything missing,
+ * unknown or unverifiable is not eligible — there is no state between "we
+ * checked and it passed" and "no".
+ */
+export function assessPublicEligibility(findings) {
+  const f = findings ?? {};
+  const unmet = PUBLIC_REQUIREMENTS.filter((r) => f[r] !== true);
+  return {
+    publicDownloadEligible: unmet.length === 0,
+    unmet,
+    reason: unmet.length === 0
+      ? 'every mandatory requirement verified'
+      : `not eligible — unmet: ${unmet.join(', ')}`,
+  };
 }

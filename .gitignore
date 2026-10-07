@@ -11,3 +11,5 @@ dist-electron/
 # Isolated Node-ABI better-sqlite3 for tests (lockfile is committed; binaries are not)
 electron/test-native/node_modules/
 release-staging/
+# Preserved unsigned release candidate (binaries; see its README.txt)
+release-unsigned-rc/
