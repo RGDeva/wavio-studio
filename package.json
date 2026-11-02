@@ -24,7 +24,8 @@
     "verify:release": "node scripts/verify-release.mjs",
     "release:preflight": "node scripts/release-preflight.mjs",
     "release:mac:unsigned": "node scripts/release-mac.mjs --unsigned",
-    "verify:release:unsigned": "node scripts/verify-release.mjs --unsigned"
+    "verify:release:unsigned": "node scripts/verify-release.mjs --unsigned",
+    "icon:generate": "node scripts/make-icon.mjs public/icon.png"
   },
   "engines": {
     "node": ">=22.0.0 <23.0.0"
@@ -113,7 +114,7 @@
     ],
     "mac": {
       "category": "public.app-category.music",
-      "icon": "public/icon.icns",
+      "icon": "public/icon.png",
       "hardenedRuntime": true,
       "gatekeeperAssess": true,
       "entitlements": "build/entitlements.mac.plist",

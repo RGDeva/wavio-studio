@@ -1,7 +1,7 @@
 {
   "appId": "stream.wavi.studio.qa",
   "productName": "Wavi Studio Staging",
-  "copyright": "Copyright \u00a9 2026 Wavi",
+  "copyright": "Copyright © 2026 Wavi",
   "extraMetadata": {
     "waviQaDefaults": {
       "apiBase": "https://wavi-staging-kvbq16xd5-rgdevas-projects.vercel.app/api",
@@ -39,7 +39,7 @@
   ],
   "mac": {
     "category": "public.app-category.music",
-    "icon": "public/icon.icns",
+    "icon": "public/icon.png",
     "hardenedRuntime": true,
     "gatekeeperAssess": true,
     "entitlements": "build/entitlements.mac.plist",
