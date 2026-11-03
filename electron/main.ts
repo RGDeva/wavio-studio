@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
+import os from 'os';
 import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, listMemory, getBelievedMemoryRow, insertMemoryFact, supersedeMemoryFact, listMemoryRowsForMigration, listMemoryWithProvenance, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
@@ -49,6 +50,9 @@ import {
   type HandoffInput, type VerifiedCopy,
 } from './portablePackage';
 import { materializeHandoff } from './portableMaterialize';
+import { validateLaunchApplication } from './appLaunchGuard';
+import { ALL_DAW_ADAPTERS } from './adapters';
+import { isExecutableExtension } from './bridgeGuard';
 import { createBrainService } from './brain/service';
 import { createBrainRefresher } from './brain/liveRefresh';
 import { createLocalProvider } from './brain/localProvider';
@@ -625,7 +629,17 @@ app.whenReady().then(async () => {
         } catch { /* audit must never break the tool */ }
       },
       searchFiles: (q: string, limit: number) => dbMod.searchFiles(q, limit) as any[],
-      openPath: (p: string) => { void shell.openPath(p); },
+      // Routed through the same guard as the IPC: this dependency is reachable
+      // from an assistant tool, so an unvalidated openPath here would be a
+      // model-authored launch.
+      openPath: (p: string) => {
+        const v = validateSafePath(p, { requireFile: true, requireIndexed: true });
+        if (!v.ok || !isOpenableByType(v.resolved)) {
+          console.warn('[copilot openPath] refused:', v.ok ? 'executable file type' : v.error);
+          return;
+        }
+        void shell.openPath(v.resolved);
+      },
       fileExists: (p: string) => fs.existsSync(p),
       getSyncStatus: () => syncAgent?.getStatus() ?? 'idle',
       getQueueCounts: () => dbMod.getSyncQueueCounts(),
@@ -3844,13 +3858,69 @@ function validateSafePath(
   return { ok: true, resolved };
 }
 
+/**
+ * Canonical path with symlinks resolved, or null when it cannot be resolved.
+ *
+ * Judging a symlink by its own name would let a link called
+ * "Ableton Live 12.app" point anywhere at all.
+ */
+function canonicalPathOrNull(p: unknown): string | null {
+  if (typeof p !== 'string' || !p.trim()) return null;
+  try { return fs.realpathSync(p); } catch { return null; }
+}
+
+/**
+ * The DAW applications actually installed on this machine.
+ *
+ * Asks the adapters, which is the same resolution that decides whether
+ * "Open in <DAW>" is offered at all. Canonicalised so the comparison in the
+ * launch guard is symlink-proof on both sides.
+ */
+function resolvedDawApplications(): string[] {
+  const out: string[] = [];
+  for (const adapter of ALL_DAW_ADAPTERS) {
+    let resolved;
+    try { resolved = resolveApplication(adapter.applicationHints, (dir) => fs.readdirSync(dir)); }
+    catch { resolved = null; }
+    if (!resolved) continue;
+    const canonical = canonicalPathOrNull(resolved.path);
+    if (canonical) out.push(canonical);
+  }
+  return out;
+}
+
 // Shell — open in default OS handler (requires indexed file)
 ipcMain.handle('shell:openPath', (_e, p: string) => {
-  const v = validateSafePath(p, { requireFile: true });
+  // requireIndexed: opening was previously allowed for ANY file under the safe
+  // roots, so a script sitting anywhere in the user's home qualified.
+  const v = validateSafePath(p, { requireFile: true, requireIndexed: true });
   if (!v.ok) { console.warn('[shell:openPath]', v.error); return; }
+  // shell.openPath RUNS a .command, .sh, .scpt or .jar. requireFile blocks an
+  // .app (a directory) but not these, so the type check is not redundant.
+  if (!isOpenableByType(v.resolved)) {
+    console.warn('[shell:openPath] refused executable file type:', path.basename(v.resolved));
+    return;
+  }
   logActivity({ id: crypto.randomUUID(), type: 'file_opened', message: `Opened: ${path.basename(v.resolved)}`, metadata: { action: 'openPath' } });
   return shell.openPath(v.resolved);
 });
+
+/**
+ * Is this a file the OS will OPEN rather than RUN?
+ *
+ * Symlinks are resolved first: a link named `track.wav` pointing at a
+ * `.command` would otherwise pass a check on its own extension and execute
+ * the target.
+ */
+function isOpenableByType(filePath: string): boolean {
+  const real = canonicalPathOrNull(filePath) ?? filePath;
+  const base = path.basename(real);
+  const i = base.lastIndexOf('.');
+  const ext = i <= 0 ? '' : base.slice(i).toLowerCase();
+  // No extension is refused for the same reason the bridge refuses it: an
+  // executable bit is not visible from the name, and a dropped binary has none.
+  return ext !== '' && !isExecutableExtension(ext);
+}
 
 // Reveal in Finder/Explorer (requires path in safe location, file or folder)
 ipcMain.handle('shell:revealInFinder', (_e, p: string) => {
@@ -3866,14 +3936,19 @@ ipcMain.handle('shell:openWithApp', (_e, filePath: string, appPath: string) => {
   const fv = validateSafePath(filePath, { requireFile: true, requireIndexed: true });
   if (!fv.ok) throw new Error(fv.error);
 
-  // appPath: must exist and be an .app bundle or executable — no shell injection
-  if (typeof appPath !== 'string' || appPath.trim() === '') throw new Error('appPath must be a non-empty string');
-  if (appPath.includes(';') || appPath.includes('&') || appPath.includes('|') || appPath.includes('`')) {
-    throw new Error('Shell metacharacters not allowed in appPath');
-  }
-  try { fs.statSync(appPath); } catch {
-    throw new Error(`DAW application not found: ${appPath}. Update the path in Settings → DAW Applications.`);
-  }
+  // Which application runs is decided by IDENTITY, not by the shape of the
+  // path the renderer supplied. The allowlist comes from the same adapter
+  // resolution that powers "Open in <DAW>", so the two cannot drift — and a
+  // bundle merely sitting in /Applications (Terminal, Script Editor,
+  // Automator, or anything an attacker dropped there) does not qualify.
+  const launch = validateLaunchApplication({
+    appPath,
+    platform: process.platform,
+    canonicalPath: canonicalPathOrNull(appPath),
+    allowedApplications: resolvedDawApplications(),
+  });
+  if (!launch.ok) throw new Error(launch.error);
+  const launchPath = launch.appPath;
 
   logActivity({
     id: crypto.randomUUID(), type: 'file_opened',
@@ -3883,15 +3958,15 @@ ipcMain.handle('shell:openWithApp', (_e, filePath: string, appPath: string) => {
 
   if (process.platform === 'darwin') {
     return new Promise<void>((resolve, reject) => {
-      execFile('open', ['-a', appPath, fv.resolved], (err) => {
-        if (err) reject(new Error(`Failed to open in ${path.basename(appPath)}: ${err.message}`));
+      execFile('open', ['-a', launchPath, fv.resolved], (err) => {
+        if (err) reject(new Error(`Failed to open in ${path.basename(launchPath)}: ${err.message}`));
         else resolve();
       });
     });
   } else {
     return new Promise<void>((resolve, reject) => {
-      execFile(appPath, [fv.resolved], (err) => {
-        if (err) reject(new Error(`Failed to launch ${path.basename(appPath)}: ${err.message}`));
+      execFile(launchPath, [fv.resolved], (err) => {
+        if (err) reject(new Error(`Failed to launch ${path.basename(launchPath)}: ${err.message}`));
         else resolve();
       });
     });
