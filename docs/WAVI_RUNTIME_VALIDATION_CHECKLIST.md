@@ -16,11 +16,88 @@ cleared, SIP was not modified, and hardened runtime stayed on
 |---|---|---|---|
 | A1a | Electron process starts | **PASS** | pid 83504 alive at 41s, RSS 19.8 MB; later pid 84343 via `open`, with gpu/network/utility helpers |
 | A1b | Bundle survives execution | **PASS** | 120 files before, **120 after**. The unsigned bundle went 112 → **0** |
-| A1c | Window appears | **FAIL** | `count of windows` = 0 on every attempt; no renderer helper ever spawned |
-| A2 | `~/.wavi/main.log` written | **FAIL** | Never created |
+| A1c | Window appears | **PASS** | `count of windows` = 1; `renderer` helper spawned; `createWindow-returned` breadcrumb |
+| A2 | `~/.wavi/main.log` written | **PASS** | "main process started", "Database initialized in 13ms" |
 | A3 | `codesign -dv` | **PASS** | Chains to Apple Root CA, `Signature size=9099`, `runtime` flag set, "valid on disk", "satisfies its Designated Requirement" |
 
-**Gate A fails at A1c, so nothing below was run.**
+**Gate A PASSES.** Sections B–E below were then executed.
+
+### The defect that blocked every previous launch
+
+A corrupted install had left a duplicate dependency tree at
+`node_modules/node_modules/` (492 packages, pure duplication). electron-builder
+packaged those copies at `/node_modules/node_modules/<pkg>` — one directory too
+deep. In development everything resolved from the top-level copies, so the test
+suite was green and `npm run dev` worked. In the bundle, `chokidar` could not
+find `readdirp`; the import threw at module scope, `app.whenReady()` was never
+registered, and the app launched to no window and no error.
+
+Removing the duplicate tree fixed it. `scripts/verify-package.mjs` now fails on
+any `node_modules/node_modules/` entry and on a missing `chokidar`/`readdirp`/
+`better-sqlite3` — verified to fail on the stale bundle and pass on the fixed one.
+
+**The existing v1.1.0 release candidates in `release/` carry this defect and
+would never have opened a window.** They must be rebuilt.
+
+### A second startup hang, found and not yet fixed
+
+With a profile that has a stored auth token, startup blocks **indefinitely** at
+`safeStorage.decryptString()` — the last breadcrumb is
+`post-isEncryptionAvailable` and nothing follows. No window, no timeout, no
+error. The token was encrypted under a different code signature, so macOS gates
+the Keychain item; the call never returns.
+
+Any user whose Keychain ACL changes — OS reinstall, restore from backup, or a
+change of signing identity between releases — gets an app that launches and
+never opens. It needs a timeout and a fallback that discards the undecryptable
+token and signs the user out, rather than blocking the main process before the
+window exists.
+
+### B. Live bridge security — all PASS against the running server
+
+| # | Request | Expected | Result |
+|---|---|---|---|
+| B1 | `/health` no auth | 200 | **PASS** |
+| B2 | `POST /run-command` `{"command":"echo hi"}` | 410 | **PASS** — body: "Removed in the bridge hardening pass…" |
+| B3 | `/project-files` no token | 401 | **PASS** |
+| B4 | `/project-files` wrong token | 401 | **PASS** |
+| B5 | `/project-files` `Host: evil.example` + valid token | 403 | **PASS** |
+| B6 | `/project-files` `Origin: https://evil.example` | 403 | **PASS** |
+| B7 | `OPTIONS /project-files` | 405 | **PASS** |
+| B8 | `/open-file` `/System/Applications/Calculator.app` | 403 | **PASS** — Calculator did **not** launch (0 processes) |
+| B11 | `/reveal-file` `/etc/hosts` | 403 | **PASS** |
+| B12 | `/open-folder` `/Applications` | 403 | **PASS** |
+| — | `/project-files` valid token | 200 | **PASS** |
+| — | `Access-Control-*` headers on a response | none | **PASS** — zero |
+
+### C–D. Core desktop smoke
+
+| Step | Result |
+|---|---|
+| Application startup | **PASS** — window, renderer, bridge listening |
+| Local SQLite initialisation | **PASS** — `wavio-studio.db` created, "Database initialized in 13ms" |
+| Discovering a real DAW project | **PASS** — fixture indexed as "Sunshine", dawType "Ableton Live", correct `.als` path |
+| Quit and relaunch persistence | **PASS** — 641 projects survived restart; window and bridge returned |
+| Second instance refused | **PASS** — exits at the single-instance lock |
+| File indexing | **FAIL** — `files` table stayed at **0** while 641 projects were indexed. `/project-files` and `/search-files` both return `{"files":[]}` |
+| Project Brain memory update | **NOT RUN** — depends on file indexing |
+| Assistant read-only search | **NOT RUN** — same |
+
+### Privacy note — scope of the scan
+
+On first run with a fresh profile the app **auto-populated `watchedFolders`
+with real user directories** (FL Studio Projects, Pro Tools, Desktop) and
+indexed **640 projects from the home directory**; only 1 came from the test
+fixture. That is the app's own `defaultDiscoveryRoots` behaviour, but it went
+beyond the intended small test folder.
+
+Nothing left the machine: `projects with cloud_id = 0`, no sign-in occurred,
+and only paths and metadata were recorded — no file contents. The disposable
+profile and the fixture were **deleted** immediately afterwards.
+
+### E. Authenticated staging
+
+**NOT RUN.** No sign-in was performed and no credentials were used.
 
 ### What this establishes
 

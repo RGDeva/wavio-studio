@@ -114,6 +114,47 @@ for (const f of files) {
 if (devPathHits.length) violations.push({ label: 'developer paths', count: devPathHits.length, sample: devPathHits.slice(0, 5) });
 if (secretHits.length) violations.push({ label: 'secrets', count: secretHits.length, sample: secretHits.slice(0, 5) });
 
+/**
+ * Every production dependency must sit where Node can resolve it.
+ *
+ * This is the defect that kept the packaged app from EVER starting. A
+ * corrupted install had left a duplicate tree at `node_modules/node_modules/`,
+ * and electron-builder faithfully packaged those copies at
+ * `/node_modules/node_modules/<pkg>` — one directory too deep. In development
+ * everything resolved from the top-level copies, so the suite was green and
+ * `npm run dev` worked; in the bundle, `chokidar` could not find `readdirp`,
+ * its import threw at module scope, `app.whenReady()` was never registered,
+ * and the app launched to no window with no error. Nothing short of resolving
+ * a real dependency from the real bundle would have caught it.
+ */
+const doubled = files.map(rel).filter((f) => f.startsWith('node_modules/node_modules/'));
+if (doubled.length) {
+  violations.push({
+    label: 'dependencies packaged one directory too deep (node_modules/node_modules/…) — Node cannot resolve these at runtime',
+    count: doubled.length,
+    sample: doubled.slice(0, 5),
+  });
+}
+
+/**
+ * Spot-check that a transitive dependency of a runtime package is present at
+ * the path its parent will look for. chokidar/readdirp is the pair that
+ * actually broke, so it is the pair asserted.
+ */
+const CRITICAL_DEPS = [
+  ['chokidar', 'node_modules/chokidar/package.json'],
+  ['readdirp (chokidar needs it)', 'node_modules/readdirp/package.json'],
+  ['better-sqlite3', 'node_modules/better-sqlite3/package.json'],
+];
+const missingDeps = CRITICAL_DEPS.filter(([, f]) => !existsSync(join(out, f)));
+if (missingDeps.length) {
+  violations.push({
+    label: 'runtime dependency missing from the bundle',
+    count: missingDeps.length,
+    sample: missingDeps.map(([name]) => name),
+  });
+}
+
 const missing = REQUIRED.filter((r) => !existsSync(join(out, r)));
 if (missing.length) violations.push({ label: 'MISSING runtime entry points', count: missing.length, sample: missing });
 
