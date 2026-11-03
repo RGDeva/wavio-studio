@@ -32,18 +32,25 @@
   "protocols": [
     {
       "name": "wavi-qa-protocol",
-      "schemes": ["wavi-qa"]
+      "schemes": [
+        "wavi-qa"
+      ]
     }
   ],
   "mac": {
     "category": "public.app-category.music",
-    "icon": "public/icon.icns",
+    "icon": "public/icon.png",
     "hardenedRuntime": true,
     "gatekeeperAssess": true,
     "entitlements": "build/entitlements.mac.plist",
     "entitlementsInherit": "build/entitlements.mac.plist",
     "target": [
-      { "target": "dir", "arch": ["arm64"] }
+      {
+        "target": "dir",
+        "arch": [
+          "arm64"
+        ]
+      }
     ]
   },
   "dmg": {
