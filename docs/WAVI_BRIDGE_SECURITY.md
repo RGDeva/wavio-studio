@@ -109,3 +109,68 @@ files, NUL bytes, un-indexed paths, and ordinary audio files.
   and ENV-1 prevents launching the app. The guard logic is pure and directly
   tested; the wiring is verified by source extraction. A live test of the HTTP
   surface remains outstanding.
+
+---
+
+# Second pass — IPC and the paths the first pass missed (2026-11-02)
+
+The first pass audited the bridge's HTTP routes. It did not audit **IPC**, and
+two things were wrong.
+
+## 4. `shell:openWithApp` executed an arbitrary binary
+
+```ts
+if (appPath.includes(';') || appPath.includes('&') || appPath.includes('|') || appPath.includes('`')) {
+  throw new Error('Shell metacharacters not allowed in appPath');
+}
+try { fs.statSync(appPath); } catch { throw … }
+execFile(appPath, [fv.resolved]);          // Windows
+execFile('open', ['-a', appPath, …]);      // macOS
+```
+
+The metacharacter check defends against an injection that cannot happen:
+`execFile` takes an argv array and never invokes a shell. Meanwhile the thing
+that *was* unchecked — **which binary runs** — accepted any existing path.
+`/bin/sh`, `/usr/bin/osascript`, a dropped binary in Downloads: all qualified.
+
+`appLaunchGuard.ts` now requires a launchable application to be an `.app`
+bundle (a real directory) at the **top level** of an Applications folder, or an
+`.exe` on Windows. `..` is refused outright rather than resolved, because a
+genuine DAW path never contains it.
+
+This keeps the feature whole — all five adapters resolve to
+`/Applications/<Name>.app`, and `~/Applications` is admitted for no-admin
+installs — while nested bundles
+(`/Applications/Real.app/Contents/Resources/evil.app`) and bare binaries stop
+qualifying. Linux returns "not supported" rather than a default-grant to
+execute a path.
+
+## 5. `/reveal-file` got a comment instead of a check
+
+The first pass added prose to that route explaining it *should not* confirm the
+existence of arbitrary paths, and added no validation. **A comment is not a
+control**, and it read as done.
+
+It now requires the target to be indexed. The order is deliberate — "not yours"
+is answered *before* "not there" — because otherwise the status code
+distinguishes the two and the route remains an existence oracle for the whole
+disk. The executable-type rule deliberately does **not** apply: revealing
+launches nothing, and a user may legitimately want to see a `.command` in their
+project.
+
+## What remains unexecutable
+
+`unzip` is the only other subprocess in the main process, invoked with a fixed
+argv for restore extraction — no caller-supplied program. `shell.openExternal`
+is used with compile-time constant URLs. No `spawn`, no `execSync`, no shell
+anywhere in `bridgeServer.ts`.
+
+## Coverage after both passes
+
+44 bridge-security tests. The suite is **1616/1616** across 85 files, and the
+pre-existing bridge contract validator still passes 40/40 — the independent
+evidence that project scanning, search, open, reveal, Project Brain, Project
+Links, the local model, same-DAW launch and cross-DAW handoff all still work.
+
+One of the new tests asserts the first pass's failure mode directly: that
+`/reveal-file` *calls* its guard rather than merely documenting one.

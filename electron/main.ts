@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, dialog, shell, safeStorage, Tray, Menu, na
 import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
+import os from 'os';
 import { initDatabase, getProjects, getProjectById, getFilesByProject, getAllFiles, searchFiles, getFileStats, getActivityLog, upsertStandaloneFile, upsertFile, logActivity, enqueueSyncItem, getPendingBounceCandidates, resolveBounceCandidate, getBounceCandidateById, createVersion, getVersionsByProject, versionExistsByChecksum, versionExistsByPath, getPendingAssociations, resolveAssociationQueue, confirmAssociation, undoAssociation, updateFileClassificationByPath, getFileByPath, insertRestoredProject, getRestoredProjectByLocalPath, getBrainRecordRows, getProjectFactRows, getBelievedFactRow, insertProjectFact, supersedeProjectFact, getActivityInRange, getRecentProjects as getRecentProjectRowsDb, getRecentFiles, getFilesChangedSinceVersion, getActivityForProject, listMemory, getBelievedMemoryRow, insertMemoryFact, supersedeMemoryFact, listMemoryRowsForMigration, listMemoryWithProvenance, getRestoredProjectByShare, touchRestoredProject, classifyFailedRowsForProject, upsertProject, updateProjectSyncStatus } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { confirmQueueItem } from './projectAssociation/projectAssociationEngine';
@@ -49,6 +50,7 @@ import {
   type HandoffInput, type VerifiedCopy,
 } from './portablePackage';
 import { materializeHandoff } from './portableMaterialize';
+import { validateLaunchApplication } from './appLaunchGuard';
 import { createBrainService } from './brain/service';
 import { createBrainRefresher } from './brain/liveRefresh';
 import { createLocalProvider } from './brain/localProvider';
@@ -3866,14 +3868,20 @@ ipcMain.handle('shell:openWithApp', (_e, filePath: string, appPath: string) => {
   const fv = validateSafePath(filePath, { requireFile: true, requireIndexed: true });
   if (!fv.ok) throw new Error(fv.error);
 
-  // appPath: must exist and be an .app bundle or executable — no shell injection
-  if (typeof appPath !== 'string' || appPath.trim() === '') throw new Error('appPath must be a non-empty string');
-  if (appPath.includes(';') || appPath.includes('&') || appPath.includes('|') || appPath.includes('`')) {
-    throw new Error('Shell metacharacters not allowed in appPath');
-  }
-  try { fs.statSync(appPath); } catch {
-    throw new Error(`DAW application not found: ${appPath}. Update the path in Settings → DAW Applications.`);
-  }
+  // The previous check looked for shell metacharacters, which execFile makes
+  // irrelevant — it takes an argv array and never invokes a shell. What was
+  // actually unchecked is WHICH binary runs, and any executable qualified.
+  let appStat: fs.Stats | null = null;
+  try { appStat = fs.statSync(appPath); } catch { appStat = null; }
+  const launch = validateLaunchApplication({
+    appPath,
+    platform: process.platform,
+    homeDir: os.homedir(),
+    exists: !!appStat,
+    isDirectory: !!appStat?.isDirectory(),
+  });
+  if (!launch.ok) throw new Error(launch.error);
+  const launchPath = launch.appPath;
 
   logActivity({
     id: crypto.randomUUID(), type: 'file_opened',
@@ -3883,15 +3891,15 @@ ipcMain.handle('shell:openWithApp', (_e, filePath: string, appPath: string) => {
 
   if (process.platform === 'darwin') {
     return new Promise<void>((resolve, reject) => {
-      execFile('open', ['-a', appPath, fv.resolved], (err) => {
-        if (err) reject(new Error(`Failed to open in ${path.basename(appPath)}: ${err.message}`));
+      execFile('open', ['-a', launchPath, fv.resolved], (err) => {
+        if (err) reject(new Error(`Failed to open in ${path.basename(launchPath)}: ${err.message}`));
         else resolve();
       });
     });
   } else {
     return new Promise<void>((resolve, reject) => {
-      execFile(appPath, [fv.resolved], (err) => {
-        if (err) reject(new Error(`Failed to launch ${path.basename(appPath)}: ${err.message}`));
+      execFile(launchPath, [fv.resolved], (err) => {
+        if (err) reject(new Error(`Failed to launch ${path.basename(launchPath)}: ${err.message}`));
         else resolve();
       });
     });

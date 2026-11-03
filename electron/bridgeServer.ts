@@ -42,7 +42,7 @@ import { API_BASE } from './config';
 
 import {
   guardRequest, routeRequiresAuth, WITHDRAWN_ROUTES, isValidTokenFormat,
-  assertOpenableFile,
+  assertOpenableFile, assertRevealableFile,
 } from './bridgeGuard';
 
 export const BRIDGE_PORT = 47821;
@@ -416,11 +416,16 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     try {
       const body = await parseBody(req);
       const filePath = body.filePath as string | undefined;
-      if (!filePath) { send(res, 400, { error: 'filePath required' }); return; }
-      if (!fs.existsSync(filePath)) { send(res, 404, { error: 'File not found', filePath }); return; }
-      shell.showItemInFolder(filePath);
-      logActivity({ id: crypto.randomUUID(), type: 'bridge_reveal_file', message: `Revealed: ${path.basename(filePath)}`, metadata: { filePath } });
-      send(res, 200, { status: 'ok', filePath });
+      const rv = assertRevealableFile({
+        filePath,
+        exists: typeof filePath === 'string' && fs.existsSync(filePath),
+        isIndexed: typeof filePath === 'string' && !!getFileByPath(filePath),
+      });
+      if (!rv.ok) { send(res, rv.status, { error: rv.error }); return; }
+      const revealPath = filePath as string;
+      shell.showItemInFolder(revealPath);
+      logActivity({ id: crypto.randomUUID(), type: 'bridge_reveal_file', message: `Revealed: ${path.basename(revealPath)}`, metadata: { filePath: revealPath } });
+      send(res, 200, { status: 'ok', filePath: revealPath });
     } catch (err) {
       send(res, 500, { error: String(err) });
     }

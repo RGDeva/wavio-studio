@@ -197,6 +197,32 @@ export function assertOpenableFile(opts: {
   return { ok: true };
 }
 
+/**
+ * May the bridge REVEAL this path in Finder?
+ *
+ * Revealing launches nothing, so the executable-type rule does not apply — a
+ * user may legitimately want to see a `.command` sitting in their project. The
+ * risk is different: an unrestricted reveal is an existence oracle for every
+ * path on the disk — it will answer "does this document in your home folder
+ * exist" to any caller holding the token. So the library rule still applies.
+ */
+export function assertRevealableFile(opts: {
+  filePath: unknown;
+  exists: boolean;
+  isIndexed: boolean;
+}): OpenVerdict {
+  const p = typeof opts.filePath === 'string' ? opts.filePath.trim() : '';
+  if (!p) return { ok: false, status: 400, error: 'filePath required' };
+  if (p.includes('\0')) return { ok: false, status: 400, error: 'Invalid path' };
+  if (!opts.isIndexed) {
+    // Checked before existence so the response cannot distinguish "not yours"
+    // from "not there", which is what makes it an oracle.
+    return { ok: false, status: 403, error: 'Wavi will only reveal files from your indexed library.' };
+  }
+  if (!opts.exists) return { ok: false, status: 404, error: 'File not found' };
+  return { ok: true };
+}
+
 /** Exposed so tests can state the rule rather than restate the list. */
 export function isExecutableExtension(ext: string): boolean {
   return EXECUTABLE_EXTS.has(String(ext).toLowerCase());

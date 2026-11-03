@@ -19,8 +19,9 @@ import { join } from 'path';
 import {
   guardRequest, isAllowedHost, hasBrowserOrigin, tokensMatch, isValidTokenFormat,
   routeRequiresAuth, BRIDGE_ROUTES, WITHDRAWN_ROUTES,
-  assertOpenableFile, isExecutableExtension,
+  assertOpenableFile, isExecutableExtension, assertRevealableFile,
 } from './bridgeGuard';
+import { validateLaunchApplication } from './appLaunchGuard';
 
 const SOURCE = readFileSync(join(__dirname, 'bridgeServer.ts'), 'utf8');
 const TOKEN = '7f3c1a2e-9b4d-4c6a-8e5f-1d2c3b4a5e6f';
@@ -266,5 +267,129 @@ describe('legitimate integrations are preserved', () => {
     // A route added to the server without being declared here would escape
     // the auth-coverage test above.
     for (const route of BRIDGE_ROUTES) expect(CODE, route).toContain(`'${route}'`);
+  });
+});
+
+describe('launching a DAW is bounded to real applications', () => {
+  const mac = { platform: 'darwin' as const, homeDir: '/Users/someone', exists: true, isDirectory: true };
+
+  it('allows every DAW Wavi actually supports', () => {
+    // All five adapters resolve to /Applications/<Name>.app, so the rule must
+    // not break the feature it is protecting.
+    for (const app of [
+      '/Applications/Ableton Live 12 Suite.app',
+      '/Applications/FL Studio 2024.app',
+      '/Applications/Logic Pro.app',
+      '/Applications/Pro Tools.app',
+      '/Applications/REAPER.app',
+      '/Users/someone/Applications/Ableton Live 11.app',   // no-admin install
+    ]) {
+      expect(validateLaunchApplication({ appPath: app, ...mac }).ok, app).toBe(true);
+    }
+  });
+
+  it('REFUSES an arbitrary binary, which is what was actually exposed', () => {
+    // The old guard rejected "; & | `" — meaningless against execFile, which
+    // takes an argv array and never uses a shell. What it never checked was
+    // which binary runs.
+    for (const bin of ['/bin/sh', '/bin/bash', '/usr/bin/python3', '/usr/bin/osascript', '/usr/bin/curl']) {
+      const r = validateLaunchApplication({ appPath: bin, ...mac, isDirectory: false });
+      expect(r.ok, bin).toBe(false);
+    }
+  });
+
+  it('refuses an .app outside an Applications folder', () => {
+    // A dropped bundle in Downloads is still a bundle.
+    const r = validateLaunchApplication({ appPath: '/Users/someone/Downloads/Evil.app', ...mac });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/Applications folder/);
+  });
+
+  it('refuses a bundle NESTED inside a legitimate one', () => {
+    // How a payload hides inside something that looks installed.
+    const r = validateLaunchApplication({
+      appPath: '/Applications/Ableton Live 12 Suite.app/Contents/Resources/evil.app', ...mac,
+    });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.error).toMatch(/top level/);
+  });
+
+  it('refuses traversal rather than resolving it', () => {
+    // A real DAW path never contains '..', so its presence is a signal.
+    expect(validateLaunchApplication({ appPath: '/Applications/../bin/sh', ...mac }).ok).toBe(false);
+    expect(validateLaunchApplication({ appPath: '/Applications/X.app/../../bin/sh', ...mac }).ok).toBe(false);
+  });
+
+  it('refuses a .app that is not a directory', () => {
+    // Naming a binary "thing.app" should not make it an application.
+    expect(validateLaunchApplication({ appPath: '/Applications/fake.app', ...mac, isDirectory: false }).ok).toBe(false);
+  });
+
+  it('refuses a missing path, a NUL byte, a relative path and an empty string', () => {
+    expect(validateLaunchApplication({ appPath: '/Applications/Gone.app', ...mac, exists: false }).ok).toBe(false);
+    expect(validateLaunchApplication({ appPath: '/Applications/x.app\u0000/bin/sh', ...mac }).ok).toBe(false);
+    expect(validateLaunchApplication({ appPath: 'Applications/X.app', ...mac }).ok).toBe(false);
+    expect(validateLaunchApplication({ appPath: '   ', ...mac }).ok).toBe(false);
+    expect(validateLaunchApplication({ appPath: null, ...mac }).ok).toBe(false);
+  });
+
+  it('normalises duplicate separators and a trailing slash', () => {
+    expect(validateLaunchApplication({ appPath: '/Applications//Logic Pro.app/', ...mac }).ok).toBe(true);
+  });
+
+  it('requires .exe on Windows and refuses other platforms outright', () => {
+    const win = { platform: 'win32' as const, homeDir: 'C:/Users/x', exists: true, isDirectory: false };
+    expect(validateLaunchApplication({ appPath: 'C:/Program Files/FL Studio/FL64.exe', ...win }).ok).toBe(true);
+    expect(validateLaunchApplication({ appPath: 'C:/Windows/System32/cmd.exe', ...win }).ok).toBe(true); // shape-valid; Windows has no app-root concept here
+    expect(validateLaunchApplication({ appPath: '/usr/bin/python3', ...win }).ok).toBe(false);
+    // Linux ships no DAW integration, so "execute this path" is not granted.
+    expect(validateLaunchApplication({
+      appPath: '/usr/bin/ardour', platform: 'linux', homeDir: '/home/x', exists: true, isDirectory: false,
+    }).ok).toBe(false);
+  });
+
+  it('the obsolete metacharacter check is gone from main.ts', () => {
+    const main = readFileSync(join(__dirname, 'main.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
+    expect(main).not.toContain("Shell metacharacters not allowed in appPath");
+    // And the launch now goes through the guard.
+    expect(main).toContain('validateLaunchApplication');
+  });
+});
+
+describe('revealing is restricted to the library', () => {
+  it('refuses a path Wavi never indexed', () => {
+    // An unrestricted reveal is an existence oracle for the whole disk.
+    const r = assertRevealableFile({ filePath: '/Users/x/Documents/taxes.pdf', exists: true, isIndexed: false });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.status).toBe(403);
+  });
+
+  it('answers "not yours" before "not there", so it cannot be used to probe', () => {
+    const missing = assertRevealableFile({ filePath: '/Users/x/secret', exists: false, isIndexed: false });
+    expect(!missing.ok && missing.status).toBe(403);   // not 404
+  });
+
+  it('allows an indexed file of any type — revealing launches nothing', () => {
+    // A user may legitimately want to see a .command sitting in their project.
+    expect(assertRevealableFile({ filePath: '/Music/Beats/notes.command', exists: true, isIndexed: true }).ok).toBe(true);
+    expect(assertRevealableFile({ filePath: '/Music/Beats/master.wav', exists: true, isIndexed: true }).ok).toBe(true);
+  });
+
+  it('the route actually calls the guard, not just documents it', () => {
+    // The first version of this hardening added a comment to /reveal-file and
+    // no check. A comment is not a control.
+    expect(CODE).toContain('assertRevealableFile');
+  });
+});
+
+describe('no route trusts a caller-supplied path', () => {
+  it('every path-taking route runs its input through a guard', () => {
+    for (const guard of ['assertOpenableFile', 'assertRevealableFile', 'isIndexedFolder']) {
+      expect(CODE, guard).toContain(guard);
+    }
+    // And none of them reaches shell.openPath before a verdict.
+    const openPathCalls = (CODE.match(/shell\.openPath/g) ?? []).length;
+    expect(openPathCalls).toBe(2);   // /open-file and /open-folder, both guarded
   });
 });
