@@ -1,12 +1,58 @@
 # Runtime validation checklist — signed development build
 
-**Status of every item below: NOT RUN.**
+**First live execution attempted 2026-11-02. Results recorded below.**
 
-Nothing in this document has been executed. The security work it validates was
-verified by unit tests and by reading the source; none of it has been exercised
-against a running process. ENV-1 (`WAVI_ENV1_ROOT_CAUSE.md`) prevents launching
-the app on this machine: macOS Gatekeeper moves the unsigned bundle to the
-Trash on exec, which is the OS behaving correctly toward an unsigned app.
+## Live run — 2026-11-02, Apple Development signing
+
+Signed with `Apple Development: rishmanx@gmail.com (JS76PW969P)` (team
+PX83P786QQ) into a **separate** output directory, `release-dev/`. No release
+artifact was touched, Gatekeeper was not disabled, no quarantine attribute was
+cleared, SIP was not modified, and hardened runtime stayed on
+(`flags=0x10000(runtime)`).
+
+### A. First launch gate
+
+| # | Step | Result | Evidence |
+|---|---|---|---|
+| A1a | Electron process starts | **PASS** | pid 83504 alive at 41s, RSS 19.8 MB; later pid 84343 via `open`, with gpu/network/utility helpers |
+| A1b | Bundle survives execution | **PASS** | 120 files before, **120 after**. The unsigned bundle went 112 → **0** |
+| A1c | Window appears | **FAIL** | `count of windows` = 0 on every attempt; no renderer helper ever spawned |
+| A2 | `~/.wavi/main.log` written | **FAIL** | Never created |
+| A3 | `codesign -dv` | **PASS** | Chains to Apple Root CA, `Signature size=9099`, `runtime` flag set, "valid on disk", "satisfies its Designated Requirement" |
+
+**Gate A fails at A1c, so nothing below was run.**
+
+### What this establishes
+
+Gatekeeper is no longer the blocker, reproducibly. That half of ENV-1 is
+resolved: a legitimately development-signed build starts and is not moved to
+the Trash.
+
+The app now fails for a different, pre-existing reason: **Electron's `ready`
+event never fires.** The first statement inside `app.whenReady().then(...)` is
+`mainLog('--- main process started ---')`, and that file is never created. The
+single-instance path calls `process.exit(0)` when it loses the lock and the
+process does not exit, so the lock was obtained and module evaluation continued
+past it. There is no crash report, no error-level log entry, and the process
+sits in a normal AppKit run loop (15-second StateRestoration heartbeat).
+
+The conclusion the evidence supports: module-level code between the
+single-instance lock and the `whenReady` registration blocks the main thread,
+so `ready` is queued and never dispatched. Consequences — no window, no bridge
+listener on 47821, and no SQLite initialisation in any userData directory
+(`wavio-studio`, `-dev`, `-qa` all show zero recent writes).
+
+### B–E
+
+| Section | Result |
+|---|---|
+| B. Live bridge security | **BLOCKED** — the bridge never starts; `lsof` shows nothing on 47821 |
+| C. DAW launch guards, live | **BLOCKED** — requires a running app |
+| D. Core desktop smoke | **BLOCKED** — requires a running app |
+| E. Authenticated staging | **NOT RUN** |
+
+No live security or Project Brain behaviour is claimed. Those guards remain
+verified only by unit tests and source inspection.
 
 ## Preconditions
 

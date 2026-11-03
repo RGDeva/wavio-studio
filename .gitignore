@@ -13,3 +13,5 @@ electron/test-native/node_modules/
 release-staging/
 # Preserved unsigned release candidate (binaries; see its README.txt)
 release-unsigned-rc/
+# Locally development-signed build for runtime validation (never distributed)
+release-dev/
