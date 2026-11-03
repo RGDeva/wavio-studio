@@ -30,6 +30,7 @@ import {
   resolveAssociationQueue,
   confirmAssociation,
   undoAssociation,
+  getFileByPath,
 } from './db';
 import { classifyFile as classifyFileV1 } from './projectAssociation/fileClassifier';
 import { analyzeAudio } from './audioAnalyzer';
@@ -38,6 +39,11 @@ import type { ProjectContext } from './copilotTypes';
 import { API_BASE } from './config';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
+
+import {
+  guardRequest, routeRequiresAuth, WITHDRAWN_ROUTES, isValidTokenFormat,
+  assertOpenableFile,
+} from './bridgeGuard';
 
 export const BRIDGE_PORT = 47821;
 export const BRIDGE_HOST = '127.0.0.1';
@@ -55,7 +61,9 @@ function ensureToken(): string {
     // If file exists and is valid, reuse it
     if (fs.existsSync(TOKEN_PATH)) {
       const existing = fs.readFileSync(TOKEN_PATH, 'utf8').trim();
-      if (existing.length === 36) return existing; // UUID length
+      // Shape, not just length: a 36-character file of anything else would
+      // previously have been accepted as the token.
+      if (isValidTokenFormat(existing)) return existing;
     }
     // Generate fresh token
     const token = crypto.randomUUID();
@@ -103,19 +111,47 @@ function send(res: http.ServerResponse, status: number, body: unknown) {
   const json = JSON.stringify(body);
   res.writeHead(status, {
     'Content-Type': 'application/json',
-    'Access-Control-Allow-Origin': '*',
+    // No Access-Control-Allow-Origin. This server has no browser clients, and
+    // a wildcard would let any web page the user visits read these responses
+    // the moment it obtained the token.
     'Content-Length': Buffer.byteLength(json),
   });
   res.end(json);
 }
 
-function auth(req: http.IncomingMessage, res: http.ServerResponse): boolean {
-  const token = req.headers['x-wavi-token'] as string | undefined;
-  if (token !== _bridgeToken) {
-    send(res, 401, { error: 'Unauthorized — invalid or missing X-Wavi-Token' });
-    return false;
-  }
-  return true;
+/**
+ * Apply the trust rules. Host and origin are checked before the token, so a
+ * web page cannot probe token guesses through status codes or timing.
+ */
+function guard(req: http.IncomingMessage, res: http.ServerResponse, route: string): boolean {
+  const verdict = guardRequest({
+    headers: req.headers as Record<string, unknown>,
+    port: BRIDGE_PORT,
+    expectedToken: _bridgeToken,
+    requiresAuth: routeRequiresAuth(route),
+  });
+  if (verdict.ok) return true;
+  send(res, verdict.status, { error: verdict.error });
+  return false;
+}
+
+/**
+ * Is this folder one Wavi indexed a project or file into?
+ *
+ * Derived from the library rather than from a path prefix list: the question
+ * that matters is "did the user's own scan put something here", not "does this
+ * string start with /Users".
+ */
+function isIndexedFolder(folderPath: string): boolean {
+  try {
+    const resolved = path.resolve(folderPath);
+    const projects = getProjects() as any[];
+    return projects.some((pr) => {
+      if (!pr?.file_path) return false;
+      const dir = path.resolve(path.dirname(pr.file_path));
+      return dir === resolved || dir.startsWith(resolved + path.sep);
+    });
+  } catch { return false; }
 }
 
 // ── Project context builder (shared with copilot.ts) ─────────────────────────
@@ -178,13 +214,11 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return origEnd(...args);
   };
 
-  // CORS preflight
+  // No CORS preflight support. Answering one is an invitation to browsers,
+  // and the only callers this bridge has are local DAW clients, which never
+  // send a preflight.
   if (req.method === 'OPTIONS') {
-    res.writeHead(204, {
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, X-Wavi-Token',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    });
+    res.writeHead(405, { 'Content-Length': '0', Allow: 'GET, POST' });
     res.end();
     return;
   }
@@ -192,7 +226,20 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
   const url = new URL(req.url ?? '/', `http://${BRIDGE_HOST}`);
   const route = url.pathname;
 
-  // ── GET /health — no auth required (used for polling) ─────────────────────
+  // Host and origin rules apply to EVERY route, /health included: an
+  // unauthenticated endpoint is still an endpoint a rebound web page can
+  // reach, and it confirms Wavi is running on this machine.
+  if (!guard(req, res, route)) return;
+
+  // A route that was deliberately withdrawn says so, rather than looking like
+  // a typo. /run-command executed arbitrary shell commands and is gone.
+  const withdrawn = WITHDRAWN_ROUTES[route];
+  if (withdrawn) {
+    send(res, 410, { error: 'Gone', detail: withdrawn });
+    return;
+  }
+
+  // ── GET /health ───────────────────────────────────────────────────────────
   if (req.method === 'GET' && route === '/health') {
     send(res, 200, {
       status: 'ok',
@@ -203,8 +250,6 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     return;
   }
 
-  // All other routes require auth
-  if (!auth(req, res)) return;
 
   
   // ── GET /active-project ───────────────────────────────────────────────────
@@ -320,10 +365,17 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     try {
       const body = await parseBody(req);
       const filePath = body.filePath as string | undefined;
-      if (!filePath) { send(res, 400, { error: 'filePath required' }); return; }
-      if (!fs.existsSync(filePath)) { send(res, 404, { error: 'File not found', filePath }); return; }
-      await shell.openPath(filePath);
-      logActivity({ id: crypto.randomUUID(), type: 'bridge_open_file', message: `Opened: ${path.basename(filePath)}`, metadata: { filePath } });
+      // shell.openPath LAUNCHES .app bundles and RUNS .command/.sh scripts, so
+      // an unvalidated path here is arbitrary code execution by another name.
+      const verdict = assertOpenableFile({
+        filePath,
+        exists: typeof filePath === 'string' && fs.existsSync(filePath),
+        isIndexed: typeof filePath === 'string' && !!getFileByPath(filePath),
+      });
+      if (!verdict.ok) { send(res, verdict.status, { error: verdict.error }); return; }
+      const safePath = filePath as string;
+      await shell.openPath(safePath);
+      logActivity({ id: crypto.randomUUID(), type: 'bridge_open_file', message: `Opened: ${path.basename(safePath)}`, metadata: { filePath: safePath } });
       send(res, 200, { status: 'ok', filePath });
     } catch (err) {
       send(res, 500, { error: String(err) });
@@ -336,7 +388,18 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
     try {
       const body = await parseBody(req);
       const folderPath = body.folderPath as string | undefined;
-      if (!folderPath) { send(res, 400, { error: 'folderPath required' }); return; }
+      // Same hazard: a ".app" is a directory, so opening an arbitrary folder
+      // can launch an application. Only folders Wavi indexed are openable,
+      // and only as folders.
+      if (!folderPath || typeof folderPath !== 'string' || folderPath.includes('\0')) {
+        send(res, 400, { error: 'folderPath required' }); return;
+      }
+      if (!fs.existsSync(folderPath) || !fs.statSync(folderPath).isDirectory()) {
+        send(res, 404, { error: 'Folder not found' }); return;
+      }
+      if (!isIndexedFolder(folderPath)) {
+        send(res, 403, { error: 'Wavi will only open folders from your indexed library.' }); return;
+      }
       await shell.openPath(folderPath);
       logActivity({ id: crypto.randomUUID(), type: 'bridge_open_folder', message: `Opened folder: ${folderPath}`, metadata: { folderPath } });
       send(res, 200, { status: 'ok', folderPath });
@@ -348,6 +411,8 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
 
   // ── POST /reveal-file ─────────────────────────────────────────────────────
   if (req.method === 'POST' && route === '/reveal-file') {
+    // Revealing does not launch anything, but it should not confirm the
+    // existence of arbitrary paths either.
     try {
       const body = await parseBody(req);
       const filePath = body.filePath as string | undefined;
@@ -585,95 +650,6 @@ async function handleRequest(req: http.IncomingMessage, res: http.ServerResponse
       });
     } catch (err) {
       send(res, 500, { error: String(err) });
-    }
-    return;
-  }
-
-  // ── POST /run-command ─────────────────────────────────────────────────────
-  // Executes a shell command scoped to the active project folder.
-  // Only commands in the COMMAND_ALLOWLIST are permitted.
-  if (req.method === 'POST' && route === '/run-command') {
-    try {
-      const body = await parseBody(req);
-      const command = body.command as string | undefined;
-      const cwd = body.cwd as string | undefined;
-
-      if (!command || typeof command !== 'string' || !command.trim()) {
-        send(res, 400, { error: 'command required' });
-        return;
-      }
-
-      // Security: only allow safe read/info commands — no rm, curl, eval, etc.
-      const COMMAND_ALLOWLIST = [
-        /^ls(\s|$)/,
-        /^cat\s/,
-        /^echo(\s|$)/,
-        /^pwd$/,
-        /^find\s/,
-        /^grep\s/,
-        /^wc\s/,
-        /^file\s/,
-        /^open\s/,
-        /^ffprobe\s/,
-        /^ffmpeg\s/,
-        /^python3?\s/,
-        /^node\s/,
-        /^npm\s(run|list|info)/,
-        /^git\s(status|log|diff|show|branch)/,
-      ];
-
-      const trimmedCommand = command.trim();
-      const isAllowed = COMMAND_ALLOWLIST.some(re => re.test(trimmedCommand));
-      if (!isAllowed) {
-        send(res, 403, { error: `Command not in allowlist: "${trimmedCommand.split(' ')[0]}"` });
-        return;
-      }
-
-      // Resolve working directory: use provided cwd, or active project folder, or home
-      const p = getActiveProject();
-      const projectFolder = p?.file_path ? path.dirname(p.file_path) : null;
-      const resolvedCwd = cwd ?? projectFolder ?? os.homedir();
-
-      // Validate cwd exists
-      if (!fs.existsSync(resolvedCwd)) {
-        send(res, 400, { error: `cwd does not exist: ${resolvedCwd}` });
-        return;
-      }
-
-      const { execFile } = await import('child_process');
-      const { promisify } = await import('util');
-      const execFileAsync = promisify(execFile);
-
-      const { stdout, stderr } = await execFileAsync('/bin/sh', ['-c', trimmedCommand], {
-        cwd: resolvedCwd,
-        timeout: 10000,
-        maxBuffer: 256 * 1024,
-      });
-
-      logActivity({
-        id: crypto.randomUUID(),
-        type: 'bridge_run_command',
-        message: `Ran: ${trimmedCommand.slice(0, 80)}`,
-        project_id: p?.id,
-        metadata: { command: trimmedCommand, cwd: resolvedCwd },
-      });
-
-      send(res, 200, {
-        status: 'ok',
-        stdout: stdout ?? '',
-        stderr: stderr ?? '',
-        cwd: resolvedCwd,
-        command: trimmedCommand,
-      });
-    } catch (err: any) {
-      // execFile throws on non-zero exit — return stdout/stderr anyway
-      send(res, 200, {
-        status: 'error',
-        stdout: err.stdout ?? '',
-        stderr: err.stderr ?? String(err),
-        exitCode: err.code ?? 1,
-        command: (err as any).cmd ?? '',
-      });
     }
     return;
   }
