@@ -79,9 +79,27 @@ window exists.
 | Discovering a real DAW project | **PASS** — fixture indexed as "Sunshine", dawType "Ableton Live", correct `.als` path |
 | Quit and relaunch persistence | **PASS** — 641 projects survived restart; window and bridge returned |
 | Second instance refused | **PASS** — exits at the single-instance lock |
-| File indexing | **FAIL** — `files` table stayed at **0** while 641 projects were indexed. `/project-files` and `/search-files` both return `{"files":[]}` |
-| Project Brain memory update | **NOT RUN** — depends on file indexing |
-| Assistant read-only search | **NOT RUN** — same |
+| File indexing | **PASS** — in isolated mode, 4 audio files indexed with roles; `/project-files` returns them |
+| File change detection | **PASS** — adding `lead.wav` took `files` 4 → 5 |
+| Project Brain memory update | **PASS** — `file-count` went 0 → 5 from the watcher event; `source-daw=Ableton Live`; facts 16 → 22, `kind=derived`, `source_producer=watcher` |
+| Assistant read-only search | **PASS** — `q=vocal` → vocal.wav, `q=bass` → bass.wav, `q=master` → master.wav |
+
+Run in the app's own isolated mode (`WAVI_E2E=1` with `WAVI_E2E_FOLDER`), which
+watches a single folder and uses a separate database. Final state: 1 project,
+5 files, 22 facts, 11 activity rows, **0 projects outside the fixture**, **0
+uploaded**. Fixture and profile deleted afterwards.
+
+#### Why the first attempt showed `files = 0`
+
+The watcher runs with `ignoreInitial: true`, so it indexes files **added while
+it is running** and never the ones already present. Seeding `watchedFolders`
+directly, as I first did, therefore indexes projects but no files — existing
+files require the explicit folder-import path, which a seeded config bypasses.
+Not a defect, but worth knowing: adding a folder of 500 existing stems through
+anything other than the import flow leaves them unindexed.
+
+A second correction: `/search-files` takes **`q`**, not `query`. My first test
+used `query` and read the resulting empty array as a broken search. It is not.
 
 ### Privacy note — scope of the scan
 
