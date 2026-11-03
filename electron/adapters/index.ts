@@ -35,6 +35,16 @@ export const genericAdapter: DawAdapter = {
 
 const ADAPTERS: DawAdapter[] = [abletonAdapter, ...THIN_DAW_ADAPTERS];
 
+/**
+ * Every real DAW adapter, excluding the generic fallback.
+ *
+ * Exported so the launch guard can ask the SAME mechanism that resolves
+ * `Open in <DAW>` which applications are legitimate. Deriving the launch
+ * allowlist from anywhere else would let the two drift, and a drifted
+ * allowlist is how an unrelated application becomes launchable.
+ */
+export const ALL_DAW_ADAPTERS: readonly DawAdapter[] = ADAPTERS;
+
 export function getAdapterById(id: string): DawAdapter {
   return ADAPTERS.find((a) => a.id === id) ?? genericAdapter;
 }

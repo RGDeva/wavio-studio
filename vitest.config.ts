@@ -14,6 +14,7 @@ export default defineConfig({
       'electron/discovery.test.ts',
       'electron/security.test.ts',
       'electron/bridgeSecurity.test.ts',
+      'electron/launchSecurity.test.ts',
       'electron/db.maintenance.test.ts',
       'electron/fs.benchmark.test.ts',
       'electron/association.test.ts',

@@ -174,3 +174,78 @@ Links, the local model, same-DAW launch and cross-DAW handoff all still work.
 
 One of the new tests asserts the first pass's failure mode directly: that
 `/reveal-file` *calls* its guard rather than merely documenting one.
+
+---
+
+# Third pass — launching is decided by identity, not shape (2026-11-02)
+
+The second pass required an `.app` bundle at the top level of an Applications
+folder. That sounds strict and is not:
+
+- `/Applications/Utilities/Terminal.app`
+- `/Applications/Utilities/Script Editor.app`
+- `/Applications/Automator.app`
+
+all satisfied it, and each is a general-purpose code-execution engine. So did
+any bundle an attacker dropped into `/Applications`. Shape was never going to
+be enough — a rule about where a file sits cannot tell you what it is.
+
+## The rule now
+
+**The path must be one of the DAW applications the adapters resolved on this
+machine.** `resolvedDawApplications()` asks `ALL_DAW_ADAPTERS` via the same
+`resolveApplication()` that decides whether "Open in <DAW>" is offered, so the
+launch allowlist cannot drift from the feature it serves. On this machine that
+is Ableton Live 12 Suite and FL Studio 2024 — version suffixes preserved,
+stable preferred over beta.
+
+Two things it deliberately does **not** trust:
+
+- **A bundle name.** Anyone can name a bundle `Ableton Live 99 Suite.app`.
+  Only a path the resolver returned is accepted.
+- **An `Info.plist` identifier.** That is attacker-controlled data inside the
+  very bundle being judged.
+
+**Symlinks** are resolved on both sides before comparison, so a link in
+`/Applications` named like a DAW but pointing at Terminal is judged as
+Terminal. What gets executed is the canonical path that was judged, never the
+string the renderer supplied.
+
+It **fails closed**: with no supported DAW installed the allowlist is empty and
+nothing launches, rather than falling back to "any `.app`". Windows applies the
+same identity rule, which is a real change — the previous version accepted any
+`.exe`, including `cmd.exe`.
+
+## Two more openPath holes, closed
+
+**`shell:openPath`** validated only that the path was under a safe root and was
+a file — no indexed requirement and no type check. `requireFile` blocks an
+`.app` (a directory) but not a `.command`, `.sh`, `.scpt` or `.jar`, each of
+which `shell.openPath` **runs**. It now requires the file to be indexed and
+refuses executable types, resolving symlinks first so a link named `track.wav`
+cannot point at a script.
+
+**The assistant's `openPath` dependency** was `(p) => { void shell.openPath(p); }` —
+no validation at all, injected straight into the copilot tool registry and
+reachable from `open_in_daw`. That is a model-authored launch. It now runs
+through the same guard as the IPC.
+
+The type rule is a **denylist of executable extensions**, not an allowlist of
+audio, so `.wav`, `.als`, `.flp`, `.mid`, `.logicx` and every other creative
+file keep opening normally.
+
+## Tested wiring, not just pure functions
+
+`launchSecurity.test.ts` asserts the guards behave correctly *and* that the
+real handlers call them: that `shell:openWithApp` passes
+`allowedApplications: resolvedDawApplications()`, that it executes
+`launch.appPath` rather than `appPath`, that `shell:openPath` passes
+`requireIndexed: true` and calls `isOpenableByType`, and that the assistant
+dependency is no longer the raw one-liner. A pure guard can be wrong in exactly
+one way that matters — by not being called — and that is the half a pure test
+cannot reach.
+
+Five tests in `bridgeSecurity.test.ts` were **removed**, not fixed: they
+encoded the weaker shape-based contract and passed for
+`/Applications/Terminal.app`. Keeping them would have asserted the
+vulnerability.

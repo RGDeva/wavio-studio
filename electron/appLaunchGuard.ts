@@ -3,106 +3,111 @@
  *
  * `shell:openWithApp` exists so "Open in Ableton" works, and it ends in
  * `execFile(appPath, [file])` on Windows and `open -a appPath file` on macOS.
- * Its only guard was a check for `; & | \`` in the path — which does nothing,
- * because `execFile` takes an argv array and never involves a shell. The
- * metacharacter filter was defending against an injection that could not
- * happen while the real exposure — *which binary gets executed* — was
- * unchecked. Any executable on disk qualified.
+ * Its original guard checked for `; & | \`` in the path, which defends against
+ * an injection that cannot happen — `execFile` takes an argv array and never
+ * invokes a shell — while the real exposure, *which binary runs*, accepted any
+ * existing path.
  *
- * The rule here is the one that matches how DAWs are actually installed: a
- * launchable application is an `.app` bundle in an applications directory (or
- * an `.exe` on Windows). That keeps every DAW Wavi supports working — all five
- * adapters resolve to `/Applications/<Name>.app` — while `/bin/sh`,
- * `/usr/bin/python3` and a dropped binary in Downloads stop qualifying.
+ * The first fix required an `.app` bundle at the top level of an Applications
+ * folder. That is still far too wide: `/Applications/Terminal.app`,
+ * `Script Editor.app` and `Automator.app` all satisfy it, and each is a
+ * general-purpose code-execution engine. So does any bundle an attacker drops
+ * into `/Applications`.
  *
- * Pure: the caller supplies the filesystem facts.
+ * The rule now is identity, not shape: **the path must be one of the DAW
+ * applications the adapters themselves resolved on this machine.** That is the
+ * same mechanism that populates "Open in <DAW>", so the launch allowlist
+ * cannot drift from the feature it serves.
+ *
+ * Two things this deliberately does NOT do:
+ *
+ *   - Trust a bundle NAME. "Ableton Live 12.app" proves nothing; anyone can
+ *     name a bundle that. Only a path the resolver returned is accepted.
+ *   - Trust an `Info.plist` identifier, for the same reason — it is attacker-
+ *     controlled data inside the very bundle being judged.
+ *
+ * Symlinks are resolved before comparison, so a link in an Applications folder
+ * pointing at `/Applications/Utilities/Terminal.app` is compared as Terminal.
+ *
+ * Pure: the caller supplies the resolved DAW set and the canonical paths.
  */
-
-/** Directories a real application lives in. */
-const MAC_APP_ROOTS = [
-  '/Applications',
-  '/System/Applications',
-  '/Developer/Applications',
-  '/Network/Applications',
-];
 
 export type LaunchVerdict = { ok: true; appPath: string } | { ok: false; error: string };
 
 function normalise(p: string): string {
-  // Collapse duplicate separators and strip a trailing one so '/Applications//X.app/'
-  // and '/Applications/X.app' are the same path to the rules below.
   return p.replace(/\/+/g, '/').replace(/\/+$/, '');
 }
 
-/** Is `candidate` inside `root` (and not merely prefixed by its name)? */
-function isInside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(root + '/');
+/** Case-insensitive on macOS and Windows, both of which have case-insensitive filesystems by default. */
+function sameePath(a: string, b: string): boolean {
+  return normalise(a).toLowerCase() === normalise(b).toLowerCase();
+}
+
+export interface LaunchGuardInput {
+  /** What the caller asked to launch. Untrusted. */
+  appPath: unknown;
+  platform: NodeJS.Platform | string;
+  /**
+   * `appPath` with every symlink resolved, or null when it could not be
+   * resolved (which includes "does not exist").
+   */
+  canonicalPath: string | null;
+  /**
+   * Canonical paths of the DAW applications the adapters resolved on this
+   * machine. Empty means no supported DAW is installed, and nothing launches.
+   */
+  allowedApplications: readonly string[];
 }
 
 /**
- * May Wavi launch this application?
+ * May Wavi launch this?
  *
- * `homeDir` admits `~/Applications`, where users legitimately install DAWs
- * without admin rights.
+ * Shape is checked first so the error a user sees names the obvious problem,
+ * but the decision is the identity match — shape alone can never admit
+ * anything.
  */
-export function validateLaunchApplication(opts: {
-  appPath: unknown;
-  platform: NodeJS.Platform | string;
-  homeDir: string;
-  /** Does the path exist? */
-  exists: boolean;
-  /** Is it a directory? A macOS .app bundle is one; a bare binary is not. */
-  isDirectory: boolean;
-}): LaunchVerdict {
-  const raw = typeof opts.appPath === 'string' ? opts.appPath.trim() : '';
+export function validateLaunchApplication(input: LaunchGuardInput): LaunchVerdict {
+  const raw = typeof input.appPath === 'string' ? input.appPath.trim() : '';
   if (!raw) return { ok: false, error: 'appPath must be a non-empty string' };
-  // A NUL can mean one thing to this check and another to the syscall under it.
   if (raw.includes('\0')) return { ok: false, error: 'Invalid application path' };
-  // Traversal is rejected outright rather than resolved: a legitimate DAW path
-  // never contains '..', so its presence is a signal, not an inconvenience.
-  if (raw.split('/').includes('..')) return { ok: false, error: 'Invalid application path' };
-  if (!raw.startsWith('/') && opts.platform === 'darwin') {
-    return { ok: false, error: 'Application path must be absolute' };
+  // A genuine DAW path never contains '..'; its presence is a signal, not an
+  // inconvenience to be resolved away.
+  if (raw.split(/[\\/]/).includes('..')) return { ok: false, error: 'Invalid application path' };
+
+  if (input.platform === 'darwin' && !normalise(raw).toLowerCase().endsWith('.app')) {
+    return { ok: false, error: 'Wavi can only launch a DAW application bundle (.app).' };
+  }
+  if (input.platform === 'win32' && !normalise(raw).toLowerCase().endsWith('.exe')) {
+    return { ok: false, error: 'Wavi can only launch a DAW application (.exe).' };
+  }
+  if (input.platform !== 'darwin' && input.platform !== 'win32') {
+    // Wavi ships no DAW integration elsewhere, and "execute this path" is not
+    // a capability to grant by default.
+    return { ok: false, error: 'Launching a DAW is not supported on this platform.' };
   }
 
-  const appPath = normalise(raw);
-  if (!opts.exists) {
+  if (!input.canonicalPath) {
     return { ok: false, error: 'DAW application not found. Update the path in Settings → DAW Applications.' };
   }
 
-  if (opts.platform === 'darwin') {
-    // The shape check is what stops an arbitrary binary: /bin/sh exists and is
-    // executable, and it is not an application bundle.
-    if (!appPath.toLowerCase().endsWith('.app')) {
-      return { ok: false, error: 'Wavi can only launch an application bundle (.app).' };
-    }
-    if (!opts.isDirectory) {
-      return { ok: false, error: 'That .app is not an application bundle.' };
-    }
-    const roots = [...MAC_APP_ROOTS, `${normalise(opts.homeDir)}/Applications`];
-    if (!roots.some((r) => isInside(r, appPath))) {
-      return { ok: false, error: 'Wavi only launches applications installed in an Applications folder.' };
-    }
-    // Nested bundles are how a payload hides inside something that looks
-    // installed: /Applications/Real.app/Contents/Resources/evil.app.
-    const depthInsideRoot = appPath.split('/').filter(Boolean).length;
-    const rootDepth = roots
-      .filter((r) => isInside(r, appPath))
-      .map((r) => r.split('/').filter(Boolean).length)[0] ?? 0;
-    if (depthInsideRoot !== rootDepth + 1) {
-      return { ok: false, error: 'Wavi only launches applications at the top level of an Applications folder.' };
-    }
-    return { ok: true, appPath };
+  if (!input.allowedApplications.length) {
+    return {
+      ok: false,
+      error: 'Wavi could not find a supported DAW installed (Ableton Live, FL Studio, Logic Pro, Pro Tools or REAPER).',
+    };
   }
 
-  if (opts.platform === 'win32') {
-    if (!appPath.toLowerCase().endsWith('.exe')) {
-      return { ok: false, error: 'Wavi can only launch an .exe application.' };
-    }
-    return { ok: true, appPath };
+  // The decision. Compared on CANONICAL paths, so a symlink pointing at
+  // Terminal is judged as Terminal rather than as whatever it was named.
+  const matched = input.allowedApplications.some((allowed) => sameePath(allowed, input.canonicalPath!));
+  if (!matched) {
+    return {
+      ok: false,
+      error: 'Wavi only launches the DAW applications it detected on this machine: Ableton Live, FL Studio, Logic Pro, Pro Tools or REAPER.',
+    };
   }
 
-  // Linux and anything else: Wavi ships no DAW integration there, and
-  // "execute this path" is not a capability to grant by default.
-  return { ok: false, error: 'Launching a DAW is not supported on this platform.' };
+  // Return the canonical path: whatever is executed should be the thing that
+  // was judged, not the string that was supplied.
+  return { ok: true, appPath: input.canonicalPath };
 }
